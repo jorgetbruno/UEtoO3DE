@@ -1,0 +1,273 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jorgetbruno/UEtoO3DE/schema/manifest.schema.json",
+  "title": "UEtoO3DE level manifest",
+  "description": "The interchange contract between the UE exporter and the O3DE importer (plan v2.2, global constraint 7). All lengths are meters and all coordinates are already in O3DE space: the importer must never rescale or re-handed anything.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generator", "level", "units", "assets", "entities", "warnings"],
+  "properties": {
+    "schema_version": {
+      "description": "Bumped whenever a change would break an existing importer.",
+      "type": "integer",
+      "const": 1
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "tool_version", "engine", "engine_version"],
+      "properties": {
+        "tool": { "type": "string" },
+        "tool_version": { "type": "string" },
+        "engine": { "type": "string" },
+        "engine_version": { "type": "string" }
+      }
+    },
+    "level": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ue_package", "name"],
+      "properties": {
+        "ue_package": { "type": "string", "pattern": "^/" },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "units": {
+      "description": "Declared so an importer can refuse a manifest produced under a different convention rather than silently importing a mirrored level.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["length", "angle", "coordinate_system", "lane_a_rule"],
+      "properties": {
+        "length": { "type": "string", "const": "meters" },
+        "angle": { "type": "string", "const": "degrees" },
+        "coordinate_system": { "type": "string", "const": "o3de_right_handed_z_up" },
+        "lane_a_rule": { "type": "string", "const": "negate_y" }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/asset" }
+    },
+    "entities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/entity" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/warning" }
+    }
+  },
+
+  "definitions": {
+    "guid": {
+      "description": "UUIDv5 over the UE package path in the project namespace.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "vec3": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "quat": {
+      "description": "xyzw, canonicalized to w >= 0.",
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "transform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["translation", "rotation", "scale"],
+      "properties": {
+        "translation": { "$ref": "#/definitions/vec3" },
+        "rotation": { "$ref": "#/definitions/quat" },
+        "scale": {
+          "description": "Every component is positive: handedness is corrected in the rotation, never by mirroring a scale axis (plan constraint 6).",
+          "type": "array",
+          "items": { "type": "number", "minimum": 0 },
+          "minItems": 3,
+          "maxItems": 3
+        }
+      }
+    },
+    "shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["box", "sphere", "capsule", "convex"] },
+        "half_extents": { "$ref": "#/definitions/vec3" },
+        "radius": { "type": "number", "minimum": 0 },
+        "segment_height": { "type": "number", "minimum": 0 },
+        "total_height": { "type": "number", "minimum": 0 },
+        "offset": { "$ref": "#/definitions/vec3" },
+        "rotation": { "$ref": "#/definitions/quat" },
+        "vertex_count": { "type": "integer", "minimum": 0 },
+        "aabb_min": { "$ref": "#/definitions/vec3" },
+        "aabb_max": { "$ref": "#/definitions/vec3" }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["guid", "kind", "ue_path", "name", "o3de_relative_path"],
+      "properties": {
+        "guid": { "$ref": "#/definitions/guid" },
+        "kind": { "type": "string", "enum": ["static_mesh", "material"] },
+        "ue_path": { "type": "string", "pattern": "^/" },
+        "name": { "type": "string", "minLength": 1 },
+        "o3de_relative_path": {
+          "description": "Deterministically sanitized: lowercase, restricted character set, rooted at the importer prefix.",
+          "type": "string",
+          "pattern": "^uetoo3de/[a-z0-9_./-]+$"
+        },
+        "bounds_local": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "$ref": "#/definitions/vec3" },
+            "max": { "$ref": "#/definitions/vec3" }
+          }
+        },
+        "collision": {
+          "description": "UE simple collision read from the mesh asset's BodySetup, not from the actor (plan M3).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "shapes"],
+          "properties": {
+            "source": { "type": "string", "enum": ["simple", "none"] },
+            "shapes": { "type": "array", "items": { "$ref": "#/definitions/shape" } }
+          }
+        },
+        "material_slot_names": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "material_slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "slot_name", "material_guid"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "slot_name": { "type": "string" },
+        "material_guid": { "type": ["string", "null"] }
+      }
+    },
+    "mesh": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_guid", "material_slots"],
+      "properties": {
+        "asset_guid": { "$ref": "#/definitions/guid" },
+        "material_slots": { "type": "array", "items": { "$ref": "#/definitions/material_slot" } }
+      }
+    },
+    "light": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "intensity", "intensity_units", "color_srgb8", "color_linear", "cast_shadows"],
+      "properties": {
+        "type": { "type": "string", "enum": ["point", "spot", "directional", "unknown"] },
+        "intensity": { "type": "number" },
+        "intensity_units": {
+          "description": "UE5 carries a units enum per light; a directional light has none and is always lux (plan M5).",
+          "type": "string",
+          "enum": ["candelas", "lumens", "ev", "nits", "unitless", "lux"]
+        },
+        "color_srgb8": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "color_linear": {
+          "type": "array",
+          "items": { "type": "number", "minimum": 0 },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "cast_shadows": { "type": "boolean" },
+        "temperature_k": { "type": "number" },
+        "use_temperature": { "type": "boolean" },
+        "attenuation_radius": { "type": "number", "minimum": 0 },
+        "source_radius": { "type": "number", "minimum": 0 },
+        "inner_cone_angle_deg": { "type": "number" },
+        "outer_cone_angle_deg": { "type": "number" }
+      }
+    },
+    "physics": {
+      "description": "Present only when the actor actually collides; absent means render-only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["has_collision", "collision_enabled", "collision_profile", "simulates_physics",
+                   "kinematic", "is_trigger", "shapes", "shapes_from_asset"],
+      "properties": {
+        "has_collision": { "type": "boolean" },
+        "collision_enabled": {
+          "type": "string",
+          "enum": ["no_collision", "query_only", "physics_only", "query_and_physics", "probe_only", "query_and_probe", "unknown"]
+        },
+        "collision_profile": { "type": "string" },
+        "simulates_physics": { "type": "boolean" },
+        "kinematic": { "type": "boolean" },
+        "is_trigger": { "type": "boolean" },
+        "generate_overlap_events": { "type": "boolean" },
+        "enable_gravity": { "type": "boolean" },
+        "ccd": { "type": "boolean" },
+        "linear_damping": { "type": "number" },
+        "angular_damping": { "type": "number" },
+        "mass_override": { "type": "boolean" },
+        "mass_kg": { "type": ["number", "null"] },
+        "shapes": {
+          "description": "Actor-owned shapes (trigger volumes). Mesh actors borrow theirs from the asset named by shapes_from_asset.",
+          "type": "array",
+          "items": { "$ref": "#/definitions/shape" }
+        },
+        "shapes_from_asset": { "type": ["string", "null"] }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "ue_class", "ue_actor_path", "kind", "parent_id", "mobility", "transform"],
+      "properties": {
+        "id": { "$ref": "#/definitions/guid" },
+        "name": { "type": "string", "minLength": 1 },
+        "ue_class": { "type": "string", "minLength": 1 },
+        "ue_actor_path": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["static_mesh", "light", "trigger", "environment", "unknown"] },
+        "parent_id": { "type": ["string", "null"] },
+        "mobility": { "type": "string", "enum": ["static", "stationary", "movable"] },
+        "transform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["world", "local"],
+          "properties": {
+            "world": { "$ref": "#/definitions/transform" },
+            "local": { "$ref": "#/definitions/transform" }
+          }
+        },
+        "mesh": { "$ref": "#/definitions/mesh" },
+        "light": { "$ref": "#/definitions/light" },
+        "physics": { "$ref": "#/definitions/physics" }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "subject", "detail"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]+$" },
+        "severity": { "type": "string", "enum": ["info", "warn", "error"] },
+        "subject": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    }
+  }
+}

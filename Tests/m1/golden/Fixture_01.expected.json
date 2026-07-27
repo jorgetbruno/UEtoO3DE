@@ -1,0 +1,1378 @@
+{
+  "assets": [
+    {
+      "bounds_local": {
+        "max": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "min": [
+          -0.5,
+          -0.5,
+          -0.5
+        ]
+      },
+      "collision": {
+        "shapes": [
+          {
+            "half_extents": [
+              0.5,
+              0.5,
+              0.5
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "type": "box"
+          }
+        ],
+        "source": "simple"
+      },
+      "guid": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+      "kind": "static_mesh",
+      "material_slot_names": [
+        "WorldGridMaterial"
+      ],
+      "name": "Cube",
+      "o3de_relative_path": "uetoo3de/engine/basicshapes/cube.fbx",
+      "ue_path": "/Engine/BasicShapes/Cube"
+    },
+    {
+      "bounds_local": {
+        "max": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "min": [
+          -0.5,
+          -0.5,
+          -0.5
+        ]
+      },
+      "collision": {
+        "shapes": [
+          {
+            "aabb_max": [
+              0.5,
+              0.5,
+              0.5
+            ],
+            "aabb_min": [
+              -0.5,
+              -0.5,
+              -0.5
+            ],
+            "type": "convex",
+            "vertex_count": 64
+          }
+        ],
+        "source": "simple"
+      },
+      "guid": "0d5db937-eebf-50e8-9855-19def6f04b7b",
+      "kind": "static_mesh",
+      "material_slot_names": [
+        "DefaultMaterial"
+      ],
+      "name": "Cylinder",
+      "o3de_relative_path": "uetoo3de/engine/basicshapes/cylinder.fbx",
+      "ue_path": "/Engine/BasicShapes/Cylinder"
+    },
+    {
+      "bounds_local": {
+        "max": [
+          0.5,
+          0.5,
+          0.0
+        ],
+        "min": [
+          -0.5,
+          -0.5,
+          0.0
+        ]
+      },
+      "collision": {
+        "shapes": [
+          {
+            "half_extents": [
+              0.5,
+              0.5,
+              0.0
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "type": "box"
+          }
+        ],
+        "source": "simple"
+      },
+      "guid": "9196bc32-f3aa-5a45-9306-d53a1e6ebd8d",
+      "kind": "static_mesh",
+      "material_slot_names": [
+        "lambert1"
+      ],
+      "name": "Plane",
+      "o3de_relative_path": "uetoo3de/engine/basicshapes/plane.fbx",
+      "ue_path": "/Engine/BasicShapes/Plane"
+    },
+    {
+      "bounds_local": {
+        "max": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "min": [
+          -0.5,
+          -0.5,
+          -0.5
+        ]
+      },
+      "collision": {
+        "shapes": [
+          {
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "radius": 0.5,
+            "type": "sphere"
+          }
+        ],
+        "source": "simple"
+      },
+      "guid": "719133e2-b736-54d9-b76e-9c9ef04888ca",
+      "kind": "static_mesh",
+      "material_slot_names": [
+        "DefaultMaterial"
+      ],
+      "name": "Sphere",
+      "o3de_relative_path": "uetoo3de/engine/basicshapes/sphere.fbx",
+      "ue_path": "/Engine/BasicShapes/Sphere"
+    },
+    {
+      "guid": "ac600dba-cba5-588e-9298-8024d45e8143",
+      "kind": "material",
+      "name": "WorldGridMaterial",
+      "o3de_relative_path": "uetoo3de/engine/enginematerials/worldgridmaterial.material",
+      "ue_path": "/Engine/EngineMaterials/WorldGridMaterial"
+    },
+    {
+      "guid": "f2b1aa86-f6e3-53a4-a338-0a7599f383f7",
+      "kind": "material",
+      "name": "M_Fixture_Masked",
+      "o3de_relative_path": "uetoo3de/game/materials/m_fixture_masked.material",
+      "ue_path": "/Game/Materials/M_Fixture_Masked"
+    },
+    {
+      "guid": "a4d5d0b1-71e5-5c31-8833-6214c29ad37d",
+      "kind": "material",
+      "name": "M_Fixture_ORM",
+      "o3de_relative_path": "uetoo3de/game/materials/m_fixture_orm.material",
+      "ue_path": "/Game/Materials/M_Fixture_ORM"
+    },
+    {
+      "guid": "18b1006f-036c-5469-a38e-2346372328a4",
+      "kind": "material",
+      "name": "M_Fixture_PBR",
+      "o3de_relative_path": "uetoo3de/game/materials/m_fixture_pbr.material",
+      "ue_path": "/Game/Materials/M_Fixture_PBR"
+    },
+    {
+      "guid": "c8a8bddd-0229-54b2-bb92-51804a798026",
+      "kind": "material",
+      "name": "M_Fixture_Translucent",
+      "o3de_relative_path": "uetoo3de/game/materials/m_fixture_translucent.material",
+      "ue_path": "/Game/Materials/M_Fixture_Translucent"
+    },
+    {
+      "guid": "ac6d2679-30fa-5cd0-bd95-346d7ad8e4b5",
+      "kind": "material",
+      "name": "M_Fixture_Unsupported",
+      "o3de_relative_path": "uetoo3de/game/materials/m_fixture_unsupported.material",
+      "ue_path": "/Game/Materials/M_Fixture_Unsupported"
+    },
+    {
+      "bounds_local": {
+        "max": [
+          0.5,
+          0.125,
+          2.0
+        ],
+        "min": [
+          -0.5,
+          -0.375,
+          0.0
+        ]
+      },
+      "collision": {
+        "shapes": [],
+        "source": "none"
+      },
+      "guid": "5f55ab12-5954-51f0-8ef5-f1509568a6fd",
+      "kind": "static_mesh",
+      "material_slot_names": [
+        "Material_0"
+      ],
+      "name": "SM_LetterF",
+      "o3de_relative_path": "uetoo3de/game/meshes/sm_letterf.fbx",
+      "ue_path": "/Game/Meshes/SM_LetterF"
+    }
+  ],
+  "entities": [
+    {
+      "id": "9f0b18e1-e651-5b4e-8ba9-d2b4c1d3695a",
+      "kind": "light",
+      "light": {
+        "cast_shadows": true,
+        "color_linear": [
+          1.0,
+          0.947307,
+          0.846873
+        ],
+        "color_srgb8": [
+          255,
+          249,
+          237
+        ],
+        "intensity": 5.0,
+        "intensity_units": "lux",
+        "temperature_k": 6500.0,
+        "type": "directional",
+        "use_temperature": false
+      },
+      "mobility": "stationary",
+      "name": "Light_Directional",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            -0.408218,
+            -0.23457,
+            -0.109382,
+            0.875426
+          ],
+          "scale": [
+            2.5,
+            2.5,
+            2.5
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            6.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            -0.408218,
+            -0.23457,
+            -0.109382,
+            0.875426
+          ],
+          "scale": [
+            2.5,
+            2.5,
+            2.5
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            6.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.DirectionalLight_0",
+      "ue_class": "DirectionalLight"
+    },
+    {
+      "id": "be673516-061b-5825-a8a7-f46b54fb8c94",
+      "kind": "environment",
+      "mobility": "movable",
+      "name": "Atmo_HeightFog",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.ExponentialHeightFog_0",
+      "ue_class": "ExponentialHeightFog"
+    },
+    {
+      "id": "82fb9d14-f7c0-53d8-a5dd-0db2e1dd17d7",
+      "kind": "light",
+      "light": {
+        "attenuation_radius": 6.0,
+        "cast_shadows": true,
+        "color_linear": [
+          1.0,
+          0.597202,
+          0.300544
+        ],
+        "color_srgb8": [
+          255,
+          203,
+          149
+        ],
+        "intensity": 12.5,
+        "intensity_units": "candelas",
+        "source_radius": 0.0,
+        "temperature_k": 6500.0,
+        "type": "point",
+        "use_temperature": false
+      },
+      "mobility": "stationary",
+      "name": "Light_Point",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            3.0,
+            -3.0,
+            2.5
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            3.0,
+            -3.0,
+            2.5
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.PointLight_0",
+      "ue_class": "PointLight"
+    },
+    {
+      "id": "bfb62cb6-6937-5fa0-b24f-d511dd720e77",
+      "kind": "environment",
+      "mobility": "movable",
+      "name": "PPV_01",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.PostProcessVolume_0",
+      "ue_class": "PostProcessVolume"
+    },
+    {
+      "id": "0a15be88-7bce-5f3f-9fe9-261815d152a5",
+      "kind": "environment",
+      "mobility": "stationary",
+      "name": "Atmo_SkyLight",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            2.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            2.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.SkyLight_0",
+      "ue_class": "SkyLight"
+    },
+    {
+      "id": "54673baa-0a7a-5c40-8c4f-31826bc98bff",
+      "kind": "light",
+      "light": {
+        "attenuation_radius": 10.0,
+        "cast_shadows": true,
+        "color_linear": [
+          0.401978,
+          0.701102,
+          1.0
+        ],
+        "color_srgb8": [
+          170,
+          218,
+          255
+        ],
+        "inner_cone_angle_deg": 15.0,
+        "intensity": 40.0,
+        "intensity_units": "candelas",
+        "outer_cone_angle_deg": 30.0,
+        "source_radius": 0.0,
+        "temperature_k": 6500.0,
+        "type": "spot",
+        "use_temperature": false
+      },
+      "mobility": "stationary",
+      "name": "Light_Spot",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            -0.270598,
+            0.653281,
+            0.270598,
+            0.653281
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            7.0,
+            -3.0,
+            4.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            -0.270598,
+            0.653281,
+            0.270598,
+            0.653281
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            7.0,
+            -3.0,
+            4.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.SpotLight_0",
+      "ue_class": "SpotLight"
+    },
+    {
+      "id": "6356aa17-d28a-5a8f-96b2-38de6dee692a",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "9196bc32-f3aa-5a45-9306-d53a1e6ebd8d",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "ac600dba-cba5-588e-9298-8024d45e8143",
+            "slot_name": "lambert1"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "Fixture_Floor",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "9196bc32-f3aa-5a45-9306-d53a1e6ebd8d",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            10.0,
+            10.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            10.0,
+            10.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_0",
+      "ue_class": "StaticMeshActor"
+    },
+    {
+      "id": "53b05d61-5edc-5e3d-99e9-5ee0f98290ac",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "18b1006f-036c-5469-a38e-2346372328a4",
+            "slot_name": "WorldGridMaterial"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "Prim_Box",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            2.0,
+            1.0,
+            0.5
+          ],
+          "translation": [
+            3.0,
+            0.0,
+            0.25
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            2.0,
+            1.0,
+            0.5
+          ],
+          "translation": [
+            3.0,
+            0.0,
+            0.25
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_1",
+      "ue_class": "StaticMeshActor"
+    },
+    {
+      "id": "b7fa0e2e-6228-51c9-9684-09a3370f7558",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "719133e2-b736-54d9-b76e-9c9ef04888ca",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "a4d5d0b1-71e5-5c31-8833-6214c29ad37d",
+            "slot_name": "DefaultMaterial"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "Prim_Sphere",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "719133e2-b736-54d9-b76e-9c9ef04888ca",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            6.0,
+            0.0,
+            0.5
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            6.0,
+            0.0,
+            0.5
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_2",
+      "ue_class": "StaticMeshActor"
+    },
+    {
+      "id": "7846f515-856f-59af-acef-ee9dd22c5a27",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "0d5db937-eebf-50e8-9855-19def6f04b7b",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "f2b1aa86-f6e3-53a4-a338-0a7599f383f7",
+            "slot_name": "DefaultMaterial"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "Prim_Cylinder",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "0d5db937-eebf-50e8-9855-19def6f04b7b",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            9.0,
+            0.0,
+            0.5
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            9.0,
+            0.0,
+            0.5
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_3",
+      "ue_class": "StaticMeshActor"
+    },
+    {
+      "id": "8d931275-37af-55d7-97d2-b04919121a5a",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "5f55ab12-5954-51f0-8ef5-f1509568a6fd",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "ac600dba-cba5-588e-9298-8024d45e8143",
+            "slot_name": "Material_0"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "SM_LetterF",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "5f55ab12-5954-51f0-8ef5-f1509568a6fd",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            15.0,
+            0.0,
+            0.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            15.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_4",
+      "ue_class": "StaticMeshActor"
+    },
+    {
+      "id": "91a15c58-4fdd-5abd-a8b0-a5bbfa963962",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "c8a8bddd-0229-54b2-bb92-51804a798026",
+            "slot_name": "WorldGridMaterial"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "RotatedParent_Cube",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            -0.382683,
+            0.0,
+            0.92388
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            -4.0,
+            0.5
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            -0.382683,
+            0.0,
+            0.92388
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            -4.0,
+            0.5
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_5",
+      "ue_class": "StaticMeshActor"
+    },
+    {
+      "id": "5bbf6746-b5eb-5a80-9e3d-0b4d83ef647a",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "719133e2-b736-54d9-b76e-9c9ef04888ca",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "ac6d2679-30fa-5cd0-bd95-346d7ad8e4b5",
+            "slot_name": "DefaultMaterial"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "RotatedChild_Sphere",
+      "parent_id": "91a15c58-4fdd-5abd-a8b0-a5bbfa963962",
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "719133e2-b736-54d9-b76e-9c9ef04888ca",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.258819,
+            0.0,
+            0.0,
+            0.965926
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            1.5,
+            0.0,
+            0.5
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.239118,
+            -0.369644,
+            0.099046,
+            0.892399
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.707107,
+            -4.0,
+            1.914214
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_6",
+      "ue_class": "StaticMeshActor"
+    },
+    {
+      "id": "a242a096-2daf-5b72-b437-69a0ecae4f09",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "ac600dba-cba5-588e-9298-8024d45e8143",
+            "slot_name": "WorldGridMaterial"
+          }
+        ]
+      },
+      "mobility": "movable",
+      "name": "Cube_Dynamic",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "simulates_physics": true
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -3.0,
+            0.0,
+            1.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -3.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_7",
+      "ue_class": "StaticMeshActor"
+    },
+    {
+      "id": "6830de27-7dd3-52a6-ac12-11c4fc984c1d",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "ac600dba-cba5-588e-9298-8024d45e8143",
+            "slot_name": "WorldGridMaterial"
+          }
+        ]
+      },
+      "mobility": "movable",
+      "name": "Cube_Kinematic",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": true,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -6.0,
+            0.0,
+            1.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -6.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_8",
+      "ue_class": "StaticMeshActor"
+    },
+    {
+      "id": "f0df9421-9360-589e-a7b1-42bb3ab4d2ce",
+      "kind": "trigger",
+      "mobility": "movable",
+      "name": "TriggerBox_01",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_only",
+        "collision_profile": "Trigger",
+        "enable_gravity": true,
+        "generate_overlap_events": true,
+        "has_collision": true,
+        "is_trigger": true,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [
+          {
+            "half_extents": [
+              0.4,
+              0.4,
+              0.4
+            ],
+            "offset": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "type": "box"
+          }
+        ],
+        "shapes_from_asset": null,
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -9.0,
+            0.0,
+            1.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -9.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.TriggerBox_0",
+      "ue_class": "TriggerBox"
+    }
+  ],
+  "level": {
+    "name": "Fixture_01",
+    "ue_package": "/Game/Maps/Fixture_01"
+  },
+  "schema_version": 1,
+  "units": {
+    "angle": "degrees",
+    "coordinate_system": "o3de_right_handed_z_up",
+    "lane_a_rule": "negate_y",
+    "length": "meters"
+  },
+  "warnings": [
+    {
+      "code": "ACTOR_DEFERRED",
+      "detail": "ExponentialHeightFog is imported in M6",
+      "severity": "info",
+      "subject": "Atmo_HeightFog"
+    },
+    {
+      "code": "ACTOR_DEFERRED",
+      "detail": "SkyLight is imported in M6",
+      "severity": "info",
+      "subject": "Atmo_SkyLight"
+    },
+    {
+      "code": "ACTOR_DEFERRED",
+      "detail": "PostProcessVolume is imported in M6",
+      "severity": "info",
+      "subject": "PPV_01"
+    },
+    {
+      "code": "PHYS_DEGENERATE_SHAPE",
+      "detail": "box collider has a dimension below 0.0001 m",
+      "severity": "warn",
+      "subject": "/Engine/BasicShapes/Plane"
+    },
+    {
+      "code": "PHYS_NO_SIMPLE_COLLISION",
+      "detail": "BodySetup carries no simple collision primitives",
+      "severity": "info",
+      "subject": "/Game/Meshes/SM_LetterF"
+    }
+  ]
+}

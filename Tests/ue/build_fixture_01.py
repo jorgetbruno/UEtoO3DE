@@ -33,11 +33,25 @@ Deterministic layout (UE cm, Z-up, left-handed):
     Atmo_HeightFog       (0,0,0)         density 0.05, falloff 0.2
     PPV_01               (0,0,0)         unbound (infinite extent)
 
-SM_LetterF geometry (asset space, cm, overall 100 x 25 x 200 = 1m x 0.25m x 2m):
-    stem:       box 25x25x200 at (0,0,0)      (X 0..25,  Z 0..200)
-    top arm:    box 100x25x30 at (0,0,170)    (X 0..100, Z 170..200)
-    middle arm: box 75x25x25  at (0,0,100)    (X 0..75,  Z 100..125)
-Asymmetric about every plane -> catches handedness/mirroring bugs (plan M0).
+SM_LetterF geometry (asset space, cm, overall 100 x 50 x 200):
+    stem:       box  25x25x200 at (-37.5,  0.0,   0)  -> X -50..-25, Y -12.5..12.5, Z   0..200
+    top arm:    box 100x25x30  at (  0.0,  0.0, 170)  -> X -50.. 50, Y -12.5..12.5, Z 170..200
+    middle arm: box  75x25x25  at (-12.5,  0.0, 100)  -> X -50.. 25, Y -12.5..12.5, Z 100..125
+    side nub:   box  25x25x25  at (-37.5, 25.0, 175)  -> X -50..-25, Y  12.5..37.5, Z 175..200
+
+`GeometryScriptPrimitiveOriginMode.BASE` centers a box in X and Y and bases it
+in Z, so each box spans loc +/- dim/2 horizontally. The arms are therefore
+offset in X rather than sharing a center, and the nub breaks the Y symmetry a
+flat letter would otherwise have.
+
+Asymmetric about ALL THREE planes, which is the entire point of this mesh
+(plan M0): a mirrored level passes every other assertion in the fixture because
+boxes, spheres and cylinders are all mirror-symmetric. The measurable property
+is the vertex centroid's offset from the bounding-box center -- (-21.875,
+6.25, 46.25) cm -- since the X bounds are symmetric by design (the top arm
+spans the full width). Y-asymmetry matters most of all: Lane A's basis map
+negates Y, so a mesh symmetric in Y cannot detect the case where the geometry
+lane fails to apply the same reflection.
 
 Run:  run_ue_python.bat build_fixture_01.py
 Idempotent: existing assets are deleted/rebuilt before creation.
@@ -222,8 +236,11 @@ def build_materials(tex_basecolor, tex_normal, tex_orm, tex_scalar):
 # ---------------------------------------------------------------------------
 
 def build_letter_f():
-    """Append 3 boxes (Origin=Base -> box extends from the transform position)
-    and bake to a real StaticMesh asset at /Game/Meshes/SM_LetterF."""
+    """Append 4 boxes (Origin=Base -> centered in X/Y, based in Z) and bake to
+    a real StaticMesh asset at /Game/Meshes/SM_LetterF.
+
+    Each box is offset so the result is asymmetric about all three planes; see
+    the module docstring for the resulting extents and why they matter."""
     delete_asset_if_exists(SM_LETTERF_PATH)
 
     dyn = unreal.DynamicMesh()
@@ -235,9 +252,10 @@ def build_letter_f():
         xform = unreal.Transform(location=unreal.Vector(loc_x, loc_y, loc_z))
         dyn = dyn.append_box(opts, xform, dim_x, dim_y, dim_z, 0, 0, 0, origin)
 
-    box(0.0, 0.0, 0.0,    25.0, 25.0, 200.0)   # stem
-    box(0.0, 0.0, 170.0, 100.0, 25.0, 30.0)    # top arm
-    box(0.0, 0.0, 100.0,  75.0, 25.0, 25.0)    # middle arm
+    box(-37.5, 0.0, 0.0,    25.0, 25.0, 200.0)   # stem       X -50..-25
+    box(0.0, 0.0, 170.0,   100.0, 25.0, 30.0)    # top arm    X -50.. 50
+    box(-12.5, 0.0, 100.0,  75.0, 25.0, 25.0)    # middle arm X -50.. 25
+    box(-37.5, 25.0, 175.0, 25.0, 25.0, 25.0)    # side nub   Y  12.5..37.5
 
     create_opts = unreal.GeometryScriptCreateNewStaticMeshAssetOptions()
     # collision enabled by default (bEnableCollision=true) — keep defaults otherwise.

@@ -20,10 +20,28 @@ milestone per session; each session starts from that file.
   - `Plugins/UEO3DEExporter/` — the exporter editor plugin (build:
     `RunUAT.bat BuildPlugin -Plugin=<path>.uplugin -Package=UE/Build/UEO3DEExporter -TargetPlatforms=Win64`,
     then copy `UE/Build/UEO3DEExporter/Binaries` into the plugin folder).
-- `Tests/ue/` — UE Editor Python scripts (fixture builder, S0.2 export) + `run_ue_python.bat`.
+    - `Content/Python/ueo3de/` — the exporter itself. Everything except `ue_level.py`
+      is pure Python with no `unreal` import, so the coordinate conversion, asset
+      identity and warning catalogue are testable without an editor.
+- `Schema/manifest.schema.json` — the interchange contract (plan constraint 7).
+- `Tests/ue/` — UE Editor Python scripts (fixture builder, S0.2 export, manifest export,
+  API probes) + `run_ue_python.bat`.
 - `Tests/o3de/` — O3DE headless test scripts + `run_s0_1.bat`.
+- `Tests/m1/` — the M1 acceptance suite; `run_m1.bat` runs all of it and CI asserts on
+  its exit code. `golden/Fixture_01.expected.json` is the M1 contract and is regenerated
+  only by an explicit, reviewed commit (`test_m1_acceptance.py --update-golden`).
 - `Exports/` — interchange output (manifest, FBX, textures; generated, not committed).
 - `MAPPING.md` / `LANE_B.md` / `DIVERGENCES.md` — the documentation contract defined by the plan.
+
+## Running the tests
+
+```
+Tests\m1\run_m1.bat          M1: UE export -> property tests -> validator -> golden diff
+Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
+```
+
+The pure-Python parts need no editor: `python Tests\m1\test_lane_a.py` and
+`python Tests\m1\validate_manifest.py --self-test` run in about a second.
 
 ## O3DE test projects (outside this repo, per O3DE convention)
 

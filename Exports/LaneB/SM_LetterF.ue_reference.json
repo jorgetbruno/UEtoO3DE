@@ -18,7 +18,7 @@
   },
   "bounds_max": [
     50.0,
-    12.5,
+    37.5,
     200.0
   ],
   "bounds_min": [
@@ -27,14 +27,14 @@
     0.0
   ],
   "centroid": [
-    0.0,
-    0.0,
-    132.5
+    -20.967741935483872,
+    6.586021505376344,
+    144.51612903225808
   ],
   "coordinate_system": "UE asset space: centimeters, Z-up, left-handed",
   "fbx_path": "D:/Gamedev/UEtoO3DE/Exports/LaneB/SM_LetterF.fbx",
   "mesh_asset_path": "/Game/Meshes/SM_LetterF.SM_LetterF",
   "notes": "UE-side reference for S0.2 / Lane B. FBX exported with UE default FbxExportOption (no axis/unit customization). Compare against O3DE SceneAPI output to lock the .assetinfo correction in LANE_B.md.",
   "units": "cm",
-  "vertex_count": 72
+  "vertex_count": 93
 }

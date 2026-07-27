@@ -1,5 +1,5 @@
 @echo off
-rem run_ue_python.bat — run a UE Editor Python script headlessly against the UEtoO3DEFixture project.
+rem run_ue_python.bat - run a UE Editor Python script headlessly against the UEtoO3DEFixture project.
 rem Usage: run_ue_python.bat <script.py>   (relative or absolute path)
 rem Propagates the UnrealEditor-Cmd exit code.
 setlocal EnableExtensions
