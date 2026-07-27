@@ -117,6 +117,7 @@ sanitized path is an `ASSET_PATH_COLLISION` error that aborts the export.
 |---|---|---|
 | `assets[].o3de_relative_path` | `<project>/Assets/<path>` + `.assetinfo` | staged outside the editor so AP can be run to completion first |
 | `assets[].fbx_node_name` | `.assetinfo` `RootNode.<name>` | a wrong node path fails the AP job with "No valid ModelLodAssets have been added" |
+| — | stale instances of the target prefab are removed from the scratch level *before* it opens | a level holding an instance of the prefab being rewritten makes `CreatePrefabInMemory` throw an opaque "unknown exception". It scales with scene size, so it reads as an asset-streaming race and was twice misdiagnosed as one; no amount of settling fixes it (900/1800/3600 frames all fail), removing the instance fixes it instantly ([prefab_build.detach_conflicting_instances](O3DE/Gems/UEImporter/Editor/Scripts/ueimporter/prefab_build.py)) |
 | every product asset | `wait_for_asset` before it is referenced | constraint 8; a Mesh component pointing at an unprocessed asset renders nothing and reports no error |
 | `entities[]` | one editor entity each, parents before children | O3DE needs the parent's EntityId at creation time |
 | `entities[].transform.local` | `SetLocalTranslation` / `SetLocalRotationQuaternion` / `SetLocalUniformScale` | |
@@ -189,6 +190,48 @@ separate because they are fixed in different places.
 | `XFORM_NONUNIFORM_SCALE_NOT_INHERITED` | warn | Non-uniformly scaled entity has children; O3DE does not propagate the scale to them, UE does. |
 | `MESH_MISSING` | warn | Static mesh actor with no mesh reference; imported as a transform-only placeholder. |
 | `ENTITY_KIND_DEFERRED` | info | Recognized entity kind owned by a later milestone. |
+| `MAT_SLOT_UNMATCHED` | warn | A converted material had no matching slot label on the model. |
+| `MAT_SLOT_LABEL_AMBIGUOUS` | warn | Two slots share a material *name* but use different materials. |
+| `MAT_MODEL_NOT_READY` | warn | Model asset never streamed in; per-slot assignment fell back to the default slot. |
+| `LIGHT_INTENSITY_APPROX` | warn | Intensity units with no exact photometric meaning (unitless/nits). |
+| `LIGHT_RADIUS_EXPLICIT` | info | UE's explicit attenuation radius pinned; Atom would derive it. |
+| `LIGHT_SHADOWS_UNSUPPORTED` | warn | UE light casts shadows; the mapped Atom light type cannot. |
+| `LIGHT_SOURCE_RADIUS_DROPPED` | info | UE area-light source radius lost; imported as punctual. |
+| `LIGHT_TEMPERATURE_DROPPED` | info | UE colour temperature has no Atom equivalent. |
+| `LIGHT_TYPE_UNSUPPORTED` | warn | UE light class (rect/area) has no v1 mapping. |
+
+## Lights (M5)
+
+Intensity is the whole problem: UE carries a units enum per light and Atom's
+**local** lights accept only Candela and Lumen (`GetValidPhotometricUnits` —
+Nit/Ev100 require a shape component). Every UE unit is therefore converted to
+candela using UE's own arithmetic, read out of
+`ULocalLightComponent::GetUnitsConversionFactor` and `EV100ToLuminance` rather
+than a textbook.
+
+| UE | O3DE | Note |
+|---|---|---|
+| `PointLight` | `Light` component, type **SimplePoint** (6) | no shape component needed; **cannot cast shadows** → `LIGHT_SHADOWS_UNSUPPORTED` (DIVERGENCES.md) |
+| `SpotLight` | `Light` component, type **SimpleSpot** (7) | cone → *shutters*: `Enable shutters` + inner/outer angle, 1:1 in degrees; supports shadows |
+| `DirectionalLight` | `Directional Light` component | intensity mode **Lux** (2); its shadow property path differs from the local one by a capital letter, verified distinct |
+| `RectLight` / area | — | no v1 mapping → `LIGHT_TYPE_UNSUPPORTED`, transform-only entity |
+| `candelas` | `PhotometricUnit::Candela` (1), value verbatim | exact |
+| `lumens` | candela = `lm / (2π(1−cos θ_outer))`; point uses the full sphere (4π) | exact; the cone is *that light's* outer half-angle |
+| `ev` | candela = `2^EV` | UE's implicit 1 m² surface, per its own comment |
+| `unitless` | candela = `v × 16/10000` | no photometric meaning; UE's internal factor → `LIGHT_INTENSITY_APPROX` |
+| `lux` (directional only) | `PhotometricUnit::Lux` (2), value verbatim | exact |
+| `AttenuationRadius` | `Attenuation radius\|Mode` = Explicit + `Radius` | Atom defaults to Automatic; pinned for fidelity → `LIGHT_RADIUS_EXPLICIT` |
+| `LightColor` | `Color`, **linear** | the manifest's `color_linear`, not the sRGB bytes |
+| `Temperature` | — | → `LIGHT_TEMPERATURE_DROPPED` |
+| `SourceRadius` | — | → `LIGHT_SOURCE_RADIUS_DROPPED` |
+
+**Write order is load-bearing.** `Intensity mode` must be set *before*
+`Intensity`: the Directional Light component converts the stored value when
+the mode changes — measured, 5.0 lux written intensity-first stores 80.0
+(`Tests/o3de/probe_m5_lights2.py`). The plan produced by
+[light_build.py](O3DE/Gems/UEImporter/Editor/Scripts/ueimporter/light_build.py)
+is an ordered list for exactly this reason, and
+[test_light_build.py](Tests/m5/test_light_build.py) asserts the order offline.
 
 ## World Partition detection
 

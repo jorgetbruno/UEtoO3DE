@@ -22,6 +22,8 @@ by the M2 probes under `Tests/o3de/`; the two findings the code depends on most:
     `Tests/o3de/probe_m2_nonuniform.py` confirms it survives a save/reload.
 """
 
+import os
+
 # AzToolsFramework::Components::EditorNonUniformScaleComponent, from
 # Code/Framework/AzToolsFramework/AzToolsFramework/ToolsComponents/
 # EditorNonUniformScaleComponent.h in the 26.05 SDK.
@@ -168,6 +170,74 @@ def _add_mesh_component(entity_id, mesh_type, asset_id, entity_name):
             "%s: could not set %s: %s"
             % (entity_name, MODEL_ASSET_PROPERTY,
                set_outcome.GetError() if set_outcome else "no outcome"))
+
+
+def detach_conflicting_instances(project_root, level_name, prefab_path, log=None):
+    """Remove instances of `prefab_path` from the level FILE. Returns a count.
+
+    Pure file I/O, and it must run BEFORE the level is opened.
+
+    The scratch level is a prefab like any other, so instantiating an imported
+    level into it and saving leaves a nested instance behind:
+
+        DefaultLevel.prefab -> Instances -> {Source: "Prefabs/L_Overview.prefab"}
+
+    Re-importing that same level then opens a level that already contains the
+    previous import (its entities stream in, all of them), and
+    `create_prefab_in_memory` deletes and recreates the very file that
+    instance points at. `CreatePrefabInMemory` answers with an opaque "unknown
+    exception".
+
+    That is what this project spent three rounds of settle-tuning on. The
+    failure *looked* like an asset-streaming race -- it tracked scene size, and
+    adding one directional light was enough to tip a level that had been
+    passing -- so it was diagnosed as one twice. It is not: with the stale
+    instance gone the save succeeds immediately, and with it present no amount
+    of settling helps (measured: 900, 1800 and 3600 frames all fail).
+
+    Only instances of THIS prefab are removed; anything else in the level is
+    left alone, because `CreatePrefabInMemory` serializes just the root
+    entities it is handed and unrelated level content cannot reach the file.
+    """
+    import json
+
+    def emit(message):
+        if log is not None:
+            log(message)
+
+    level_file = os.path.join(project_root, "Levels", level_name,
+                              level_name + ".prefab")
+    if not os.path.exists(level_file):
+        return 0
+
+    # The instance's Source is project-relative with forward slashes.
+    relative = os.path.relpath(prefab_path, project_root).replace("\\", "/")
+
+    try:
+        with open(level_file, "r") as handle:
+            document = json.load(handle)
+    except (ValueError, IOError) as exc:
+        emit("  could not read the level file (%r); continuing" % (exc,))
+        return 0
+
+    instances = document.get("Instances") or {}
+    doomed = [key for key, value in instances.items()
+              if str(value.get("Source", "")).lower() == relative.lower()]
+    if not doomed:
+        return 0
+
+    for key in doomed:
+        del instances[key]
+    if instances:
+        document["Instances"] = instances
+    else:
+        document.pop("Instances", None)
+
+    with open(level_file, "w") as handle:
+        json.dump(document, handle, indent=4)
+    emit("  removed %d stale instance(s) of %s from %s"
+         % (len(doomed), relative, level_name))
+    return len(doomed)
 
 
 def create_level_root(name):

@@ -325,7 +325,9 @@ def assert_coverage(document):
         "Fixture_Floor", "Prim_Box", "Prim_Sphere", "Prim_Cylinder", "SM_LetterF",
         "SM_TwoTone", "RotatedParent_Cube", "RotatedChild_Sphere", "Cube_Dynamic",
         "Cube_Kinematic", "TriggerBox_01", "Light_Point", "Light_Spot",
-        "Light_Directional", "Atmo_SkyLight", "Atmo_HeightFog", "PPV_01",
+        "Light_Directional", "Light_Point_Lumens", "Light_Spot_Lumens",
+        "Light_Point_EV", "Light_Point_Unitless",
+        "Atmo_SkyLight", "Atmo_HeightFog", "PPV_01",
     }
     missing = sorted(expected_names - set(entities))
     check(not missing, "fixture actors missing from the manifest: %r" % missing)
@@ -367,6 +369,28 @@ def assert_two_tone_slots(document):
     guids = [slot.get("material_guid") for slot in slots]
     check(all(guids) and len(set(guids)) == 2,
           "SM_TwoTone slots do not carry two distinct materials: %r" % guids)
+
+
+def assert_light_units_covered(document):
+    """Every intensity-unit mode M5 converts must exist in the fixture.
+
+    M5's conversions are per-unit and each has its own arithmetic; a fixture
+    that only carried candelas would let three of the four paths rot
+    untested while every suite stayed green."""
+    units = {entity["light"]["intensity_units"]
+             for entity in document["entities"] if "light" in entity}
+    for wanted in ("candelas", "lumens", "ev", "unitless", "lux"):
+        check(wanted in units,
+              "no fixture light uses intensity units %r; M5's conversion for "
+              "it is untested (present: %r)" % (wanted, sorted(units)))
+
+    # A lumens SPOT is what proves the cone's solid angle is used rather than
+    # the full sphere -- a point light in lumens cannot tell the two apart.
+    spots = [entity for entity in document["entities"]
+             if entity.get("light", {}).get("type") == "spot"
+             and entity["light"]["intensity_units"] == "lumens"]
+    check(spots, "no spot light uses lumens; the cone solid-angle conversion "
+                 "would be untested end to end")
 
 
 def assert_generator(document):
@@ -432,6 +456,7 @@ def main(argv=None):
             ("physics flags", assert_physics_flags),
             ("coverage + dedup", assert_coverage),
             ("two-tone slot canary", assert_two_tone_slots),
+            ("light unit coverage", assert_light_units_covered),
             ("generator pins", assert_generator),
     ):
         before = len(_failures)

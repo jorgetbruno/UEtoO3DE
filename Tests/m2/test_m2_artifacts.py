@@ -225,6 +225,63 @@ def test_assetinfo_sidecars(document, project):
     print("  %d sidecars verified" % len(manifest_io.static_mesh_assets(document)))
 
 
+def test_stale_instance_removal():
+    """A level holding an instance of the prefab being rewritten breaks the save.
+
+    Pure file I/O, so it is tested here rather than in the editor. The bug it
+    guards is expensive: `CreatePrefabInMemory` answers with an opaque
+    "unknown exception", which reads exactly like an asset-streaming race and
+    was twice misdiagnosed as one (the level's own entity count and content
+    genuinely affect *when* it trips). Only instances of THIS prefab may be
+    removed -- the level's other content is none of the importer's business.
+    """
+    import json as json_module
+    import shutil
+    import tempfile
+
+    from ueimporter import prefab_build
+
+    root = tempfile.mkdtemp(prefix="ueo3de_stale_")
+    try:
+        level_dir = os.path.join(root, "Levels", "DefaultLevel")
+        os.makedirs(level_dir)
+        level_file = os.path.join(level_dir, "DefaultLevel.prefab")
+        with open(level_file, "w") as handle:
+            json_module.dump({
+                "ContainerEntity": {"Id": "ContainerEntity"},
+                "Entities": {"Entity_1": {"Name": "SomethingElse"}},
+                "Instances": {
+                    "Instance_[1]": {"Source": "Prefabs/L_Overview.prefab"},
+                    "Instance_[2]": {"Source": "Prefabs/SomeoneElses.prefab"},
+                },
+            }, handle)
+
+        target = os.path.join(root, "Prefabs", "L_Overview.prefab")
+        removed = prefab_build.detach_conflicting_instances(
+            root, "DefaultLevel", target)
+        check(removed == 1, "expected 1 stale instance removed, got %r" % removed)
+
+        with open(level_file, "r") as handle:
+            after = json_module.load(handle)
+        sources = [value["Source"] for value in (after.get("Instances") or {}).values()]
+        check(sources == ["Prefabs/SomeoneElses.prefab"],
+              "only the conflicting instance may be removed; instances left: %r"
+              % sources)
+        check("Entity_1" in after.get("Entities", {}),
+              "the level's own entities must be left alone")
+
+        # Idempotent, and silent when there is nothing to do.
+        again = prefab_build.detach_conflicting_instances(
+            root, "DefaultLevel", target)
+        check(again == 0, "second pass should find nothing, got %r" % again)
+        check(prefab_build.detach_conflicting_instances(
+                  root, "NoSuchLevel", target) == 0,
+              "a missing level file must be handled, not raised")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    print("  conflicting instance removed, unrelated content untouched")
+
+
 def test_two_tone_slots(document, project):
     """Per-slot material fidelity, at both artifact levels (M4).
 
@@ -272,7 +329,7 @@ def test_two_tone_slots(document, project):
           "azmaterials")
 
 
-def test_import_report():
+def test_import_report(document):
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "results", "m2_import_report_Fixture_01.json")
     if not check(os.path.exists(path), "import report missing: " + path):
@@ -284,8 +341,12 @@ def test_import_report():
     check(not errors, "import report contains errors: %r" % [r["code"] for r in errors])
 
     counters = report["counters"]
-    check(counters.get("entities_created") == 17,
-          "import created %r entities, expected 17" % counters.get("entities_created"))
+    # Derived from the manifest rather than pinned to a number: nothing may be
+    # dropped, and adding a fixture actor should not require editing a magic
+    # constant here (which is how a real drop gets normalised away).
+    check(counters.get("entities_created") == len(document["entities"]),
+          "import created %r entities, manifest has %d"
+          % (counters.get("entities_created"), len(document["entities"])))
     # 6 mesh products + 5 converted materials (the 4 fixture PBR set plus
     # WorldGridMaterial, whose Multiply graph resolves through the texture-DFS
     # approximation); image products are dependencies of the material jobs and
@@ -297,6 +358,11 @@ def test_import_report():
     check(counters.get("material_slots_assigned") == 2,
           "per-slot assignment set %r slots, expected 2 (SM_TwoTone)"
           % counters.get("material_slots_assigned"))
+    # Every manifest light must have produced a component (M5).
+    expected_lights = sum(1 for item in document["entities"] if "light" in item)
+    check(counters.get("lights_created") == expected_lights,
+          "authored %r lights, manifest has %d"
+          % (counters.get("lights_created"), expected_lights))
 
     codes = {record["code"] for record in report["warnings"]}
     check("XFORM_NONUNIFORM_SCALE_COMPONENT" in codes,
@@ -323,8 +389,9 @@ def main():
             ("PRODUCT scale + mirror (byte-level)", lambda: test_product_scale_and_mirror(document, project)),
             ("one FBX per unique mesh GUID", lambda: test_one_fbx_per_unique_mesh_guid(document)),
             ("assetinfo sidecars", lambda: test_assetinfo_sidecars(document, project)),
+            ("stale prefab instance removal", test_stale_instance_removal),
             ("two-tone per-slot fidelity", lambda: test_two_tone_slots(document, project)),
-            ("import report", test_import_report),
+            ("import report", lambda: test_import_report(document)),
     ):
         before = len(failures)
         print("== %s ==" % name)

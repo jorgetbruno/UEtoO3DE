@@ -55,6 +55,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     import azlmbr.legacy.general as general
 
     from . import asset_wait
+    from . import light_build
     from . import physics_build
     from . import prefab_build
     from .adapters import detect_in_editor, make_adapter
@@ -82,6 +83,14 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # An open level comes FIRST: prefab authoring needs a root prefab instance
     # (S0.1), and the adapter's resolve step creates a scratch entity to read
     # the backend's contact offset -- entity creation without a level throws.
+    # BEFORE opening: a level holding an instance of the prefab this import is
+    # about to rewrite makes CreatePrefabInMemory throw, and no amount of
+    # settling helps. See prefab_build.detach_conflicting_instances.
+    project_root = os.path.dirname(os.path.normpath(project_assets_root))
+    report.count("stale_instances_removed",
+                 prefab_build.detach_conflicting_instances(
+                     project_root, level_name, prefab_path, log=emit))
+
     general.idle_enable(True)
     general.open_level_no_prompt(level_name)
     general.idle_wait_frames(30)
@@ -200,6 +209,26 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     report.count("materials_assigned", assigned)
     report.count("material_slots_assigned", slots_assigned)
 
+    # --- lights (M5) ---
+    emit("authoring lights")
+    lights = 0
+    for item in document["entities"]:
+        entity_id = created.get(item["id"])
+        light = item.get("light")
+        if entity_id is None or light is None:
+            continue
+        plan, light_warnings = light_build.plan_light(light, item["name"])
+        for code, detail in light_warnings:
+            report.warn(code, item["name"], detail)
+        if plan is None:
+            continue
+        light_build.author_light(entity_id, plan, item["name"],
+                                 prefab_build.resolve_component_type)
+        lights += 1
+        emit("  %-22s %s (%d properties)"
+             % (item["name"], plan["component"], len(plan["properties"])))
+    report.count("lights_created", lights)
+
     # --- physics authoring, all through the adapter (M3) ---
     # After the meshes: mesh colliders bake from the entity's own render model,
     # which must already be assigned (and its product waited for, above).
@@ -235,22 +264,20 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # One entity, at the origin: the container lands at the origin too, so
     # instantiating the prefab at the origin reproduces the level exactly.
     #
-    # CreatePrefabInMemory surfaces internal failures as an opaque exception;
-    # on a large level the plausible cause is state still settling (bakes,
-    # asset streaming -- per-slot material loads raised the bar again on
-    # L_Overview). Escalating settles distinguish transient from structural:
-    # a structural failure survives every settle and still raises.
-    settles = [0, 900, 1800, 3600]
-    for attempt, settle in enumerate(settles):
-        if settle:
-            emit("  CreatePrefabInMemory threw; settling %d frames and retrying" % settle)
-            general.idle_wait_frames(settle)
-        try:
-            prefab_build.create_prefab_in_memory([level_root], prefab_path)
-            break
-        except RuntimeError:
-            if attempt == len(settles) - 1:
-                raise
+    # CreatePrefabInMemory surfaces internal failures as an opaque exception,
+    # which this project twice mis-read as an asset-streaming race and "fixed"
+    # with ever-longer settles. The real cause was a stale instance of the
+    # target prefab inside the scratch level (see
+    # prefab_build.detach_conflicting_instances) -- once removed, a 140-entity
+    # level with 128 baked colliders saves on the FIRST attempt. The single
+    # retry stays for genuine mid-bake serialization, but a failure here now
+    # means something structural, not something to wait out.
+    try:
+        prefab_build.create_prefab_in_memory([level_root], prefab_path)
+    except RuntimeError:
+        emit("  CreatePrefabInMemory threw; settling 900 frames and retrying once")
+        general.idle_wait_frames(900)
+        prefab_build.create_prefab_in_memory([level_root], prefab_path)
     prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit)
 
     return report, prefab_path

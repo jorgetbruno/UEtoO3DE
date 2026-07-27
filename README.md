@@ -42,16 +42,22 @@ milestone per session; each session starts from that file.
 Tests\m1\run_m1.bat          M1: UE export -> property tests -> validator -> golden diff
 Tests\m2\run_m2.bat [--cold] M2: export -> stage -> AP -> import -> prefab assertions
 Tests\m3\run_m3.bat          M3: detection tests -> seam guard -> simulated smoke import -> gem regression
+Tests\m4\run_m4.bat          M4: material/texture artifacts -> assignments in the saved prefab
+Tests\m5\run_m5.bat          M5: light conversion + write order -> lights in the saved prefab
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
+
+`run_m4.bat` and `run_m5.bat` assert against the prefab `run_m2.bat` produced, so
+run M2 first.
 
 Each `.bat` propagates a real exit code and CI must assert on that, never on console
 text (plan constraint 10). `run_m2.bat --cold` deletes the staged sources and their
 cache products first, so the run cannot pass on a warm cache alone.
 
 The pure-Python parts need no editor: `python Tests\m1\test_lane_a.py`,
-`python Tests\m1\validate_manifest.py --self-test` and
-`python Tests\m2\test_m2_artifacts.py` each run in about a second.
+`python Tests\m1\validate_manifest.py --self-test`,
+`python Tests\m2\test_m2_artifacts.py` and `python Tests\m5\test_light_build.py`
+each run in about a second.
 
 ## O3DE test projects (outside this repo, per O3DE convention)
 

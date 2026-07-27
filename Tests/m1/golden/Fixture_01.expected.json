@@ -697,6 +697,207 @@
       "ue_class": "PointLight"
     },
     {
+      "id": "93b58948-3369-5d5e-ad31-bd2939fca112",
+      "kind": "light",
+      "light": {
+        "attenuation_radius": 5.0,
+        "cast_shadows": true,
+        "color_linear": [
+          0.896269,
+          1.0,
+          0.896269
+        ],
+        "color_srgb8": [
+          243,
+          255,
+          243
+        ],
+        "intensity": 1256.637085,
+        "intensity_units": "lumens",
+        "source_radius": 0.0,
+        "temperature_k": 6500.0,
+        "type": "point",
+        "use_temperature": false
+      },
+      "mobility": "stationary",
+      "name": "Light_Point_Lumens",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -3.0,
+            -6.0,
+            3.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -3.0,
+            -6.0,
+            3.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.PointLight_1",
+      "ue_class": "PointLight"
+    },
+    {
+      "id": "76be3e92-a283-5e85-a9d1-dea1e785beef",
+      "kind": "light",
+      "light": {
+        "attenuation_radius": 5.0,
+        "cast_shadows": true,
+        "color_linear": [
+          0.799103,
+          0.799103,
+          1.0
+        ],
+        "color_srgb8": [
+          231,
+          231,
+          255
+        ],
+        "intensity": 5.0,
+        "intensity_units": "ev",
+        "source_radius": 0.0,
+        "temperature_k": 6500.0,
+        "type": "point",
+        "use_temperature": false
+      },
+      "mobility": "stationary",
+      "name": "Light_Point_EV",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -9.0,
+            -6.0,
+            3.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -9.0,
+            -6.0,
+            3.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.PointLight_2",
+      "ue_class": "PointLight"
+    },
+    {
+      "id": "93a9d155-3ef9-53d6-8b80-02d8aaecc897",
+      "kind": "light",
+      "light": {
+        "attenuation_radius": 5.0,
+        "cast_shadows": true,
+        "color_linear": [
+          1.0,
+          0.799103,
+          0.799103
+        ],
+        "color_srgb8": [
+          255,
+          231,
+          231
+        ],
+        "intensity": 10000.0,
+        "intensity_units": "unitless",
+        "source_radius": 0.0,
+        "temperature_k": 6500.0,
+        "type": "point",
+        "use_temperature": false
+      },
+      "mobility": "stationary",
+      "name": "Light_Point_Unitless",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -12.0,
+            -6.0,
+            3.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -12.0,
+            -6.0,
+            3.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.PointLight_3",
+      "ue_class": "PointLight"
+    },
+    {
       "id": "bfb62cb6-6937-5fa0-b24f-d511dd720e77",
       "kind": "environment",
       "mobility": "movable",
@@ -857,6 +1058,75 @@
         }
       },
       "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.SpotLight_0",
+      "ue_class": "SpotLight"
+    },
+    {
+      "id": "16cb52be-ad2f-556d-889b-738e048d1965",
+      "kind": "light",
+      "light": {
+        "attenuation_radius": 8.0,
+        "cast_shadows": true,
+        "color_linear": [
+          1.0,
+          0.896269,
+          0.799103
+        ],
+        "color_srgb8": [
+          255,
+          243,
+          231
+        ],
+        "inner_cone_angle_deg": 10.0,
+        "intensity": 1000.0,
+        "intensity_units": "lumens",
+        "outer_cone_angle_deg": 20.0,
+        "source_radius": 0.0,
+        "temperature_k": 6500.0,
+        "type": "spot",
+        "use_temperature": false
+      },
+      "mobility": "stationary",
+      "name": "Light_Spot_Lumens",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            -0.5,
+            0.0,
+            0.0,
+            0.866025
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -6.0,
+            -6.0,
+            4.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            -0.5,
+            0.0,
+            0.0,
+            0.866025
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -6.0,
+            -6.0,
+            4.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.SpotLight_1",
       "ue_class": "SpotLight"
     },
     {

@@ -32,6 +32,10 @@ Deterministic layout (UE cm, Z-up, left-handed):
     Light_Point          (300,300,250)   intensity 12.5 cd, color (1.0,0.6,0.3), attenuation 600
     Light_Spot           (700,300,400)   rot (P-45,Y-90), 40 cd, color (0.4,0.7,1.0), cone 15/30, att 1000
     Light_Directional    (0,0,600)       rot (P-50,Y30), 5.0 lux, color (1.0,0.95,0.85)
+    Light_Point_Lumens   (-300,600,300)  1256.637 lumens -> 100 cd  (M5 unit-mode coverage)
+    Light_Spot_Lumens    (-600,600,400)  1000 lumens, cone 10/20 -> 2639.44 cd
+    Light_Point_EV       (-900,600,300)  5 EV -> 32 cd
+    Light_Point_Unitless (-1200,600,300) 10000 unitless -> 16 cd (approximated, warns)
     Atmo_SkyLight        (0,0,200)       intensity 0.8, real-time capture
     Atmo_HeightFog       (0,0,0)         density 0.05, falloff 0.2
     PPV_01               (0,0,0)         unbound (infinite extent)
@@ -419,6 +423,41 @@ def build_level(meshes, materials):
     slc.set_editor_property("inner_cone_angle", 15.0)
     slc.set_editor_property("outer_cone_angle", 30.0)
     slc.set_editor_property("attenuation_radius", 1000.0)
+
+    # M5 wants every intensity-UNIT mode covered, not just every light type.
+    # The values convert to exact candela figures (see add_m5_lights.py, which
+    # adds these to an existing project; keep the two in sync).
+    import math as _math
+    units_enum = unreal.LightUnits
+
+    def _point(label, location, intensity, units, color, attenuation=500.0):
+        actor = actor_sub.spawn_actor_from_class(unreal.PointLight, unreal.Vector(*location))
+        actor.set_actor_label(label)
+        component = actor.point_light_component
+        component.set_editor_property("intensity_units", units)
+        component.set_intensity(intensity)
+        component.set_light_color(unreal.LinearColor(color[0], color[1], color[2], 1.0), True)
+        component.set_editor_property("attenuation_radius", attenuation)
+        return actor
+
+    _point("Light_Point_Lumens", (-300.0, 600.0, 300.0),
+           4.0 * _math.pi * 100.0, units_enum.LUMENS, (0.9, 1.0, 0.9))   # = 100 cd
+    _point("Light_Point_EV", (-900.0, 600.0, 300.0),
+           5.0, units_enum.EV, (0.8, 0.8, 1.0))                          # = 32 cd
+    _point("Light_Point_Unitless", (-1200.0, 600.0, 300.0),
+           10000.0, units_enum.UNITLESS, (1.0, 0.8, 0.8))                # = 16 cd
+
+    spot_lumens = actor_sub.spawn_actor_from_class(
+        unreal.SpotLight, unreal.Vector(-600.0, 600.0, 400.0),
+        unreal.Rotator(-60.0, 0.0, 0.0))
+    spot_lumens.set_actor_label("Light_Spot_Lumens")
+    slc_lumens = spot_lumens.spot_light_component
+    slc_lumens.set_editor_property("intensity_units", units_enum.LUMENS)
+    slc_lumens.set_intensity(1000.0)                                     # = 2639.44 cd
+    slc_lumens.set_light_color(unreal.LinearColor(1.0, 0.9, 0.8, 1.0), True)
+    slc_lumens.set_editor_property("inner_cone_angle", 10.0)
+    slc_lumens.set_editor_property("outer_cone_angle", 20.0)
+    slc_lumens.set_editor_property("attenuation_radius", 800.0)
 
     sun = actor_sub.spawn_actor_from_class(unreal.DirectionalLight, unreal.Vector(0.0, 0.0, 600.0),
                                            unreal.Rotator(-50.0, 30.0, 0.0))

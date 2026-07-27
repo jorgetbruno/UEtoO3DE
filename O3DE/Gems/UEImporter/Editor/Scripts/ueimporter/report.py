@@ -47,6 +47,29 @@ CODES = {
               "budget, so per-slot assignment fell back to the default slot "
               "with the first slot's material."),
 
+    # --- lights (M5) ---
+    "LIGHT_INTENSITY_APPROX": (
+        WARN, "UE intensity units with no exact photometric meaning "
+              "(unitless, nits) were converted with UE's own internal factor "
+              "and an implicit 1 m^2 surface; brightness is approximate."),
+    "LIGHT_RADIUS_EXPLICIT": (
+        INFO, "UE's explicit attenuation radius was applied (Atom defaults to "
+              "deriving the influence radius from intensity). Faithful to UE; "
+              "differs from what a native O3DE light would do."),
+    "LIGHT_SHADOWS_UNSUPPORTED": (
+        WARN, "The UE light casts shadows but the mapped Atom light type does "
+              "not support them; imported without shadows rather than with a "
+              "flag that reads back true and does nothing."),
+    "LIGHT_SOURCE_RADIUS_DROPPED": (
+        INFO, "UE source radius made this an area light; imported as a "
+              "punctual light, so soft shadow and specular width are lost."),
+    "LIGHT_TEMPERATURE_DROPPED": (
+        INFO, "UE colour temperature is not represented on Atom's light "
+              "components; only the RGB colour carries over."),
+    "LIGHT_TYPE_UNSUPPORTED": (
+        WARN, "UE light class has no v1 mapping (rect/area lights); the "
+              "entity is created with its transform but no light component."),
+
     # --- physics (M3) ---
     "PHYS_SHAPE_APPROXIMATED": (
         WARN, "A collision shape could not be authored exactly on this backend "
