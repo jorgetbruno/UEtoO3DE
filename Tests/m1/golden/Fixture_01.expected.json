@@ -583,6 +583,20 @@
       "ue_class": "DirectionalLight"
     },
     {
+      "environment": {
+        "fog_cutoff_distance": 0.0,
+        "fog_density": 0.05,
+        "fog_height_falloff": 0.2,
+        "fog_height_m": 0.0,
+        "fog_inscattering_color_linear": [
+          0.4,
+          0.5,
+          0.7
+        ],
+        "fog_max_opacity": 0.9,
+        "start_distance": 5.0,
+        "type": "fog"
+      },
       "id": "be673516-061b-5825-a8a7-f46b54fb8c94",
       "kind": "environment",
       "mobility": "movable",
@@ -898,6 +912,19 @@
       "ue_class": "PointLight"
     },
     {
+      "environment": {
+        "blend_weight": 1.0,
+        "enabled": true,
+        "overrides": {
+          "auto_exposure_bias": 1.75,
+          "bloom_intensity": 0.9,
+          "bloom_threshold": 0.8,
+          "vignette_intensity": 0.55
+        },
+        "priority": 2.0,
+        "type": "post_process",
+        "unbound": true
+      },
       "id": "bfb62cb6-6937-5fa0-b24f-d511dd720e77",
       "kind": "environment",
       "mobility": "movable",
@@ -945,6 +972,77 @@
       "ue_class": "PostProcessVolume"
     },
     {
+      "environment": {
+        "ground_albedo_linear": [
+          0.401978,
+          0.401978,
+          0.401978
+        ],
+        "mie_scattering_scale": 0.003996,
+        "multi_scattering_factor": 1.0,
+        "rayleigh_scattering_scale": 0.0331,
+        "type": "sky_atmosphere"
+      },
+      "id": "2fd9ac40-ab92-54e2-9bbe-2a0343611aa1",
+      "kind": "environment",
+      "mobility": "movable",
+      "name": "Atmo_SkyAtmosphere",
+      "parent_id": null,
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.SkyAtmosphere_0",
+      "ue_class": "SkyAtmosphere"
+    },
+    {
+      "environment": {
+        "color_linear": [
+          0.846873,
+          0.896269,
+          1.0
+        ],
+        "cubemap_ue_path": null,
+        "intensity": 0.8,
+        "lower_hemisphere_is_black": true,
+        "real_time_capture": true,
+        "source_type": "captured_scene",
+        "type": "skylight"
+      },
       "id": "0a15be88-7bce-5f3f-9fe9-261815d152a5",
       "kind": "environment",
       "mobility": "stationary",
@@ -1963,7 +2061,7 @@
     "name": "Fixture_01",
     "ue_package": "/Game/Maps/Fixture_01"
   },
-  "schema_version": 3,
+  "schema_version": 4,
   "units": {
     "angle": "degrees",
     "coordinate_system": "o3de_right_handed_z_up",
@@ -1973,20 +2071,8 @@
   },
   "warnings": [
     {
-      "code": "ACTOR_DEFERRED",
-      "detail": "ExponentialHeightFog is imported in M6",
-      "severity": "info",
-      "subject": "Atmo_HeightFog"
-    },
-    {
-      "code": "ACTOR_DEFERRED",
-      "detail": "SkyLight is imported in M6",
-      "severity": "info",
-      "subject": "Atmo_SkyLight"
-    },
-    {
-      "code": "ACTOR_DEFERRED",
-      "detail": "PostProcessVolume is imported in M6",
+      "code": "ENV_POSTPROCESS_UNMAPPED",
+      "detail": "vignette_intensity is overridden in UE but has no M6 mapping",
       "severity": "info",
       "subject": "PPV_01"
     },

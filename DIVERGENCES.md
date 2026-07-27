@@ -43,3 +43,17 @@ exists, is a design change recorded here rather than a patch.
 | Colour temperature | `Temperature` + `Use Temperature` tint the light | no equivalent on Atom's light components; only the RGB colour carries over → `LIGHT_TEMPERATURE_DROPPED` |
 | Source radius | non-zero radius makes a sphere/area light with soft shadows | imported as punctual; soft shadow and specular width are lost → `LIGHT_SOURCE_RADIUS_DROPPED` |
 | Rect / area lights | `URectLightComponent` etc. | no v1 mapping: the entity keeps its transform and gets no light component → `LIGHT_TYPE_UNSUPPORTED` |
+
+## Environment (M6)
+
+| Behaviour | UE | → O3DE (Atom) |
+|---|---|---|
+| Skylight | image-based lighting from a captured scene or a specified cubemap; contributes real indirect light | **a Physical Sky, not IBL.** Atom's `Global Skylight (IBL)` needs diffuse *and* specular irradiance image assets; a real-time-capture skylight has no such asset to export, so authoring one would produce a component that looks configured and lights nothing. The Physical Sky does light the scene, but the indirect bounce is the sky's, not UE's captured environment → `ENV_SKYLIGHT_APPROX`. Closing this properly means exporting/baking a cubemap, which is its own asset pipeline |
+| Sky + atmosphere together | a SkyLight *and* a SkyAtmosphere routinely coexist | only one Physical Sky is authored — two would fight over the same sky. The SkyLight wins (it carries the artist's intensity) → `ENV_SKY_DUPLICATE` |
+| Atmospheric scattering | Rayleigh/Mie coefficients, ground albedo, planet radius | not representable; a default-turbidity Physical Sky stands in → `ENV_SKY_ATMOSPHERE_APPROX` |
+| Fog density model | exponential in height: density × e^(−falloff × h) | a distance ramp (start→end) with a separate height band. The two are different functions, so no scale factor makes them agree everywhere; density is matched at the defaults and the height band derived from the falloff → `ENV_FOG_APPROX`. Expect the largest visual difference at extreme heights and distances |
+| Post-process scope | a volume applies inside its shape, blending over `BlendRadius` | an imported PostFX layer applies to the **whole level**: bounded PostFX needs a shape component plus a weight modifier, which v1 does not author → `ENV_POSTPROCESS_UNBOUNDED`. A level with several bounded volumes will therefore look wrong — they all apply at once, ordered only by priority |
+| Non-overridden settings | a PostProcessVolume setting applies only when its `override_*` flag is set | the exporter carries **only** overridden settings, so UE defaults are never imported as if an artist had chosen them. The cost is that a level relying on project-wide defaults imports with fewer post-process components than it visually had |
+| Bloom threshold | `-1` means "bloom everything" | no sentinel in Atom; 0.0 is the nearest honest value → `ENV_BLOOM_THRESHOLD_APPROX` |
+| Exposure | UE's histogram auto-exposure with min/max brightness in a physical camera model | Atom's eye adaptation with its own curve; the compensation value carries across, the adaptation behaviour will not match |
+| Reflection captures | box/sphere capture actors | not imported in v1 (the schema carries the type; nothing authors it) → `ENV_TYPE_UNSUPPORTED` |

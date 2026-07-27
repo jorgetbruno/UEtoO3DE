@@ -26,9 +26,9 @@ import json
 # 2 -> 3 (M4): material assets gained `material_data` (blend mode, two-sided,
 # per-property specs) and a new asset kind `texture` (exported TGA, role
 # suffix chooses the Atom image preset, `channel` marks ORM splits).
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 TOOL_NAME = "UEO3DEExporter"
-TOOL_VERSION = "0.3.0"
+TOOL_VERSION = "0.4.0"
 
 # The Lane A basis map actually applied, recorded so the O3DE importer can
 # refuse a manifest produced under a different convention rather than

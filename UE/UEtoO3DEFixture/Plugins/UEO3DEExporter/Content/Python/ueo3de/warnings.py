@@ -63,6 +63,14 @@ CODES = {
         WARN, "UE blend mode outside Opaque/Masked/Translucent; imported as "
               "translucent."),
 
+    # --- environment (M6) ---
+    "ENV_POSTPROCESS_UNMAPPED": (
+        INFO, "A post-process setting the UE artist explicitly overrode has no "
+              "M6 mapping; it is carried in the manifest but not authored."),
+    "ENV_VOLUME_BOUNDS_UNKNOWN": (
+        WARN, "A bounded post-process volume's extents could not be read; the "
+              "importer cannot size the equivalent volume."),
+
     # --- physics source data (M1 records, M3 consumes) ---
     "PHYS_NO_SIMPLE_COLLISION": (
         INFO, "Static mesh has no simple collision primitives; M3 must fall "

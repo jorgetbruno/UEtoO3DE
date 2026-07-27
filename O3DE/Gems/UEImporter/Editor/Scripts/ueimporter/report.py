@@ -70,6 +70,32 @@ CODES = {
         WARN, "UE light class has no v1 mapping (rect/area lights); the "
               "entity is created with its transform but no light component."),
 
+    # --- environment (M6) ---
+    "ENV_SKYLIGHT_APPROX": (
+        WARN, "UE's image-based skylight has no exportable irradiance images "
+              "(Atom's Global Skylight needs diffuse+specular assets), so a "
+              "Physical Sky is authored instead. Lighting is approximate."),
+    "ENV_SKY_ATMOSPHERE_APPROX": (
+        WARN, "UE SkyAtmosphere's scattering parameters have no Atom "
+              "equivalent; a default-turbidity Physical Sky stands in."),
+    "ENV_SKY_DUPLICATE": (
+        INFO, "More than one actor maps to the sky; only the first is "
+              "authored, because two Physical Sky components fight."),
+    "ENV_FOG_APPROX": (
+        WARN, "UE fog is exponential in height, Atom's is a distance ramp "
+              "with a height band. Density and range are approximated."),
+    "ENV_POSTPROCESS_UNBOUNDED": (
+        WARN, "A bounded UE post-process volume becomes a level-wide PostFX "
+              "layer; bounded PostFX needs a shape plus a weight modifier."),
+    "ENV_POSTPROCESS_DISABLED": (
+        INFO, "The UE post-process volume is disabled; no layer authored."),
+    "ENV_BLOOM_THRESHOLD_APPROX": (
+        INFO, "UE's negative bloom threshold is a 'no threshold' sentinel "
+              "with no Atom equivalent; 0.0 is used."),
+    "ENV_TYPE_UNSUPPORTED": (
+        WARN, "Environment actor type has no v1 mapping; the entity keeps "
+              "its transform only."),
+
     # --- physics (M3) ---
     "PHYS_SHAPE_APPROXIMATED": (
         WARN, "A collision shape could not be authored exactly on this backend "

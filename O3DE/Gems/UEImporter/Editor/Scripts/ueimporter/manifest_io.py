@@ -21,7 +21,7 @@ checks matter more than the rest:
 
 import json
 
-SUPPORTED_SCHEMA_VERSION = 3
+SUPPORTED_SCHEMA_VERSION = 4
 EXPECTED_LANE_A_RULE = "negate_y"
 EXPECTED_LANE_B_RULE = "negate_y_net_of_three"
 EXPECTED_COORDINATE_SYSTEM = "o3de_right_handed_z_up"

@@ -16,9 +16,9 @@
   ],
   "properties": {
     "schema_version": {
-      "description": "Bumped whenever a change would break an existing importer. 2 (M2) added assets[].fbx_node_name and units.lane_b_rule; 3 (M4) added material_data and the texture asset kind.",
+      "description": "Bumped whenever a change would break an existing importer. 2 (M2) added assets[].fbx_node_name and units.lane_b_rule; 3 (M4) added material_data and the texture asset kind; 4 (M6) added entities[].environment.",
       "type": "integer",
-      "const": 3
+      "const": 4
     },
     "generator": {
       "type": "object",
@@ -617,6 +617,9 @@
         },
         "physics": {
           "$ref": "#/definitions/physics"
+        },
+        "environment": {
+          "$ref": "#/definitions/environment"
         }
       }
     },
@@ -728,6 +731,140 @@
               "$ref": "#/definitions/material_property_spec"
             }
           }
+        }
+      }
+    },
+    "environment": {
+      "description": "Environment actor payload (plan M6): sky, skylight, fog, post-process and reflection capture. Only values the UE artist actually authored are carried -- a PostProcessVolume setting is present only when its override_* flag is set, so the importer never mistakes a UE default for an intent.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "skylight",
+            "fog",
+            "post_process",
+            "sky_atmosphere",
+            "reflection_capture",
+            "unknown"
+          ]
+        },
+        "intensity": {
+          "type": "number"
+        },
+        "color_linear": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "real_time_capture": {
+          "type": "boolean"
+        },
+        "source_type": {
+          "description": "UE SkyLightSourceType; a specified cubemap is an asset reference, a captured scene is not exportable in v1.",
+          "type": "string",
+          "enum": [
+            "captured_scene",
+            "specified_cubemap",
+            "unknown"
+          ]
+        },
+        "cubemap_ue_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lower_hemisphere_is_black": {
+          "type": "boolean"
+        },
+        "fog_density": {
+          "type": "number"
+        },
+        "fog_height_falloff": {
+          "type": "number"
+        },
+        "fog_inscattering_color_linear": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "start_distance": {
+          "description": "metres (Lane A converted)",
+          "type": "number"
+        },
+        "fog_cutoff_distance": {
+          "type": "number"
+        },
+        "fog_max_opacity": {
+          "type": "number"
+        },
+        "fog_height_m": {
+          "description": "The fog actor's world Z in metres: UE's density is defined at the actor height.",
+          "type": "number"
+        },
+        "priority": {
+          "type": "number"
+        },
+        "blend_weight": {
+          "type": "number"
+        },
+        "unbound": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "extents_m": {
+          "description": "Half-extents in metres for a bounded volume; absent when unbound.",
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "overrides": {
+          "description": "Post-process settings the artist explicitly overrode, name -> value. Only overridden settings appear.",
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "number",
+              "boolean",
+              "string",
+              "array"
+            ]
+          }
+        },
+        "ground_albedo_linear": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "rayleigh_scattering_scale": {
+          "type": "number"
+        },
+        "mie_scattering_scale": {
+          "type": "number"
+        },
+        "multi_scattering_factor": {
+          "type": "number"
+        },
+        "influence_radius_m": {
+          "type": "number"
         }
       }
     }

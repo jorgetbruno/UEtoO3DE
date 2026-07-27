@@ -44,11 +44,12 @@ Tests\m2\run_m2.bat [--cold] M2: export -> stage -> AP -> import -> prefab asser
 Tests\m3\run_m3.bat          M3: detection tests -> seam guard -> simulated smoke import -> gem regression
 Tests\m4\run_m4.bat          M4: material/texture artifacts -> assignments in the saved prefab
 Tests\m5\run_m5.bat          M5: light conversion + write order -> lights in the saved prefab
+Tests\m6\run_m6.bat          M6: sky/fog/post-process mapping -> environment in the saved prefab
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
 
-`run_m4.bat` and `run_m5.bat` assert against the prefab `run_m2.bat` produced, so
-run M2 first.
+`run_m4.bat`, `run_m5.bat` and `run_m6.bat` assert against the prefab
+`run_m2.bat` produced, so run M2 first.
 
 Each `.bat` propagates a real exit code and CI must assert on that, never on console
 text (plan constraint 10). `run_m2.bat --cold` deletes the staged sources and their

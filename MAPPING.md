@@ -233,6 +233,36 @@ the mode changes — measured, 5.0 lux written intensity-first stores 80.0
 is an ordered list for exactly this reason, and
 [test_light_build.py](Tests/m5/test_light_build.py) asserts the order offline.
 
+## Environment (M6)
+
+The goal is that an imported level is not lit in a black void. Almost every
+mapping here is an approximation, and each one is reported.
+
+| UE | O3DE | Note |
+|---|---|---|
+| `SkyLight` | `Physical Sky` | **not** `Global Skylight (IBL)`: that needs diffuse+specular *image assets*, which a real-time-capture skylight has none of, so it would author a component that looks configured and lights nothing → `ENV_SKYLIGHT_APPROX` |
+| `SkyAtmosphere` | `Physical Sky` | Rayleigh/Mie scattering has no Atom equivalent → `ENV_SKY_ATMOSPHERE_APPROX` |
+| both present | **one** Physical Sky, the SkyLight's | two fight over the same sky. The SkyLight wins because it carries the artist's intensity; the atmosphere carries only parameters Atom cannot represent → `ENV_SKY_DUPLICATE` |
+| SkyLight `Intensity` (unitless) | `Sky Intensity` = UE × 4.0 | UE's unitless intensity is a multiplier on "normal"; 4.0 is Atom's default sky intensity |
+| `ExponentialHeightFog` | `PostFX Layer` + `Deferred Fog` | Atom's post-process components are inert without a layer on the same entity |
+| fog `Density` | `Fog Density`, scaled so UE's 0.02 default lands on Atom's 0.33 | different functions (UE exponential in height, Atom a distance ramp with a height band) → `ENV_FOG_APPROX` |
+| fog `StartDistance` / `FogCutoffDistance` | `Fog Start Distance` / `Fog End Distance` | UE has no far distance unless a cutoff is set; otherwise a default end is derived |
+| fog `HeightFalloff` | `Fog Layer` bottom/max height | the height band is derived from the falloff — approximate |
+| `PostProcessVolume` | `PostFX Layer` (+ `Exposure Control`, `Bloom`) | only settings whose `override_*` flag is set are carried at all; unmapped overridden settings → `ENV_POSTPROCESS_UNMAPPED` |
+| `AutoExposureBias` | `Manual Compensation` | eye-adaptation settings switch `Control Type` to eye adaptation |
+| `BloomIntensity` / `BloomThreshold` | `Intensity` / `Threshold` | UE's `-1` threshold is a "no threshold" sentinel with no Atom equivalent → 0.0, `ENV_BLOOM_THRESHOLD_APPROX` |
+| bounded volume | level-wide layer | bounded PostFX needs a shape plus a weight modifier → `ENV_POSTPROCESS_UNBOUNDED` |
+
+**Two write-order traps, both measured.** Atom's post-process components each
+carry an `Enable…` flag, and one left false serializes into the prefab looking
+configured while rendering nothing — so the flag is always written. And on the
+Physical Sky, writing `Sky Intensity` *without* writing `Intensity Mode` first
+stores **1.0 for any input** while reporting success
+([probe_m6_sky_intensity.py](Tests/o3de/probe_m6_sky_intensity.py)); the mode
+is therefore written even though it is already the component default. This is
+the same family as M5's directional light, one step nastier — there the value
+was converted, here it is discarded.
+
 ## World Partition detection
 
 UE 5.8 exposes no direct route from Python: `UWorld` has neither `persistent_level` nor

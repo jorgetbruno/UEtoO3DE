@@ -479,6 +479,180 @@ def _light_block(actor):
     return block
 
 
+# ---------------------------------------------------------------------------
+# environment (M6)
+# ---------------------------------------------------------------------------
+
+# Post-process settings the O3DE side can do something with, as
+# (UE settings property, UE override flag, manifest key). UE applies a
+# PostProcessVolume setting ONLY when its override flag is set, so anything
+# without the flag is a UE default that the artist never chose -- exporting it
+# would hand the importer a fabricated intent. Probed live in
+# `Tests/ue/probe_m6_env.py`; every name here was confirmed to exist.
+_PP_SETTINGS = (
+    ("auto_exposure_bias", "override_auto_exposure_bias", "auto_exposure_bias"),
+    ("auto_exposure_min_brightness", "override_auto_exposure_min_brightness",
+     "auto_exposure_min_brightness"),
+    ("auto_exposure_max_brightness", "override_auto_exposure_max_brightness",
+     "auto_exposure_max_brightness"),
+    ("auto_exposure_speed_up", "override_auto_exposure_speed_up",
+     "auto_exposure_speed_up"),
+    ("auto_exposure_speed_down", "override_auto_exposure_speed_down",
+     "auto_exposure_speed_down"),
+    ("bloom_intensity", "override_bloom_intensity", "bloom_intensity"),
+    ("bloom_threshold", "override_bloom_threshold", "bloom_threshold"),
+    ("vignette_intensity", "override_vignette_intensity", "vignette_intensity"),
+    ("depth_of_field_focal_distance", "override_depth_of_field_focal_distance",
+     "depth_of_field_focal_distance"),
+    ("depth_of_field_fstop", "override_depth_of_field_fstop",
+     "depth_of_field_fstop"),
+    ("motion_blur_amount", "override_motion_blur_amount", "motion_blur_amount"),
+    ("ambient_occlusion_intensity", "override_ambient_occlusion_intensity",
+     "ambient_occlusion_intensity"),
+)
+
+# Overridden settings with no M6 mapping still have to be reported, so the
+# importer can say what it dropped rather than silently losing them.
+_PP_MAPPED_IN_M6 = frozenset((
+    "auto_exposure_bias", "auto_exposure_min_brightness",
+    "auto_exposure_max_brightness", "auto_exposure_speed_up",
+    "auto_exposure_speed_down", "bloom_intensity", "bloom_threshold",
+))
+
+
+def _linear_color(value, default=(1.0, 1.0, 1.0)):
+    """A UE FLinearColor's RGB as a plain list (already linear)."""
+    if value is None:
+        return list(default)
+    return [float(_field(value, "r", default[0])),
+            float(_field(value, "g", default[1])),
+            float(_field(value, "b", default[2]))]
+
+
+def _srgb_color(value, default=(255, 255, 255)):
+    """A UE FColor (sRGB bytes) decoded to linear."""
+    if value is None:
+        return [_srgb_to_linear(channel) for channel in default]
+    return [_srgb_to_linear(int(_field(value, "r", default[0]))),
+            _srgb_to_linear(int(_field(value, "g", default[1]))),
+            _srgb_to_linear(int(_field(value, "b", default[2])))]
+
+
+def _skylight_block(actor):
+    component = actor.light_component
+    if component is None:
+        return None
+    source = _enum_name(_field(component, "source_type"), "unknown")
+    # SLS_CAPTURED_SCENE / SLS_SPECIFIED_CUBEMAP -> captured_scene / specified_cubemap
+    source = {"sls_captured_scene": "captured_scene",
+              "sls_specified_cubemap": "specified_cubemap"}.get(source, "unknown")
+    cubemap = _field(component, "cubemap")
+    return {
+        "type": "skylight",
+        "intensity": float(_field(component, "intensity", 1.0)),
+        "color_linear": _srgb_color(_field(component, "light_color")),
+        "real_time_capture": bool(_field(component, "real_time_capture", False)),
+        "source_type": source,
+        "cubemap_ue_path": (naming.package_path(
+            unreal.SystemLibrary.get_path_name(cubemap)) if cubemap else None),
+        "lower_hemisphere_is_black": bool(
+            _field(component, "lower_hemisphere_is_black", True)),
+    }
+
+
+def _fog_block(actor):
+    component = actor.component
+    if component is None:
+        return None
+    # `fog_inscattering_color` does not exist in 5.8 -- the property is
+    # `fog_inscattering_luminance` (measured; probing with hasattr would have
+    # reported neither, since UE hides UPROPERTYs from dir()).
+    height_cm = 0.0
+    root = actor.root_component
+    if root is not None:
+        location = _field(root, "relative_location")
+        if location is not None:
+            height_cm = float(_field(location, "z", 0.0))
+    return {
+        "type": "fog",
+        "fog_density": float(_field(component, "fog_density", 0.02)),
+        "fog_height_falloff": float(_field(component, "fog_height_falloff", 0.2)),
+        "fog_inscattering_color_linear": _linear_color(
+            _field(component, "fog_inscattering_luminance"), (0.0, 0.0, 0.0)),
+        "start_distance": lane_a.convert_length(
+            float(_field(component, "start_distance", 0.0))),
+        "fog_cutoff_distance": lane_a.convert_length(
+            float(_field(component, "fog_cutoff_distance", 0.0))),
+        "fog_max_opacity": float(_field(component, "fog_max_opacity", 1.0)),
+        "fog_height_m": lane_a.convert_length(height_cm),
+    }
+
+
+def _sky_atmosphere_block(actor):
+    component = actor.get_component_by_class(unreal.SkyAtmosphereComponent)
+    if component is None:
+        return None
+    return {
+        "type": "sky_atmosphere",
+        "ground_albedo_linear": _srgb_color(_field(component, "ground_albedo"),
+                                            (170, 170, 170)),
+        "rayleigh_scattering_scale": float(
+            _field(component, "rayleigh_scattering_scale", 0.0331)),
+        "mie_scattering_scale": float(
+            _field(component, "mie_scattering_scale", 0.003996)),
+        "multi_scattering_factor": float(
+            _field(component, "multi_scattering_factor", 1.0)),
+    }
+
+
+def _post_process_block(actor, subject, warnings):
+    settings = _field(actor, "settings")
+    overrides = {}
+    if settings is not None:
+        for name, flag, key in _PP_SETTINGS:
+            if not bool(_field(settings, flag, False)):
+                continue   # not overridden: a UE default, not an intent
+            value = _field(settings, name)
+            if value is None:
+                continue
+            overrides[key] = float(value) if isinstance(value, (int, float)) else value
+            if key not in _PP_MAPPED_IN_M6:
+                warnings.add("ENV_POSTPROCESS_UNMAPPED", subject,
+                             "%s is overridden in UE but has no M6 mapping" % key)
+
+    block = {
+        "type": "post_process",
+        "priority": float(_field(actor, "priority", 0.0)),
+        "blend_weight": float(_field(actor, "blend_weight", 1.0)),
+        "unbound": bool(_field(actor, "unbound", False)),
+        "enabled": bool(_field(actor, "enabled", True)),
+        "overrides": overrides,
+    }
+    if not block["unbound"]:
+        try:
+            _origin, extent = actor.get_actor_bounds(False)
+            block["extents_m"] = [lane_a.convert_length(abs(float(_field(extent, axis, 0.0))))
+                                  for axis in ("x", "y", "z")]
+        except Exception:
+            warnings.add("ENV_VOLUME_BOUNDS_UNKNOWN", subject,
+                         "bounded post-process volume with unreadable bounds")
+    return block
+
+
+def _environment_block(actor, subject, warnings):
+    """Environment payload for a sky/fog/post-process actor, or None."""
+    for class_name, builder in (("SkyLight", _skylight_block),
+                                ("ExponentialHeightFog", _fog_block),
+                                ("SkyAtmosphere", _sky_atmosphere_block)):
+        cls = getattr(unreal, class_name, None)
+        if cls is not None and isinstance(actor, cls):
+            return builder(actor)
+    cls = getattr(unreal, "PostProcessVolume", None)
+    if cls is not None and isinstance(actor, cls):
+        return _post_process_block(actor, subject, warnings)
+    return None
+
+
 def _mesh_block(actor, assets, subject, warnings):
     component = actor.static_mesh_component
     mesh = _field(component, "static_mesh")
@@ -543,8 +717,12 @@ def _build_entity(actor, assets, warnings):
             entity["light"] = light
 
     if kind == "environment":
-        warnings.add("ACTOR_DEFERRED", label,
-                     actor.get_class().get_name() + " is imported in M6")
+        environment = _environment_block(actor, label, warnings)
+        if environment is not None:
+            entity["environment"] = environment
+        else:
+            warnings.add("ACTOR_DEFERRED", label,
+                         actor.get_class().get_name() + " is imported in M6")
     elif kind == "unknown":
         warnings.add("ACTOR_CLASS_UNMAPPED", label,
                      "no v1 mapping for " + actor.get_class().get_name())

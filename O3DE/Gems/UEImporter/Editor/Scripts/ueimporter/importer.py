@@ -55,6 +55,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     import azlmbr.legacy.general as general
 
     from . import asset_wait
+    from . import env_build
     from . import light_build
     from . import physics_build
     from . import prefab_build
@@ -228,6 +229,39 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         emit("  %-22s %s (%d properties)"
              % (item["name"], plan["component"], len(plan["properties"])))
     report.count("lights_created", lights)
+
+    # --- environment (M6) ---
+    # Sky first and only once: a level usually has both a SkyLight and a
+    # SkyAtmosphere, and two Physical Sky components fight over the same sky.
+    emit("authoring environment")
+    environments = 0
+    sky_authored = False
+    # A SkyLight carries the artist's authored intensity; a SkyAtmosphere
+    # carries scattering parameters Atom cannot represent at all. When a level
+    # has both -- most do -- the skylight must win the one Physical Sky, or
+    # that intensity is silently replaced by a default.
+    def sky_first(item):
+        kind = (item.get("environment") or {}).get("type")
+        return 0 if kind == "skylight" else 1
+
+    for item in sorted(document["entities"], key=sky_first):
+        entity_id = created.get(item["id"])
+        environment = item.get("environment")
+        if entity_id is None or environment is None:
+            continue
+        plans, env_warnings = env_build.plan_environment(
+            environment, item["name"], sky_already_authored=sky_authored)
+        for code, detail in env_warnings:
+            report.warn(code, item["name"], detail)
+        if not plans:
+            continue
+        authored = env_build.author_environment(
+            entity_id, plans, item["name"], prefab_build.resolve_component_type)
+        if env_build.PHYSICAL_SKY in authored:
+            sky_authored = True
+        environments += 1
+        emit("  %-22s %s" % (item["name"], ", ".join(authored)))
+    report.count("environments_created", environments)
 
     # --- physics authoring, all through the adapter (M3) ---
     # After the meshes: mesh colliders bake from the entity's own render model,

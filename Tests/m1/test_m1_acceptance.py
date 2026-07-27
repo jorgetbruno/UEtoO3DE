@@ -327,15 +327,18 @@ def assert_coverage(document):
         "Cube_Kinematic", "TriggerBox_01", "Light_Point", "Light_Spot",
         "Light_Directional", "Light_Point_Lumens", "Light_Spot_Lumens",
         "Light_Point_EV", "Light_Point_Unitless",
-        "Atmo_SkyLight", "Atmo_HeightFog", "PPV_01",
+        "Atmo_SkyLight", "Atmo_HeightFog", "Atmo_SkyAtmosphere", "PPV_01",
     }
     missing = sorted(expected_names - set(entities))
     check(not missing, "fixture actors missing from the manifest: %r" % missing)
 
     # Every actor the exporter did not fully map must say so in warnings[].
+    # An environment actor that carries an `environment` block IS mapped (M6),
+    # so only the ones without a payload still owe a record.
     coded = {(record["subject"], record["code"]) for record in document["warnings"]}
     for name, entity in entities.items():
-        if entity["kind"] in ("environment", "unknown"):
+        if entity["kind"] == "unknown" or (
+                entity["kind"] == "environment" and "environment" not in entity):
             has_record = any(subject == name for subject, _code in coded)
             check(has_record,
                   "%s is unmapped (kind=%s) but produced no warnings[] record"
@@ -391,6 +394,46 @@ def assert_light_units_covered(document):
              and entity["light"]["intensity_units"] == "lumens"]
     check(spots, "no spot light uses lumens; the cone solid-angle conversion "
                  "would be untested end to end")
+
+
+def assert_environment_covered(document):
+    """Every M6 environment type, and a PPV that actually overrides something.
+
+    UE applies a post-process setting only when its `override_*` flag is set,
+    so the exporter carries overridden settings only. A fixture whose PPV
+    overrode nothing would exercise none of that: the override filter, the
+    mapped settings and the unmapped-setting report would all be untested
+    against an empty dictionary.
+    """
+    blocks = {entity["name"]: entity["environment"]
+              for entity in document["entities"] if "environment" in entity}
+    kinds = {block["type"] for block in blocks.values()}
+    for wanted in ("skylight", "fog", "post_process", "sky_atmosphere"):
+        check(wanted in kinds,
+              "no fixture actor exports environment type %r (present: %r)"
+              % (wanted, sorted(kinds)))
+
+    ppv = next((block for block in blocks.values()
+                if block["type"] == "post_process"), None)
+    if check(ppv is not None, "fixture has no post-process volume"):
+        overrides = ppv.get("overrides") or {}
+        check(len(overrides) >= 2,
+              "the fixture PPV overrides %d settings; the override path needs "
+              "at least a couple to be meaningful" % len(overrides))
+        codes = {record["code"] for record in document["warnings"]}
+        check("ENV_POSTPROCESS_UNMAPPED" in codes,
+              "no overridden-but-unmapped post-process setting in the fixture; "
+              "a regression that silently dropped them would look identical to "
+              "correct behaviour")
+
+    fog = next((block for block in blocks.values() if block["type"] == "fog"), None)
+    if check(fog is not None, "fixture has no fog actor"):
+        # start_distance is a length: it must have gone through Lane A (cm->m),
+        # so the UE value of 500 cm must not still be 500.
+        check(fog["start_distance"] < 100.0,
+              "fog start_distance is %r; lengths are metres in the manifest, so "
+              "a UE centimetre value was carried through unconverted"
+              % fog["start_distance"])
 
 
 def assert_generator(document):
@@ -457,6 +500,7 @@ def main(argv=None):
             ("coverage + dedup", assert_coverage),
             ("two-tone slot canary", assert_two_tone_slots),
             ("light unit coverage", assert_light_units_covered),
+            ("environment coverage", assert_environment_covered),
             ("generator pins", assert_generator),
     ):
         before = len(_failures)
