@@ -218,7 +218,7 @@ def test_assetinfo_sidecars(document, project):
 
 def test_import_report():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "results", "m2_import_report.json")
+                        "results", "m2_import_report_Fixture_01.json")
     if not check(os.path.exists(path), "import report missing: " + path):
         return
     with open(path, "r") as handle:

@@ -28,10 +28,16 @@ if len(sys.argv) > 1 and sys.argv[1].strip() and not sys.argv[1].startswith('-')
 else:
     RESULT_PATH = os.path.join(SCRIPT_DIR, 'results', 'm2_import_result.txt')
 
-MANIFEST_PATH = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "manifest.json")
-SOURCE_ASSETS = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "Assets")
-PREFAB_REL_PATH = "Prefabs/Fixture_01.prefab"
-REPORT_PATH = os.path.join(SCRIPT_DIR, 'results', 'm2_import_report.json')
+# Defaults target the acceptance fixture; UEO3DE_EXPORT points the same code at
+# any exported level (see Tests/ue/export_level.bat).
+EXPORT_DIR = os.environ.get("UEO3DE_EXPORT", "").strip() or \
+    os.path.join(REPO_ROOT, "Exports", "Fixture_01")
+LEVEL_NAME = os.path.basename(os.path.normpath(EXPORT_DIR))
+
+MANIFEST_PATH = os.path.join(EXPORT_DIR, "manifest.json")
+SOURCE_ASSETS = os.path.join(EXPORT_DIR, "Assets")
+PREFAB_REL_PATH = "Prefabs/%s.prefab" % LEVEL_NAME
+REPORT_PATH = os.path.join(SCRIPT_DIR, 'results', 'm2_import_report_%s.json' % LEVEL_NAME)
 
 lines = []
 ok = True
