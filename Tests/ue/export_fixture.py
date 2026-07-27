@@ -89,7 +89,7 @@ def verify_fbx_intermediate(record):
 status = "PASS"
 try:
     log("== manifest ==")
-    document, warnings = ue_level.export_level(MAP_PATH, MANIFEST_PATH)
+    document, warnings, asset_table = ue_level.export_level(MAP_PATH, MANIFEST_PATH)
     log("  wrote " + MANIFEST_PATH)
     log("  entities: %d  assets: %d  warnings: %d (%d warn, %d error)"
         % (len(document["entities"]), len(document["assets"]), len(warnings),
@@ -105,6 +105,14 @@ try:
     if len(exported) != len(mesh_assets):
         raise RuntimeError("exported %d FBX files for %d mesh assets"
                            % (len(exported), len(mesh_assets)))
+
+    log("== texture export (TGA, role-suffixed; ORM channels split) ==")
+    raw_root = OUTPUT_DIR + "/RawTextures"
+    texture_files = asset_table.texture_bank.export_all(ASSETS_ROOT, raw_root, log=log)
+    texture_assets = [a for a in document["assets"] if a["kind"] == "texture"]
+    log("  %d texture files for %d texture entries" % (len(texture_files), len(texture_assets)))
+    if len(texture_files) != len(texture_assets):
+        raise RuntimeError("texture export count mismatch")
 
     log("== FBX intermediate check: bake and export negations cancel ==")
     for record in exported:

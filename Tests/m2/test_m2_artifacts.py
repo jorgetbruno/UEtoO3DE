@@ -239,8 +239,10 @@ def test_import_report():
     counters = report["counters"]
     check(counters.get("entities_created") == 16,
           "import created %r entities, expected 16" % counters.get("entities_created"))
-    check(counters.get("assets_waited_for") == 5,
-          "import waited for %r assets, expected 5" % counters.get("assets_waited_for"))
+    # 5 mesh products + 4 converted materials (M4); image products are
+    # dependencies of the material jobs and are not waited on directly.
+    check(counters.get("assets_waited_for") == 9,
+          "import waited for %r assets, expected 9" % counters.get("assets_waited_for"))
 
     codes = {record["code"] for record in report["warnings"]}
     check("XFORM_NONUNIFORM_SCALE_COMPONENT" in codes,

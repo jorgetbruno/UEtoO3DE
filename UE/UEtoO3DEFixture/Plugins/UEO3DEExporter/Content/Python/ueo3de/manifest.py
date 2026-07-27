@@ -21,14 +21,14 @@ instead of reading it.
 
 import json
 
-# 1 -> 2 (M2): static mesh assets gained `fbx_node_name`, and `units` gained
-# `lane_b_rule`. The importer needs the node name to write a valid `.assetinfo`
-# (a wrong `RootNode.<name>` fails the AP job outright) and needs the Lane B
-# rule to be sure the geometry it is about to place carries the same reflection
-# the transforms do.
-SCHEMA_VERSION = 2
+# 1 -> 2 (M2): static mesh assets gained `fbx_node_name`; `units` gained
+# `lane_b_rule`.
+# 2 -> 3 (M4): material assets gained `material_data` (blend mode, two-sided,
+# per-property specs) and a new asset kind `texture` (exported TGA, role
+# suffix chooses the Atom image preset, `channel` marks ORM splits).
+SCHEMA_VERSION = 3
 TOOL_NAME = "UEO3DEExporter"
-TOOL_VERSION = "0.2.1"
+TOOL_VERSION = "0.3.0"
 
 # The Lane A basis map actually applied, recorded so the O3DE importer can
 # refuse a manifest produced under a different convention rather than

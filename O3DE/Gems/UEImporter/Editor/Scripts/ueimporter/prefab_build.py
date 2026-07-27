@@ -29,6 +29,9 @@ NON_UNIFORM_SCALE_TYPE_ID = "{2933FB4F-B3DA-4CD1-8106-F37300730777}"
 
 MESH_COMPONENT_NAME = "Mesh"
 MODEL_ASSET_PROPERTY = "Controller|Configuration|Model Asset"
+MATERIAL_COMPONENT_NAME = "Material"
+# Verified live: probe_m4_material — assigns and reads back an azmaterial.
+MATERIAL_ASSET_PROPERTY = "Default Material|Material Asset"
 
 # Below this, a scale is treated as uniform and goes in the transform.
 UNIFORM_SCALE_EPSILON = 1e-6
@@ -187,6 +190,33 @@ def create_level_root(name):
                             math.Quaternion(0.0, 0.0, 0.0, 1.0))
     components.TransformBus(bus.Event, 'SetLocalUniformScale', root_id, 1.0)
     return root_id
+
+
+def assign_material(entity_id, material_asset_id, entity_name):
+    """Add a Material component and set the default slot's material (M4).
+
+    The default slot covers the whole model, which matches what the export
+    ships today: the baked FBX carries a single material slot (mesh_export's
+    known M4 limitation), so per-slot assignment beyond slot 0 would target
+    slots that do not exist.
+    """
+    import azlmbr.bus as bus
+    import azlmbr.editor as editor
+
+    material_type = resolve_component_type(MATERIAL_COMPONENT_NAME)
+    outcome = editor.EditorComponentAPIBus(
+        bus.Broadcast, 'AddComponentsOfType', entity_id, [material_type])
+    if not outcome or not outcome.IsSuccess():
+        raise PrefabBuildError("%s: AddComponentsOfType(Material) failed: %s"
+                               % (entity_name, outcome.GetError() if outcome else "?"))
+    pair = editor.EditorComponentAPIBus(
+        bus.Broadcast, 'GetComponentOfType', entity_id, material_type).GetValue()
+    set_outcome = editor.EditorComponentAPIBus(
+        bus.Broadcast, 'SetComponentProperty', pair,
+        MATERIAL_ASSET_PROPERTY, material_asset_id)
+    if not set_outcome or not set_outcome.IsSuccess():
+        raise PrefabBuildError("%s: setting %s failed"
+                               % (entity_name, MATERIAL_ASSET_PROPERTY))
 
 
 def create_entities(document, asset_ids_by_guid, report, level_root_id, log=None):

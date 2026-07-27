@@ -174,8 +174,19 @@
       "ue_path": "/Engine/BasicShapes/Sphere"
     },
     {
+      "channel": null,
+      "guid": "3844f4e3-08bc-584b-9610-b1b09f6ee664",
+      "kind": "texture",
+      "name": "T_Default_Material_Grid_N",
+      "o3de_relative_path": "uetoo3de/engine/enginematerials/t_default_material_grid_n_normal.tga",
+      "role": "normal",
+      "srgb": false,
+      "ue_path": "/Engine/EngineMaterials/T_Default_Material_Grid_N"
+    },
+    {
       "guid": "ac600dba-cba5-588e-9298-8024d45e8143",
       "kind": "material",
+      "material_data": null,
       "name": "WorldGridMaterial",
       "o3de_relative_path": "uetoo3de/engine/enginematerials/worldgridmaterial.material",
       "ue_path": "/Engine/EngineMaterials/WorldGridMaterial"
@@ -183,6 +194,24 @@
     {
       "guid": "f2b1aa86-f6e3-53a4-a338-0a7599f383f7",
       "kind": "material",
+      "material_data": {
+        "blend_mode": "masked",
+        "properties": {
+          "base_color": {
+            "channel": null,
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "535ce261-aa02-5343-9da2-75c25a5418d5"
+          },
+          "opacity_mask": {
+            "channel": "A",
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "fc7099e1-1d03-546c-ad97-4afb687960e4"
+          }
+        },
+        "two_sided": false
+      },
       "name": "M_Fixture_Masked",
       "o3de_relative_path": "uetoo3de/game/materials/m_fixture_masked.material",
       "ue_path": "/Game/Materials/M_Fixture_Masked"
@@ -190,6 +219,36 @@
     {
       "guid": "a4d5d0b1-71e5-5c31-8833-6214c29ad37d",
       "kind": "material",
+      "material_data": {
+        "blend_mode": "opaque",
+        "properties": {
+          "base_color": {
+            "channel": null,
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "11ce5ab1-83cf-583a-8a7a-5f15c567fcc8"
+          },
+          "metallic": {
+            "channel": "B",
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "06c03b11-e93b-5ce0-aaaa-9f86ca5ed46e"
+          },
+          "occlusion": {
+            "channel": "R",
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "fa3cd129-3c35-509b-83df-5e27c3a9b877"
+          },
+          "roughness": {
+            "channel": "G",
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "535b5329-bf12-5818-ab03-84ea236d0912"
+          }
+        },
+        "two_sided": false
+      },
       "name": "M_Fixture_ORM",
       "o3de_relative_path": "uetoo3de/game/materials/m_fixture_orm.material",
       "ue_path": "/Game/Materials/M_Fixture_ORM"
@@ -197,6 +256,36 @@
     {
       "guid": "18b1006f-036c-5469-a38e-2346372328a4",
       "kind": "material",
+      "material_data": {
+        "blend_mode": "opaque",
+        "properties": {
+          "base_color": {
+            "channel": null,
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "535ce261-aa02-5343-9da2-75c25a5418d5"
+          },
+          "metallic": {
+            "channel": "R",
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "b6415050-259c-5788-843e-59655643f838"
+          },
+          "normal": {
+            "channel": null,
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "9ffbbdfa-cb56-54a3-bf50-249abb9686c4"
+          },
+          "roughness": {
+            "channel": "R",
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "9d14157e-6902-5bd6-8dd2-d601e68c34fb"
+          }
+        },
+        "two_sided": false
+      },
       "name": "M_Fixture_PBR",
       "o3de_relative_path": "uetoo3de/game/materials/m_fixture_pbr.material",
       "ue_path": "/Game/Materials/M_Fixture_PBR"
@@ -204,6 +293,24 @@
     {
       "guid": "c8a8bddd-0229-54b2-bb92-51804a798026",
       "kind": "material",
+      "material_data": {
+        "blend_mode": "translucent",
+        "properties": {
+          "base_color": {
+            "channel": null,
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "535ce261-aa02-5343-9da2-75c25a5418d5"
+          },
+          "opacity": {
+            "channel": "A",
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "fc7099e1-1d03-546c-ad97-4afb687960e4"
+          }
+        },
+        "two_sided": false
+      },
       "name": "M_Fixture_Translucent",
       "o3de_relative_path": "uetoo3de/game/materials/m_fixture_translucent.material",
       "ue_path": "/Game/Materials/M_Fixture_Translucent"
@@ -211,6 +318,7 @@
     {
       "guid": "ac6d2679-30fa-5cd0-bd95-346d7ad8e4b5",
       "kind": "material",
+      "material_data": null,
       "name": "M_Fixture_Unsupported",
       "o3de_relative_path": "uetoo3de/game/materials/m_fixture_unsupported.material",
       "ue_path": "/Game/Materials/M_Fixture_Unsupported"
@@ -241,6 +349,96 @@
       "name": "SM_LetterF",
       "o3de_relative_path": "uetoo3de/game/meshes/sm_letterf.fbx",
       "ue_path": "/Game/Meshes/SM_LetterF"
+    },
+    {
+      "channel": null,
+      "guid": "535ce261-aa02-5343-9da2-75c25a5418d5",
+      "kind": "texture",
+      "name": "T_Fixture_BaseColor",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_basecolor_basecolor.tga",
+      "role": "basecolor",
+      "srgb": true,
+      "ue_path": "/Game/Textures/T_Fixture_BaseColor"
+    },
+    {
+      "channel": "A",
+      "guid": "fc7099e1-1d03-546c-ad97-4afb687960e4",
+      "kind": "texture",
+      "name": "T_Fixture_BaseColor",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_basecolor_opacity.tga",
+      "role": "opacity",
+      "srgb": true,
+      "ue_path": "/Game/Textures/T_Fixture_BaseColor"
+    },
+    {
+      "channel": null,
+      "guid": "9ffbbdfa-cb56-54a3-bf50-249abb9686c4",
+      "kind": "texture",
+      "name": "T_Fixture_Normal",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_normal_normal.tga",
+      "role": "normal",
+      "srgb": false,
+      "ue_path": "/Game/Textures/T_Fixture_Normal"
+    },
+    {
+      "channel": "R",
+      "guid": "fa3cd129-3c35-509b-83df-5e27c3a9b877",
+      "kind": "texture",
+      "name": "T_Fixture_ORM",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_ao.tga",
+      "role": "ao",
+      "srgb": false,
+      "ue_path": "/Game/Textures/T_Fixture_ORM"
+    },
+    {
+      "channel": null,
+      "guid": "11ce5ab1-83cf-583a-8a7a-5f15c567fcc8",
+      "kind": "texture",
+      "name": "T_Fixture_ORM",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_basecolor.tga",
+      "role": "basecolor",
+      "srgb": false,
+      "ue_path": "/Game/Textures/T_Fixture_ORM"
+    },
+    {
+      "channel": "B",
+      "guid": "06c03b11-e93b-5ce0-aaaa-9f86ca5ed46e",
+      "kind": "texture",
+      "name": "T_Fixture_ORM",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_metallic.tga",
+      "role": "metallic",
+      "srgb": false,
+      "ue_path": "/Game/Textures/T_Fixture_ORM"
+    },
+    {
+      "channel": "G",
+      "guid": "535b5329-bf12-5818-ab03-84ea236d0912",
+      "kind": "texture",
+      "name": "T_Fixture_ORM",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_roughness.tga",
+      "role": "roughness",
+      "srgb": false,
+      "ue_path": "/Game/Textures/T_Fixture_ORM"
+    },
+    {
+      "channel": "R",
+      "guid": "b6415050-259c-5788-843e-59655643f838",
+      "kind": "texture",
+      "name": "T_Fixture_Scalar",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_scalar_metallic.tga",
+      "role": "metallic",
+      "srgb": false,
+      "ue_path": "/Game/Textures/T_Fixture_Scalar"
+    },
+    {
+      "channel": "R",
+      "guid": "9d14157e-6902-5bd6-8dd2-d601e68c34fb",
+      "kind": "texture",
+      "name": "T_Fixture_Scalar",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_scalar_roughness.tga",
+      "role": "roughness",
+      "srgb": false,
+      "ue_path": "/Game/Textures/T_Fixture_Scalar"
     }
   ],
   "entities": [
@@ -1341,7 +1539,7 @@
     "name": "Fixture_01",
     "ue_package": "/Game/Maps/Fixture_01"
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "units": {
     "angle": "degrees",
     "coordinate_system": "o3de_right_handed_z_up",
@@ -1367,6 +1565,36 @@
       "detail": "PostProcessVolume is imported in M6",
       "severity": "info",
       "subject": "PPV_01"
+    },
+    {
+      "code": "MAT_EXPR_UNSUPPORTED",
+      "detail": "base colour unmappable; entities keep the default material",
+      "severity": "warn",
+      "subject": "/Engine/EngineMaterials/WorldGridMaterial"
+    },
+    {
+      "code": "MAT_EXPR_UNSUPPORTED",
+      "detail": "basecolor: Multiply without a recognizable texture*constant shape",
+      "severity": "warn",
+      "subject": "/Engine/EngineMaterials/WorldGridMaterial"
+    },
+    {
+      "code": "MAT_EXPR_UNSUPPORTED",
+      "detail": "roughness driven by MaterialExpressionClamp",
+      "severity": "warn",
+      "subject": "/Engine/EngineMaterials/WorldGridMaterial"
+    },
+    {
+      "code": "MAT_EXPR_UNSUPPORTED",
+      "detail": "base colour unmappable; entities keep the default material",
+      "severity": "warn",
+      "subject": "/Game/Materials/M_Fixture_Unsupported"
+    },
+    {
+      "code": "MAT_EXPR_UNSUPPORTED",
+      "detail": "basecolor driven by MaterialExpressionLinearInterpolate",
+      "severity": "warn",
+      "subject": "/Game/Materials/M_Fixture_Unsupported"
     },
     {
       "code": "PHYS_DEGENERATE_SHAPE",

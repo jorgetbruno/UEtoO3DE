@@ -152,15 +152,24 @@ def validate_references(document):
     for asset in document["assets"]:
         ue_path = asset["ue_path"]
 
-        expected_guid = naming.asset_guid(ue_path)
-        if asset["guid"] != expected_guid:
-            errors.append("asset %s: guid %s does not match uuid5 of its UE path (%s)"
-                          % (ue_path, asset["guid"], expected_guid))
+        if asset["kind"] == "texture":
+            # Texture identities are role-keyed: the same UE texture exported
+            # for two roles is two files with two GUIDs (the Atom image
+            # builder picks its colour-space preset from the role suffix).
+            role_key = asset["role"] if not asset.get("channel") \
+                else "%s@%s" % (asset["role"], asset["channel"])
+            expected_guid = naming.asset_guid(ue_path + "#" + role_key)
+            expected_prefix = naming.sanitize_path(ue_path) + "_" + asset["role"]
+        else:
+            expected_guid = naming.asset_guid(ue_path)
+            expected_prefix = naming.sanitize_path(ue_path) + "."
 
-        stem = naming.sanitize_path(ue_path)
-        if not asset["o3de_relative_path"].startswith(stem + "."):
+        if asset["guid"] != expected_guid:
+            errors.append("asset %s: guid %s does not match its derivation (%s)"
+                          % (ue_path, asset["guid"], expected_guid))
+        if not asset["o3de_relative_path"].startswith(expected_prefix):
             errors.append("asset %s: path %r is not the sanitization of its UE path (%r)"
-                          % (ue_path, asset["o3de_relative_path"], stem))
+                          % (ue_path, asset["o3de_relative_path"], expected_prefix))
 
         owner = seen_paths.get(asset["o3de_relative_path"])
         if owner is not None:
@@ -208,6 +217,23 @@ def validate_references(document):
             if source is not None and source not in assets:
                 errors.append("entity %s: shapes_from_asset does not resolve"
                               % entity["name"])
+
+    # material_data texture references must resolve to texture assets (M4).
+    for asset in document["assets"]:
+        data = asset.get("material_data")
+        if not data:
+            continue
+        for key, spec in (data.get("properties") or {}).items():
+            guid = spec.get("texture_guid")
+            if guid is None:
+                continue
+            target = assets.get(guid)
+            if target is None:
+                errors.append("material %s: %s references texture %s which is "
+                              "not in assets[]" % (asset["ue_path"], key, guid))
+            elif target["kind"] != "texture":
+                errors.append("material %s: %s references a non-texture asset"
+                              % (asset["ue_path"], key))
 
     for record in document["warnings"]:
         if record["code"] not in CODES:
@@ -328,7 +354,7 @@ def _self_test():
     bad["assets"] = [{"guid": "00000000-0000-5000-8000-000000000000", "kind": "material",
                       "ue_path": "/Game/M", "name": "M",
                       "o3de_relative_path": "uetoo3de/game/m.material"}]
-    expect_errors("guid not derived from the UE path", bad, "uuid5")
+    expect_errors("guid not derived from the UE path", bad, "derivation")
 
     bad = json.loads(json.dumps(minimal))
     bad["assets"] = [{"guid": naming.asset_guid("/Game/M"), "kind": "material",

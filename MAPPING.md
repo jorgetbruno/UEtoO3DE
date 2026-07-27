@@ -235,13 +235,39 @@ required shapes against `adapter.capabilities()` before authoring.
 0.02 m) supplies every rest-height tolerance — never hard-coded. Divergences:
 [DIVERGENCES.md](DIVERGENCES.md).
 
+## Materials (M4) — graph subset → StandardPBR
+
+Recognition is **per property, not per material** (spike S4.0 measured most
+"unsupported" materials failing on a single channel): each of BaseColor /
+Normal / Roughness / Metallic / AO / Opacity(Mask) is classified independently,
+unmapped ones warn with `MAT_EXPR_UNSUPPORTED`, and only an unmappable *base
+colour* rejects the whole material — `material_data: null`, entities keep the
+backend default, visibly grey rather than silently wrong. Material INSTANCES
+resolve through their parent's graph with instance parameter values.
+
+| UE | `.material` (StandardPBR) | Note |
+|---|---|---|
+| TextureSample → BaseColor | `baseColor.textureMap` | Multiply(texture, const) keeps the const as `baseColor.factor`/`color` |
+| TextureSample → Normal | `normal.textureMap` + **`normal.flipY: true`** | UE authors DirectX-style (green down); asserted by the acceptance test |
+| TextureSample.R/G/B/A → scalar prop | split grayscale TGA per channel | the ORM case; pure-Python TGA split, testable offline |
+| Constant / ScalarParameter | `roughness.factor` / `metallic.factor` etc. | |
+| Blend Opaque / Masked / Translucent | `opacity.mode` omitted / `Cutout` / `Blended` | anything else → `MAT_BLEND_UNSUPPORTED`, treated translucent |
+| OpacityMask / Opacity from texture alpha | `opacity.alphaSource: Split` + split `_opacity.tga` | `opacity.factor` set to 1.0 explicitly (the type's default 0.5 would halve alpha) |
+| TwoSided | `general.doubleSided` | |
+| texture sRGB/linear | **filename role suffix** (`_basecolor`/`_normal`/`_roughness`/`_metallic`/`_ao`/`_opacity`) | the Atom image builder's own filemask table picks the preset (measured from ImageBuilder.settings) |
+
+Assignment: a `Material` component per entity, default slot
+(`Default Material|Material Asset`, verified live). The baked FBX carries one
+material slot, so per-slot assignment beyond slot 0 waits on slot fidelity
+(`MAT_SLOTS_FLATTENED` reserved).
+
 ## Content mapping (later milestones)
 
 | UE source | O3DE target | Milestone |
 |---|---|---|
 | Static mesh + placement | Mesh component in a `.prefab` | M2 ✔ |
 | Physics bodies / colliders | `PhysicsBackendAdapter` → Jolt | M3 ✔ (PhysX: M3b) |
-| Material graph subset | StandardPBR `.material` | M4 |
+| Material graph subset | StandardPBR `.material` | M4 ✔ |
 | Point / Spot / Directional light | Atom lights | M5 |
 | Sky, skylight, fog, post-process | Atom environment | M6 |
 | Landscape | baked static mesh + triangle-mesh collider | M7 |

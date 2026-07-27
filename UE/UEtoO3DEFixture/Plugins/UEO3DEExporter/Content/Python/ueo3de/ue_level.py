@@ -284,6 +284,10 @@ class AssetTable:
         self._entries = {}
         self._registry = naming.PathRegistry()
         self._warnings = warnings
+        # Textures are planned here during material classification (M4) and
+        # exported to files by the caller after the walk.
+        from . import material_export
+        self.texture_bank = material_export.TextureBank(self._registry)
 
     def _claim(self, ue_path, kind):
         try:
@@ -295,15 +299,22 @@ class AssetTable:
         return naming.with_extension(stem, _EXTENSIONS[kind])
 
     def add_material(self, material):
+        from . import material_export
+
         ue_path = unreal.SystemLibrary.get_path_name(material)
         guid = naming.asset_guid(ue_path)
         if guid not in self._entries:
+            # Classification runs once per unique material; texture entries are
+            # planned into the shared bank as a side effect (M4).
+            material_data = material_export.build_material_data(
+                material, self.texture_bank, self._warnings)
             self._entries[guid] = {
                 "guid": guid,
                 "kind": "material",
                 "ue_path": naming.package_path(ue_path),
                 "name": material.get_name(),
                 "o3de_relative_path": self._claim(ue_path, "material"),
+                "material_data": material_data,
             }
         return guid
 
@@ -595,7 +606,11 @@ def _guard_world_partition(world, level, map_path, warnings):
 # ---------------------------------------------------------------------------
 
 def export_level(map_path, output_path):
-    """Export `map_path` to `output_path`. Returns (document, warnings).
+    """Export `map_path` to `output_path`.
+
+    Returns (document, warnings, asset_table); the caller runs
+    `asset_table.texture_bank.export_all(...)` to write the texture files the
+    manifest references (M4).
 
     On an aborting condition the manifest is still written -- carrying the
     error record and an empty entity list -- so CI has a machine-readable
@@ -627,7 +642,9 @@ def export_level(map_path, output_path):
 
     document = manifest_module.build(
         level=level_info,
-        assets=assets.entries(),
+        assets=sorted(assets.entries() + assets.texture_bank.entries(),
+                      key=lambda e: (e["ue_path"], e.get("role") or "",
+                                     e.get("channel") or "")),
         entities=sorted(entities, key=lambda e: e["ue_actor_path"]),
         warning_records=warnings.records(),
         engine_version=unreal.SystemLibrary.get_engine_version(),
@@ -641,4 +658,4 @@ def export_level(map_path, output_path):
 
     if abort_reason is not None:
         raise ExportAborted(abort_reason)
-    return document, warnings
+    return document, warnings, assets

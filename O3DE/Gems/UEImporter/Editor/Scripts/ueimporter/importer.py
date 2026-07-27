@@ -100,23 +100,62 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         for asset in manifest_io.static_mesh_assets(document):
             relative_path = asset["o3de_relative_path"]
             records.append({
+                "kind": "static_mesh",
                 "guid": asset["guid"],
                 "relative_path": relative_path,
                 "staged_fbx": os.path.join(project_assets_root, relative_path).replace("\\", "/"),
                 "product_path": staging.product_path_for(relative_path, product_prefix),
+                "wait": True,
+            })
+        for asset in document["assets"]:
+            if asset["kind"] != "material" or not asset.get("material_data"):
+                continue
+            relative_path = asset["o3de_relative_path"]
+            records.append({
+                "kind": "material",
+                "guid": asset["guid"],
+                "relative_path": relative_path,
+                "staged_fbx": os.path.join(project_assets_root, relative_path).replace("\\", "/"),
+                "product_path": ("%s/%s" % (product_prefix,
+                                            relative_path.rsplit(".", 1)[0]
+                                            + ".azmaterial")).lower(),
+                "wait": True,
             })
 
+    waitable = [record for record in records if record.get("wait")]
     emit("waiting for %d product assets (timeout %.0fs each)"
-         % (len(records), asset_timeout))
-    asset_ids = asset_wait.wait_for_all(records, timeout_seconds=asset_timeout, log=emit)
+         % (len(waitable), asset_timeout))
+    asset_ids = asset_wait.wait_for_all(waitable, timeout_seconds=asset_timeout, log=emit)
     report.count("assets_waited_for", len(asset_ids))
     emit("  all %d products present in the catalog" % len(asset_ids))
+
+    mesh_asset_ids = {record["guid"]: asset_ids[record["guid"]]
+                      for record in waitable if record["kind"] == "static_mesh"}
+    material_asset_ids = {record["guid"]: asset_ids[record["guid"]]
+                          for record in waitable if record["kind"] == "material"}
 
     level_root_name = document["level"]["name"]
     emit("creating entities under level root %r" % level_root_name)
     level_root = prefab_build.create_level_root(level_root_name)
-    created = prefab_build.create_entities(document, asset_ids, report, level_root, log=emit)
+    created = prefab_build.create_entities(document, mesh_asset_ids, report, level_root, log=emit)
     report.count("entities_created", len(created))
+
+    # --- materials (M4): assign the default slot per entity ---
+    emit("assigning materials (%d converted)" % len(material_asset_ids))
+    assigned = 0
+    for item in document["entities"]:
+        entity_id = created.get(item["id"])
+        mesh = item.get("mesh")
+        if entity_id is None or mesh is None:
+            continue
+        slots = mesh.get("material_slots") or []
+        material_guid = slots[0].get("material_guid") if slots else None
+        if material_guid is None or material_guid not in material_asset_ids:
+            continue  # unmapped material: the backend default stays, by design
+        prefab_build.assign_material(entity_id, material_asset_ids[material_guid],
+                                     item["name"])
+        assigned += 1
+    report.count("materials_assigned", assigned)
 
     # --- physics authoring, all through the adapter (M3) ---
     # After the meshes: mesh colliders bake from the entity's own render model,

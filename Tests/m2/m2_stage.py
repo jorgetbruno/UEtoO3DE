@@ -50,7 +50,10 @@ def clear_manifest_files(project, document):
     project_assets = os.path.join(project, "Assets")
     removed = []
 
-    for asset in manifest_io.static_mesh_assets(document):
+    clearable = [a for a in document["assets"]
+                 if a["kind"] in ("static_mesh", "texture")
+                 or (a["kind"] == "material" and a.get("material_data"))]
+    for asset in clearable:
         relative = asset["o3de_relative_path"]
         for path in (os.path.join(project_assets, relative),
                      os.path.join(project_assets, relative + ".assetinfo")):
@@ -99,11 +102,16 @@ def main(argv=None):
         print("STAGE FAILED: %s" % exc)
         return 1
 
+    mesh_records = [r for r in records if r.get("kind") == "static_mesh"]
     mesh_assets = manifest_io.static_mesh_assets(document)
-    if len(records) != len(mesh_assets):
-        print("STAGE FAILED: staged %d files for %d mesh assets"
-              % (len(records), len(mesh_assets)))
+    if len(mesh_records) != len(mesh_assets):
+        print("STAGE FAILED: staged %d FBX files for %d mesh assets"
+              % (len(mesh_records), len(mesh_assets)))
         return 1
+    by_kind = {}
+    for r in records:
+        by_kind[r.get("kind")] = by_kind.get(r.get("kind"), 0) + 1
+    print("staged by kind: %r" % by_kind)
 
     print("RESULT: PASS")
     return 0

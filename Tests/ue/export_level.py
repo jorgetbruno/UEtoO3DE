@@ -94,7 +94,7 @@ try:
     log("")
 
     log("== manifest ==")
-    document, warnings = ue_level.export_level(MAP_PATH, MANIFEST_PATH)
+    document, warnings, asset_table = ue_level.export_level(MAP_PATH, MANIFEST_PATH)
     log("  wrote " + MANIFEST_PATH)
     log("  entities: %d  assets: %d  warnings: %d (%d warn, %d error)"
         % (len(document["entities"]), len(document["assets"]), len(warnings),
@@ -117,6 +117,11 @@ try:
         kinds[entity["kind"]] = kinds.get(entity["kind"], 0) + 1
     for kind in sorted(kinds):
         log("    %-14s %d" % (kind, kinds[kind]))
+
+    log("")
+    log("== texture export ==")
+    texture_files = asset_table.texture_bank.export_all(ASSETS_ROOT, OUTPUT_DIR + "/RawTextures")
+    log("  %d texture files" % len(texture_files))
 
     log("")
     log("== static mesh FBX export ==")

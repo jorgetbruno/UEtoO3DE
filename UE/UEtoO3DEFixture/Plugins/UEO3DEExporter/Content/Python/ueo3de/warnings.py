@@ -51,6 +51,17 @@ CODES = {
     "MESH_SLOT_EMPTY": (
         INFO, "Static mesh material slot has no material assigned; the O3DE "
               "importer will leave the slot on its default material."),
+    "MAT_EXPR_UNSUPPORTED": (
+        WARN, "A material property is driven by an expression outside the v1 "
+              "subset. If the property is base colour the whole material falls "
+              "back to the default; otherwise only that property is dropped."),
+    "MAT_BLEND_UNSUPPORTED": (
+        WARN, "UE blend mode outside Opaque/Masked/Translucent; imported as "
+              "translucent."),
+    "MAT_SLOTS_FLATTENED": (
+        INFO, "The baked export FBX carries a single material slot, so a "
+              "multi-slot UE mesh renders every section with slot 0's "
+              "material until slot fidelity lands (M4 known limitation)."),
 
     # --- physics source data (M1 records, M3 consumes) ---
     "PHYS_NO_SIMPLE_COLLISION": (
