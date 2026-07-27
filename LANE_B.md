@@ -1,7 +1,8 @@
 # LANE_B.md — Geometry orientation/scale contract (Lane B)
 
-**Status: units LOCKED (M0, spike S0.2, verified empirically on 2026-07-27).
-Handedness OPEN — see "The gap this file does not close" below (raised in M1).**
+**Status: LOCKED (units M0/S0.2, handedness M2 — both verified empirically).**
+The handedness question M1 raised is closed; see "Who applies the reflection"
+below. The answer is not the one M1 predicted.
 
 Every mesh milestone depends on this file. Measured with `SM_LetterF` exported
 from UE 5.8 and processed by O3DE 26.05 SceneAPI. Raw evidence:
@@ -24,7 +25,7 @@ from UE 5.8 and processed by O3DE 26.05 SceneAPI. Raw evidence:
 
 | Stage | Behavior | Evidence |
 |---|---|---|
-| UE 5.8 FBX export (default `FbxExportOption`) | Geometry written **verbatim** in UE units/axes (cm, Z-up, LH). Header declares `UpAxis=Z (sign +1)`, `FrontAxis=Y (sign -1)`, `CoordAxis=X (sign +1)`, `UnitScaleFactor=1.0` (cm) | `probe_fbx_globalsettings.py`: FBX vertices x[-50,50] y[-12.5,12.5] z[0,200] = UE reference exactly |
+| UE 5.8 FBX export (default `FbxExportOption`) | Units written **verbatim** (cm, Z-up, `UnitScaleFactor=1.0`), but **Y is negated** — the exporter performs the left- to right-handed conversion itself. Header declares `UpAxis=Z (sign +1)`, `FrontAxis=Y (sign −1)`, `CoordAxis=X (sign +1)` — note the −1 on Front | `probe_m2_fbx_handedness.py`: UE source asset y `[−12.5, 37.5]` → FBX y `[−37.5, 12.5]`. See the correction note below |
 | SceneAPI import (default manifest) | **No unit conversion, no axis rotation, no mirroring.** Product mesh = source numerically (cm values treated as meters). No correction node inserted (procedural prefab root = identity) | `abdata.json` dimension [100,25,200]; `*_fbx.procprefab` TransformComponent identity; default mesh group carries an identity `CoordinateSystemRule` (useAdvancedData, no fields) |
 | SceneAPI with scale rule (the fix below) | Vertex data scaled by the factor | Buffer delta: `scale:2.0` → 204 vertex components ×2.0; `scale:0.01` → same 204 components ×0.01 |
 
@@ -81,35 +82,61 @@ are Lane A: positions ÷100 with **Y negated**, rotations conjugated by the same
 implemented in `ueo3de/lane_a.py`, documented in `MAPPING.md`, and property-tested in
 `Tests/m1/test_lane_a.py`.
 
-## The gap this file does not close (raised in M1, owned by M2)
+Both lanes now apply the same basis map — Lane A in the exporter's arithmetic, Lane B
+in UE's FBX writer — which is why the imported level is mirror-free. Each manifest
+records which convention produced it (`units.lane_a_rule`, `units.lane_b_rule`) and the
+importer refuses a document that does not match, rather than silently importing a
+mirrored level.
 
-An earlier revision of this section claimed that "a Lane A rotation about the Z axis is
-all the handedness correction needs". **That is wrong and the claim is withdrawn.**
+## Who applies the reflection (settled in M2)
+
 UE is left-handed and O3DE is right-handed, so the numeric map between them must have
-**determinant −1**. No rotation has determinant −1. Any determinant +1 map — including
-"copy the numbers and divide by 100" — renders the level as a perfect mirror of the
-original: self-consistent, geometrically valid, and backwards.
+**determinant −1**. No rotation has determinant −1, so an earlier revision of this file
+claiming "a Lane A rotation about the Z axis is all the handedness correction needs"
+was wrong; that claim stays withdrawn. Any determinant +1 map — including "copy the
+numbers and divide by 100" — renders the level as a perfect mirror: self-consistent,
+geometrically valid, and backwards.
 
-Lane A now applies that reflection (negate Y). **Lane B does not yet apply it to
-geometry**, and it must, or meshes end up mirrored relative to their own placement:
+M1 predicted that the exporter would therefore have to bake the reflection into the FBX
+itself. **It does not, because UE's FBX exporter already applies it.** Measured
+(`Tests/ue/probe_m2_fbx_handedness.py`), exporting the same mesh twice:
 
-- What S0.2 measured is still correct: SceneAPI applies **no** unit conversion, axis
-  rotation or mirroring. Geometry arrives verbatim, which is exactly the problem —
-  verbatim across a handedness change *is* the mirror.
-- **SceneAPI cannot fix it.** `CoordinateSystemRule` in advanced mode offers a
-  rotation and a single scalar `scale`. A scalar cannot be negative-per-axis and a
-  rotation cannot reflect, so no `.assetinfo` can express the required map.
-- Therefore the reflection has to be baked into the FBX at export time in UE:
-  negate Y on vertex positions and normals **and flip triangle winding** (a reflection
-  without a winding flip turns every face inside out).
+```
+UE source asset      y = [-12.500, 37.500]
+FBX from source      y = [-37.500, 12.500]   <- exporter negated Y
+baked mirrored asset y = [-37.500, 12.500]
+FBX from mirrored    y = [-12.500, 37.500]   <- second mirror cancelled it out
+```
 
-M2 must decide and record which of these it ships:
+So the pipeline is Lane-A-consistent with **no mirroring of our own**:
 
-| Option | Result | Cost |
-|---|---|---|
-| **Bake the Y-flip at FBX export** (expected) | faithful, mirror-free | one geometry pass in the exporter; winding must flip with it |
-| Leave geometry verbatim and make Lane A the identity | whole world consistently mirrored | free, and wrong — this is the bug `SM_LetterF` exists to catch |
+| Stage | Applies |
+|---|---|
+| UE FBX export | negate Y (left- → right-handed) |
+| SceneAPI + `.assetinfo` | ÷100 (units only) |
+| **net** | `(x, −y, z) / 100` = exactly Lane A |
 
-Until M2 closes this, `SM_LetterF` is the tripwire: it is now asymmetric about all
-three planes (Y most importantly, since Y is the negated axis), so M2's mirror check
-will fail loudly rather than pass vacuously.
+`mesh_export.py` therefore exports source assets directly. A revision that mirrored
+them first shipped briefly during M2 and produced perfectly cancelled reflections —
+the FBX came back with the original UE geometry and nothing downstream noticed. What
+caught it was checking the written file rather than the intention, which is now a
+permanent step: `Tests/ue/export_fixture.py` re-reads every FBX it writes and compares
+its bounds against `lane_a.convert_position` of the source asset's bounds.
+
+**Why S0.2 said "verbatim".** It was measuring the M0 canary, which was symmetric about
+Y (`y ∈ [−12.5, 12.5]`), so a Y negation was invisible in its vertex ranges. The same
+blind spot that made the mirror canary useless made the exporter look verbatim. The
+rebuilt canary is asymmetric on all three axes, which is what made this measurable.
+The FBX header's `FrontAxisSign = −1` was the clue sitting in the original evidence.
+
+### One link measured indirectly
+
+Nothing here reads vertices back out of the O3DE **product**. O3DE 26.05 reflects no
+bounds API to Python (`BoundsRequestBus` has no binding — measured in M0) and the
+product `.azbuffer` is compressed, so there is no supported way to do it yet. What
+covers that step instead: the `.assetinfo` assertions (`scale: 0.01`, correct
+`RootNode.<node>`, LodRule present) in `Tests/m2/test_m2_artifacts.py`, the Asset
+Processor reporting zero failed jobs, and `m2_acceptance.py` confirming each Mesh
+component resolves to the expected product and reports non-zero geometry. If a
+reflected bounds API appears in a later O3DE release, close this by asserting product
+bounds directly.

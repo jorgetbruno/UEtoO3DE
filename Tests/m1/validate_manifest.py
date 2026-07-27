@@ -217,9 +217,11 @@ def validate_references(document):
     if document["schema_version"] != manifest_module.SCHEMA_VERSION:
         errors.append("schema_version %r does not match the exporter's %r"
                       % (document["schema_version"], manifest_module.SCHEMA_VERSION))
-    if document["units"]["lane_a_rule"] != manifest_module.LANE_A_RULE:
-        errors.append("units.lane_a_rule %r does not match the exporter's %r"
-                      % (document["units"]["lane_a_rule"], manifest_module.LANE_A_RULE))
+    for key, expected in (("lane_a_rule", manifest_module.LANE_A_RULE),
+                          ("lane_b_rule", manifest_module.LANE_B_RULE)):
+        if document["units"].get(key) != expected:
+            errors.append("units.%s %r does not match the exporter's %r"
+                          % (key, document["units"].get(key), expected))
 
     return errors
 
@@ -254,23 +256,32 @@ def _self_test():
                             % (label, must_mention, errors))
 
     minimal = {
-        "schema_version": 1,
+        "schema_version": manifest_module.SCHEMA_VERSION,
         "generator": {"tool": "t", "tool_version": "0", "engine": "e", "engine_version": "0"},
         "level": {"ue_package": "/Game/Maps/X", "name": "X"},
         "units": {"length": "meters", "angle": "degrees",
-                  "coordinate_system": "o3de_right_handed_z_up", "lane_a_rule": "negate_y"},
+                  "coordinate_system": "o3de_right_handed_z_up",
+                  "lane_a_rule": manifest_module.LANE_A_RULE,
+                  "lane_b_rule": manifest_module.LANE_B_RULE},
         "assets": [], "entities": [], "warnings": [],
     }
     if validate(minimal, schema):
         failures.append("minimal valid document was rejected: %r" % validate(minimal, schema))
 
     bad = json.loads(json.dumps(minimal))
-    bad["schema_version"] = 2
+    bad["schema_version"] = manifest_module.SCHEMA_VERSION + 1
     expect_errors("wrong schema_version", bad, "const")
 
     bad = json.loads(json.dumps(minimal))
     bad["units"]["lane_a_rule"] = "identity"
     expect_errors("wrong lane_a_rule", bad, "const")
+
+    # A manifest whose geometry was not reflected the same way its transforms
+    # were places correct transforms around mirrored meshes, and nothing
+    # downstream notices. This is the check that refuses it.
+    bad = json.loads(json.dumps(minimal))
+    bad["units"]["lane_b_rule"] = "none"
+    expect_errors("wrong lane_b_rule", bad, "const")
 
     bad = json.loads(json.dumps(minimal))
     del bad["warnings"]
@@ -329,7 +340,7 @@ def _self_test():
         print("SELF-TEST FAIL: " + failure)
     if failures:
         return 1
-    print("validator self-test: %d rejection cases pass" % 11)
+    print("validator self-test: %d rejection cases pass" % 12)
     return 0
 
 

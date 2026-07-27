@@ -40,13 +40,22 @@ terrain) depends on that convention. The alternative with determinant −1 that 
 forward on forward is swapping X and Y; it is a strictly larger change (it permutes the
 scale components too) and is not what the plan specifies.
 
-### Lane B — geometry
+### Lane B — geometry (settled in M2)
 
-UE's FBX exporter and O3DE's SceneAPI each apply their own axis/unit conversion. The
-contract is measured empirically and written down in [LANE_B.md](LANE_B.md): SceneAPI
-applies **no** conversion at all, so the `.assetinfo` sidecar carries a `scale: 0.01`
-`CoordinateSystemRule`. **Lane B does not yet apply Lane A's reflection to vertex
-data, and it must** — see "The gap this file does not close" in LANE_B.md. M2 owns it.
+Geometry gets the **same** basis map as the transforms, and the two halves come from
+different places:
+
+| Stage | Applies |
+|---|---|
+| UE FBX export | negate Y — the exporter does the left- → right-handed conversion itself (measured) |
+| SceneAPI + generated `.assetinfo` | ÷100 — `CoordinateSystemRule` with `scale: 0.01`; SceneAPI applies no conversion of its own |
+| **net** | `(x, −y, z) / 100` = exactly Lane A |
+
+So the exporter must **not** mirror geometry: a second reflection cancels the first
+exactly, and the level comes out with meshes mirrored relative to their placement while
+every transform assertion still passes. `Tests/ue/export_fixture.py` re-reads every FBX
+it writes and checks its bounds against Lane A for that reason. Full measurement and
+the reason S0.2 reported "verbatim": [LANE_B.md](LANE_B.md).
 
 ## Interchange (M1)
 
@@ -100,6 +109,52 @@ sanitized path is an `ASSET_PATH_COLLISION` error that aborts the export.
 | Inner/outer cone | `light.inner_cone_angle_deg` / `outer_cone_angle_deg` | degrees, spot only |
 | `Temperature` / `bUseTemperature` | `light.temperature_k` / `use_temperature` | |
 
+## Import (M2)
+
+| Manifest | O3DE | Note |
+|---|---|---|
+| `assets[].o3de_relative_path` | `<project>/Assets/<path>` + `.assetinfo` | staged outside the editor so AP can be run to completion first |
+| `assets[].fbx_node_name` | `.assetinfo` `RootNode.<name>` | a wrong node path fails the AP job with "No valid ModelLodAssets have been added" |
+| every product asset | `wait_for_asset` before it is referenced | constraint 8; a Mesh component pointing at an unprocessed asset renders nothing and reports no error |
+| `entities[]` | one editor entity each, parents before children | O3DE needs the parent's EntityId at creation time |
+| `entities[].transform.local` | `SetLocalTranslation` / `SetLocalRotationQuaternion` / `SetLocalUniformScale` | |
+| non-uniform `scale` | `EditorNonUniformScaleComponent` + uniform scale 1.0 | `AZ::Transform` is uniform-scale only; see below |
+| `entities[].mesh` | Mesh component + `Controller\|Configuration\|Model Asset` | |
+| the level | one root entity at identity, then a `.prefab` | see below |
+
+### Non-uniform scale
+
+`AZ::Transform` carries a single uniform scale float. `SetLocalScale(Vector3)` exists
+but is a no-op stub — it reports `(1,1,1)` back whatever you pass it (measured,
+`Tests/o3de/probe_m2_scale.py`). Non-uniform scale needs
+`EditorNonUniformScaleComponent`, which appears in **no** Add Component list (it is
+added through the Transform component's UI) and whose
+`azlmbr.editor.AddNonUniformScaleComponent` helper does nothing in 26.05. It is added
+by type id `{2933FB4F-B3DA-4CD1-8106-F37300730777}`, read from
+`EditorNonUniformScaleComponent.h` in the SDK rather than guessed, and it survives a
+prefab save/reload (`Tests/o3de/probe_m2_nonuniform.py`).
+
+Divergence to carry into `DIVERGENCES.md`: O3DE applies non-uniform scale at the
+component, not in the transform hierarchy, so it does **not** reach child entities the
+way UE's does. The importer reports `XFORM_NONUNIFORM_SCALE_NOT_INHERITED` when a
+non-uniformly scaled entity has children.
+
+### Level root and the prefab container
+
+The importer creates one entity named after the level, at identity, and parents every
+manifest root to it. `CreatePrefabInMemory` places the container entity at the
+**centroid** of the entities it is given and rewrites their transforms relative to it,
+so handing it a single entity at the origin is what makes "instantiate the prefab at
+the origin" reproduce the level exactly. Anchoring the container afterwards does not
+work — transform changes made after that call never reach the serialized template.
+
+Saving the prefab at all requires a workaround established in M0 spike S0.1:
+`CreatePrefabInMemory` keeps the template in memory by design,
+`CreatePrefabAndSaveToDisk` is not reflected, and level save only serializes the root
+template. `PrefabLoaderScriptingBus/SaveTemplateToString` returns exactly the on-disk
+JSON but needs a TemplateId that nothing maps from a path, so the id space is scanned
+and the template identified by content.
+
 ## Warning codes
 
 Every code in `manifest.warnings[]` comes from the catalogue in
@@ -120,6 +175,18 @@ on codes, never on English strings.
 | `PHYS_NO_SIMPLE_COLLISION` | info | Mesh has no simple collision; M3 needs a mesh collider. |
 | `PHYS_DEGENERATE_SHAPE` | warn | Collision primitive with a zero/near-zero dimension. |
 | `PHYS_SHAPE_UNSUPPORTED` | warn | Collision primitive kind with no v1 mapping. |
+
+The importer has its own catalogue for the other direction — things the manifest
+carried faithfully that O3DE cannot represent the same way
+([report.py](O3DE/Gems/UEImporter/Editor/Scripts/ueimporter/report.py)). They are
+separate because they are fixed in different places.
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `XFORM_NONUNIFORM_SCALE_COMPONENT` | info | Non-uniform scale moved onto an `EditorNonUniformScaleComponent`. |
+| `XFORM_NONUNIFORM_SCALE_NOT_INHERITED` | warn | Non-uniformly scaled entity has children; O3DE does not propagate the scale to them, UE does. |
+| `MESH_MISSING` | warn | Static mesh actor with no mesh reference; imported as a transform-only placeholder. |
+| `ENTITY_KIND_DEFERRED` | info | Recognized entity kind owned by a later milestone. |
 
 ## World Partition detection
 

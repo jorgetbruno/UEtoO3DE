@@ -1,7 +1,7 @@
 @echo off
 rem run_m1.bat - the full M1 acceptance run (plan v2.2, M1).
 rem
-rem   1. export Fixture_01 from UE 5.8 headless        -> Exports/Fixture_01/manifest.json
+rem   1. export Fixture_01 from UE 5.8 headless        -> manifest.json + FBX
 rem   2. pure-Python property tests for Lane A/naming  (no editor)
 rem   3. validator self-test (prove it rejects bad documents)
 rem   4. schema + golden-file + property assertions on the export
@@ -15,7 +15,7 @@ set "REPO=%~dp0..\.."
 set "PY=python"
 
 echo === 1/4  UE export ===
-call "%REPO%\Tests\ue\run_ue_python.bat" "%REPO%\Tests\ue\export_fixture_manifest.py" >nul 2>&1
+call "%REPO%\Tests\ue\run_ue_python.bat" "%REPO%\Tests\ue\export_fixture.py" >nul 2>&1
 if errorlevel 1 goto :failed_export
 
 echo === 2/4  Lane A / naming property tests ===
@@ -36,7 +36,7 @@ endlocal & exit /b 0
 
 :failed_export
 echo.
-echo RESULT: FAIL (UE export step; see Tests\ue\results\export_fixture_manifest_result.txt)
+echo RESULT: FAIL (UE export step; see Tests\ue\results\export_fixture_result.txt)
 endlocal & exit /b 1
 
 :failed

@@ -37,6 +37,7 @@
         ],
         "source": "simple"
       },
+      "fbx_node_name": "Cube",
       "guid": "34b75cb0-9e38-5955-a258-4ee811136fdb",
       "kind": "static_mesh",
       "material_slot_names": [
@@ -78,6 +79,7 @@
         ],
         "source": "simple"
       },
+      "fbx_node_name": "Cylinder",
       "guid": "0d5db937-eebf-50e8-9855-19def6f04b7b",
       "kind": "static_mesh",
       "material_slot_names": [
@@ -124,6 +126,7 @@
         ],
         "source": "simple"
       },
+      "fbx_node_name": "Plane",
       "guid": "9196bc32-f3aa-5a45-9306-d53a1e6ebd8d",
       "kind": "static_mesh",
       "material_slot_names": [
@@ -160,6 +163,7 @@
         ],
         "source": "simple"
       },
+      "fbx_node_name": "Sphere",
       "guid": "719133e2-b736-54d9-b76e-9c9ef04888ca",
       "kind": "static_mesh",
       "material_slot_names": [
@@ -228,6 +232,7 @@
         "shapes": [],
         "source": "none"
       },
+      "fbx_node_name": "SM_LetterF",
       "guid": "5f55ab12-5954-51f0-8ef5-f1509568a6fd",
       "kind": "static_mesh",
       "material_slot_names": [
@@ -1336,11 +1341,12 @@
     "name": "Fixture_01",
     "ue_package": "/Game/Maps/Fixture_01"
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "units": {
     "angle": "degrees",
     "coordinate_system": "o3de_right_handed_z_up",
     "lane_a_rule": "negate_y",
+    "lane_b_rule": "negate_y_by_ue_fbx_export",
     "length": "meters"
   },
   "warnings": [

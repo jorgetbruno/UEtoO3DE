@@ -330,6 +330,12 @@ class AssetTable:
             "ue_path": subject,
             "name": mesh.get_name(),
             "o3de_relative_path": self._claim(ue_path, "static_mesh"),
+            # The mesh node name inside the exported FBX. UE names it after the
+            # asset, and mesh_export gives its temporary asset the same name for
+            # exactly this reason. The importer builds the `.assetinfo` node
+            # path `RootNode.<fbx_node_name>` from it; a wrong value fails the
+            # AP job outright rather than passing quietly (LANE_B.md).
+            "fbx_node_name": mesh.get_name(),
             "bounds_local": {"min": aabb_min, "max": aabb_max},
             "collision": {"source": source, "shapes": shapes},
             "material_slot_names": slot_names,

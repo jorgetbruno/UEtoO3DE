@@ -23,6 +23,9 @@ milestone per session; each session starts from that file.
     - `Content/Python/ueo3de/` — the exporter itself. Everything except `ue_level.py`
       is pure Python with no `unreal` import, so the coordinate conversion, asset
       identity and warning catalogue are testable without an editor.
+- `O3DE/Gems/UEImporter/` — the O3DE-side importer, packaged as a tool gem.
+  `Editor/Scripts/ueimporter/` holds it; everything except `asset_wait` and
+  `prefab_build` is pure Python and testable without an editor.
 - `Schema/manifest.schema.json` — the interchange contract (plan constraint 7).
 - `Tests/ue/` — UE Editor Python scripts (fixture builder, S0.2 export, manifest export,
   API probes) + `run_ue_python.bat`.
@@ -37,11 +40,17 @@ milestone per session; each session starts from that file.
 
 ```
 Tests\m1\run_m1.bat          M1: UE export -> property tests -> validator -> golden diff
+Tests\m2\run_m2.bat [--cold] M2: export -> stage -> AP -> import -> prefab assertions
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
 
-The pure-Python parts need no editor: `python Tests\m1\test_lane_a.py` and
-`python Tests\m1\validate_manifest.py --self-test` run in about a second.
+Each `.bat` propagates a real exit code and CI must assert on that, never on console
+text (plan constraint 10). `run_m2.bat --cold` deletes the staged sources and their
+cache products first, so the run cannot pass on a warm cache alone.
+
+The pure-Python parts need no editor: `python Tests\m1\test_lane_a.py`,
+`python Tests\m1\validate_manifest.py --self-test` and
+`python Tests\m2\test_m2_artifacts.py` each run in about a second.
 
 ## O3DE test projects (outside this repo, per O3DE convention)
 

@@ -21,14 +21,27 @@ instead of reading it.
 
 import json
 
-SCHEMA_VERSION = 1
+# 1 -> 2 (M2): static mesh assets gained `fbx_node_name`, and `units` gained
+# `lane_b_rule`. The importer needs the node name to write a valid `.assetinfo`
+# (a wrong `RootNode.<name>` fails the AP job outright) and needs the Lane B
+# rule to be sure the geometry it is about to place carries the same reflection
+# the transforms do.
+SCHEMA_VERSION = 2
 TOOL_NAME = "UEO3DEExporter"
-TOOL_VERSION = "0.1.0"
+TOOL_VERSION = "0.2.0"
 
 # The Lane A basis map actually applied, recorded so the O3DE importer can
 # refuse a manifest produced under a different convention rather than
 # silently importing a mirrored level. See lane_a.py.
 LANE_A_RULE = "negate_y"
+
+# Lane B applies the SAME basis map to geometry -- and UE's FBX exporter is what
+# applies it, converting left-handed to right-handed by negating Y on the way
+# out (measured: Tests/ue/probe_m2_fbx_handedness.py). Recorded so the importer
+# can tell this pipeline apart from one that mirrors geometry itself, or from
+# one that mirrors nothing; both would place meshes and transforms in
+# disagreement.
+LANE_B_RULE = "negate_y_by_ue_fbx_export"
 
 FLOAT_DIGITS = 6
 
@@ -71,6 +84,7 @@ def build(level, assets, entities, warning_records, engine_version):
             "angle": "degrees",
             "coordinate_system": "o3de_right_handed_z_up",
             "lane_a_rule": LANE_A_RULE,
+            "lane_b_rule": LANE_B_RULE,
         },
         "assets": assets,
         "entities": entities,
