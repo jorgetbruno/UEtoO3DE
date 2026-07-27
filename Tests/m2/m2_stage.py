@@ -5,8 +5,8 @@ Plain Python, no editor. Copies every static mesh the manifest references into
 `<project>/Assets/uetoo3de/...` and writes its `.assetinfo` sidecar, so
 `AssetProcessorBatch` can be run to completion before the editor starts.
 
-`--cold` deletes the previously staged tree AND the corresponding cache
-products first. Plan constraint 10: "At least once nightly, run the full
+`--cold` deletes THIS manifest's previously staged files AND their cache
+products first (never the shared staging tree -- other levels live there). Plan constraint 10: "At least once nightly, run the full
 pipeline with a deleted Cache/ so AP ordering bugs can't hide behind a warm
 cache." A run that only ever passes on a warm cache is the exact failure
 `wait_for_asset` exists to prevent, so the cold path is part of the suite
@@ -18,7 +18,6 @@ Usage:
 
 import argparse
 import os
-import shutil
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,23 +37,41 @@ def log(message):
     print(message)
 
 
-def clear_cache_products(project, subfolder):
-    """Delete the cached products for the staged tree (cold-cache runs).
+def clear_manifest_files(project, document):
+    """Delete the staged sources and cache products of THIS manifest only.
 
-    Scoped to the importer's own subfolder rather than removing Cache/ wholesale:
-    rebuilding every engine and gem asset would add many minutes to each run
-    without testing anything M2 owns. The AP ordering bug this guards against
-    lives in the imported assets.
+    Scoped to the manifest's own files, never the whole `uetoo3de` tree: the
+    staging area is shared by every imported level, and clearing the tree
+    deletes the other levels' sources — after which AP removes their products
+    and every previously imported prefab renders nothing. (That is not a
+    hypothetical: an earlier revision cleared the whole tree and wiped a real
+    level's 135 meshes during a fixture test run.)
     """
-    cache_root = os.path.join(project, "Cache")
-    if not os.path.isdir(cache_root):
-        return []
+    project_assets = os.path.join(project, "Assets")
     removed = []
-    for platform in sorted(os.listdir(cache_root)):
-        target = os.path.join(cache_root, platform, "assets", subfolder)
-        if os.path.isdir(target):
-            shutil.rmtree(target)
-            removed.append(target)
+
+    for asset in manifest_io.static_mesh_assets(document):
+        relative = asset["o3de_relative_path"]
+        for path in (os.path.join(project_assets, relative),
+                     os.path.join(project_assets, relative + ".assetinfo")):
+            if os.path.isfile(path):
+                os.remove(path)
+                removed.append(path)
+
+        # Cache products: everything derived from this source file. Product
+        # names share the source stem (model, lods, buffers, abdata).
+        stem = os.path.splitext(os.path.basename(relative))[0]
+        relative_dir = os.path.dirname(relative)
+        cache_root = os.path.join(project, "Cache")
+        if os.path.isdir(cache_root):
+            for platform in sorted(os.listdir(cache_root)):
+                folder = os.path.join(cache_root, platform, "assets", relative_dir)
+                if not os.path.isdir(folder):
+                    continue
+                for name in os.listdir(folder):
+                    if name.startswith(stem) or name.startswith("default_" + stem):
+                        os.remove(os.path.join(folder, name))
+                        removed.append(os.path.join(folder, name))
     return removed
 
 
@@ -64,16 +81,16 @@ def main(argv=None):
     parser.add_argument("--manifest", default=MANIFEST_PATH)
     parser.add_argument("--source-assets", default=SOURCE_ASSETS)
     parser.add_argument("--cold", action="store_true",
-                        help="delete the staged tree and its cache products first")
+                        help="delete THIS manifest's staged files and cache products first")
     args = parser.parse_args(argv)
 
     project_assets = os.path.join(args.project, "Assets")
 
     if args.cold:
-        log("cold run: clearing staged sources and cache products")
-        staging.clear(project_assets, STAGED_SUBFOLDER, log=log)
-        for path in clear_cache_products(args.project, STAGED_SUBFOLDER):
-            log("  cleared " + path)
+        log("cold run: clearing THIS manifest's staged sources and cache products")
+        document_for_clear = manifest_io.load(args.manifest)
+        removed = clear_manifest_files(args.project, document_for_clear)
+        log("  cleared %d files" % len(removed))
 
     try:
         document, records = importer.stage_only(
