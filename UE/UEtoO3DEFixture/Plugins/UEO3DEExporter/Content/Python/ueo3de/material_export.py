@@ -77,6 +77,76 @@ def _expression_kind(node):
     return node.get_class().get_name()
 
 
+# Pass-through / statically-resolvable wrappers, followed before classifying.
+# Measured on real content (probe_m4_matattrs): master materials route nearly
+# everything through Reroute nodes and StaticSwitch(Parameter)s, and some feed
+# the whole MaterialAttributes pin from a switch between two attribute sets.
+_FOLLOW_DEPTH_LIMIT = 16
+
+
+def _switch_value(node, instance):
+    """The effective boolean of a StaticSwitch(Parameter) at export time."""
+    kind = _expression_kind(node)
+    if kind == "MaterialExpressionStaticSwitchParameter":
+        name = node.get_editor_property("parameter_name")
+        if instance is not None:
+            try:
+                return bool(unreal.MaterialEditingLibrary
+                            .get_material_instance_static_switch_parameter_value(
+                                instance, name))
+            except Exception:
+                pass
+        return bool(node.get_editor_property("default_value"))
+    return None  # plain StaticSwitch: value pin unreadable; caller falls back
+
+
+def _follow(master, node, instance):
+    """Follow Reroute and decided StaticSwitch(Parameter) nodes to substance.
+
+    Returns (node, channel_hint). ComponentMask with a single active channel
+    contributes the channel hint and keeps following its input.
+    """
+    mel = unreal.MaterialEditingLibrary
+    channel_hint = None
+    for _ in range(_FOLLOW_DEPTH_LIMIT):
+        if node is None:
+            return None, channel_hint
+        kind = _expression_kind(node)
+
+        if kind in ("MaterialExpressionReroute", "MaterialExpressionNamedRerouteUsage"):
+            inputs = list(mel.get_inputs_for_material_expression(master, node) or [])
+            node = inputs[0] if inputs else None
+            continue
+
+        if kind in ("MaterialExpressionStaticSwitchParameter",
+                    "MaterialExpressionStaticSwitch"):
+            value = _switch_value(node, instance)
+            inputs = list(mel.get_inputs_for_material_expression(master, node) or [])
+            names = [str(n) for n in
+                     (mel.get_material_expression_input_names(node) or [])]
+            if value is None or not inputs:
+                return node, channel_hint  # cannot decide; classify as-is (fails loudly)
+            wanted = "True" if value else "False"
+            chosen = None
+            for name, expression in zip(names, inputs):
+                if name == wanted:
+                    chosen = expression
+                    break
+            node = chosen if chosen is not None else (inputs[0] if value else inputs[-1])
+            continue
+
+        if kind == "MaterialExpressionComponentMask":
+            flags = [bool(node.get_editor_property(flag)) for flag in ("r", "g", "b", "a")]
+            if sum(flags) == 1:
+                channel_hint = "RGBA"[flags.index(True)]
+            inputs = list(mel.get_inputs_for_material_expression(master, node) or [])
+            node = inputs[0] if inputs else None
+            continue
+
+        return node, channel_hint
+    return node, channel_hint
+
+
 def _base_material_and_instance(material):
     """(master Material for graph reading, leaf instance for parameter values)."""
     if isinstance(material, unreal.MaterialInstance):
@@ -211,6 +281,19 @@ def classify_property(master, instance, prop_enum, bank, role_suffix, warnings, 
     if node is None:
         return None
     output_name = str(mel.get_material_property_input_node_output_name(master, prop_enum) or "")
+    return classify_expression(master, instance, node, output_name, bank,
+                               role_suffix, warnings, subject)
+
+
+def classify_expression(master, instance, node, output_name, bank, role_suffix,
+                        warnings, subject):
+    """Classify an expression feeding a property-shaped input."""
+    mel = unreal.MaterialEditingLibrary
+    node, channel_hint = _follow(master, node, instance)
+    if node is None:
+        return None
+    if channel_hint and output_name not in ("R", "G", "B", "A"):
+        output_name = channel_hint
     kind = _expression_kind(node)
 
     if kind in _TEXTURE_KINDS:
@@ -236,7 +319,10 @@ def classify_property(master, instance, prop_enum, bank, role_suffix, warnings, 
 
     if kind == "MaterialExpressionMultiply":
         inputs = mel.get_inputs_for_material_expression(master, node)
-        parts = list(inputs or [])
+        # Follow wrappers on each operand too: real masters put Reroutes and
+        # decided switches between the Multiply and its texture.
+        parts = [_follow(master, p, instance)[0]
+                 for p in (inputs or []) if p is not None]
         texture_node = next((p for p in parts if p is not None
                              and _expression_kind(p) in _TEXTURE_KINDS), None)
         factor_node = next((p for p in parts if p is not None
@@ -263,6 +349,50 @@ def classify_property(master, instance, prop_enum, bank, role_suffix, warnings, 
     return None
 
 
+# MakeMaterialAttributes input names -> (manifest key, role suffix)
+_ATTRIBUTE_INPUTS = {
+    "BaseColor": ("base_color", "basecolor"),
+    "Normal": ("normal", "normal"),
+    "Roughness": ("roughness", "roughness"),
+    "Metallic": ("metallic", "metallic"),
+    "AmbientOcclusion": ("occlusion", "ao"),
+    "Opacity": ("opacity", "opacity"),
+    "OpacityMask": ("opacity_mask", "opacity"),
+}
+
+
+def _classify_material_attributes(master, instance, bank, warnings, subject):
+    """Properties of a use_material_attributes master.
+
+    Follows the attributes pin through wrappers; a MakeMaterialAttributes node
+    yields per-attribute classification, anything else is reported and the
+    material falls back to default (base colour unresolvable).
+    """
+    mel = unreal.MaterialEditingLibrary
+    prop = getattr(unreal.MaterialProperty, "MP_MATERIAL_ATTRIBUTES", None)
+    node = mel.get_material_property_input_node(master, prop) if prop else None
+    node, _hint = _follow(master, node, instance)
+    if node is None or _expression_kind(node) != "MaterialExpressionMakeMaterialAttributes":
+        warnings.add("MAT_EXPR_UNSUPPORTED", subject,
+                     "material attributes pin driven by %s"
+                     % (_expression_kind(node) if node else "nothing"))
+        return {}
+
+    names = [str(n) for n in (mel.get_material_expression_input_names(node) or [])]
+    inputs = list(mel.get_inputs_for_material_expression(master, node) or [])
+    properties = {}
+    for name, expression in zip(names, inputs):
+        mapping = _ATTRIBUTE_INPUTS.get(name)
+        if mapping is None or expression is None:
+            continue
+        key, role = mapping
+        spec = classify_expression(master, instance, expression, "", bank, role,
+                                   warnings, subject)
+        if spec is not None:
+            properties[key] = spec
+    return properties
+
+
 def build_material_data(material, bank, warnings):
     """Classify one material (or instance). Returns a manifest dict or None.
 
@@ -284,13 +414,22 @@ def build_material_data(material, bank, warnings):
 
     properties = {}
     enum = unreal.MaterialProperty
-    for enum_name, key, role in _PROPERTIES:
-        prop = getattr(enum, enum_name, None)
-        if prop is None:
-            continue
-        spec = classify_property(master, instance, prop, bank, role, warnings, subject)
-        if spec is not None:
-            properties[key] = spec
+    if bool(master.get_editor_property("use_material_attributes")):
+        # The master feeds everything through the single MaterialAttributes
+        # pin (measured on real content: MakeMaterialAttributes behind Reroute
+        # and StaticSwitch wrappers). Individual property inputs are all empty
+        # in this mode, so the attribute node's named inputs are classified
+        # instead.
+        properties = _classify_material_attributes(
+            master, instance, bank, warnings, subject)
+    else:
+        for enum_name, key, role in _PROPERTIES:
+            prop = getattr(enum, enum_name, None)
+            if prop is None:
+                continue
+            spec = classify_property(master, instance, prop, bank, role, warnings, subject)
+            if spec is not None:
+                properties[key] = spec
 
     if "base_color" not in properties:
         driven = unreal.MaterialEditingLibrary.get_material_property_input_node(

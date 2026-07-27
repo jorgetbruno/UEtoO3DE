@@ -174,7 +174,11 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             emit("  %-22s %s" % (item["name"], summary))
     report.count("physics_bodies", bodies)
     # Let mesh-collider bakes tick with models loaded before serialization.
-    general.idle_wait_frames(60)
+    # Each bake runs on the component's TickBus once its model streams in;
+    # serializing mid-bake made CreatePrefabInMemory throw on a 135-collider
+    # level, so the wait scales with the bake count.
+    bake_count = report.counters.get("mesh_colliders", 0)
+    general.idle_wait_frames(60 + 5 * bake_count)
     report.count("manifest_roots", sum(1 for item in document["entities"]
                                        if item["parent_id"] is None))
     if not created:
@@ -183,7 +187,16 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     emit("saving prefab")
     # One entity, at the origin: the container lands at the origin too, so
     # instantiating the prefab at the origin reproduces the level exactly.
-    prefab_build.create_prefab_in_memory([level_root], prefab_path)
+    try:
+        prefab_build.create_prefab_in_memory([level_root], prefab_path)
+    except RuntimeError:
+        # CreatePrefabInMemory surfaces internal failures as an opaque
+        # exception; on a large level the plausible cause is state still
+        # settling (bakes, asset streaming). One retry after a long settle
+        # distinguishes transient from structural.
+        emit("  CreatePrefabInMemory threw; settling 300 frames and retrying once")
+        general.idle_wait_frames(300)
+        prefab_build.create_prefab_in_memory([level_root], prefab_path)
     prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit)
 
     return report, prefab_path

@@ -136,6 +136,7 @@ def _author_shape(adapter, entity_id, shape, scale, subject, report, missing):
         # the backend cannot, a box over the AABB substitutes.
         if base.CAP_SHAPE_CONVEX in adapter.capabilities():
             adapter.add_mesh_collider(entity_id, convex=True)
+            report.count("mesh_colliders")
         else:
             aabb_min = _scaled(shape["aabb_min"], scale)
             aabb_max = _scaled(shape["aabb_max"], scale)
@@ -213,6 +214,7 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
             # dynamic body gets a convex hull instead).
             convex = body in ("dynamic", "kinematic")
             adapter.add_mesh_collider(entity_id, convex=convex)
+            report.count("mesh_colliders")
             report.warn("PHYS_MESH_FROM_RENDER", subject,
                         "no simple collision on %s; %s collider baked from the "
                         "render mesh" % (asset["ue_path"],
@@ -225,6 +227,7 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
         if item.get("mesh"):
             convex = body in ("dynamic", "kinematic")
             adapter.add_mesh_collider(entity_id, convex=convex)
+            report.count("mesh_colliders")
             report.warn("PHYS_MESH_FROM_RENDER", subject,
                         "no collision shapes anywhere; render mesh used")
             authored += 1
