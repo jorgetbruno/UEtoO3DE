@@ -204,12 +204,43 @@ The guard is conservative: a partitioned level **and** a failure to determine wh
 level is partitioned both abort, because iterating an unloaded WP level yields almost
 nothing and is indistinguishable from a successful export of an empty level.
 
+## Physics (M3) — authored through `PhysicsBackendAdapter`, never by name
+
+The importer speaks only the adapter interface
+([adapters/base.py](O3DE/Gems/UEImporter/Editor/Scripts/ueimporter/adapters/base.py));
+`Tests/m3/test_seam_guard.py` greps everything outside `adapters/` for
+`"Jolt "`/`"PhysX "` literals in CI. Backend detection resolves component names
+to type IDs first, treats the Settings Registry `DefaultBackend` as a hint
+only, and **refuses to guess when both backends resolve** (available ≠ active —
+authoring for the inactive backend yields a level with no physics).
+
+| UE source (manifest) | Adapter call | Jolt component (adapter-internal) |
+|---|---|---|
+| Static mobility + collision | `add_static_body` | `Jolt Static Rigid Body` |
+| `simulates_physics` | `add_dynamic_body(mass?, damping, gravity, ccd)` | `Jolt Rigid Body` |
+| Movable + collision, no simulate | `add_dynamic_body(kinematic=True)` | `Jolt Rigid Body`, Kinematic |
+| Box element | `add_box_collider(half_extents, offset, rot)` | `Jolt Box Collider` (Dimensions = FULL extents) |
+| Sphere / sphyl element | `add_sphere_collider` / `add_capsule_collider(total_height)` | `Jolt Sphere/Capsule Collider` |
+| Convex element | `add_mesh_collider(convex=True)` | `Jolt Mesh Collider`, Convex Hull |
+| No simple collision (static) | `add_mesh_collider(convex=False)` + `PHYS_MESH_FROM_RENDER` | `Jolt Mesh Collider`, Triangle Mesh — bakes from the entity's render model automatically once it loads |
+| Overlap-only volume | body + colliders + `make_trigger` | collider `Trigger` flag (sensor) |
+| Collision profile | `collision_profiles.json` lookup; unmapped → `PHYS_PROFILE_FALLBACK` | Collision Layer |
+| Mass override off | `mass=None` + `MASS_FROM_DENSITY` | gem's density-derived default |
+
+Entity world scale is baked into collider dimensions by the importer
+(backend-neutral); shapes without a per-axis image take the largest axis with
+`PHYS_SHAPE_APPROXIMATED`. Capability negotiation compares the manifest's
+required shapes against `adapter.capabilities()` before authoring.
+`adapter.contact_offset()` (read live from a scratch collider, currently
+0.02 m) supplies every rest-height tolerance — never hard-coded. Divergences:
+[DIVERGENCES.md](DIVERGENCES.md).
+
 ## Content mapping (later milestones)
 
 | UE source | O3DE target | Milestone |
 |---|---|---|
-| Static mesh + placement | Mesh component in a `.prefab` | M2 |
-| Physics bodies / colliders | `PhysicsBackendAdapter` (Jolt / PhysX) | M3 / M3b |
+| Static mesh + placement | Mesh component in a `.prefab` | M2 ✔ |
+| Physics bodies / colliders | `PhysicsBackendAdapter` → Jolt | M3 ✔ (PhysX: M3b) |
 | Material graph subset | StandardPBR `.material` | M4 |
 | Point / Spot / Directional light | Atom lights | M5 |
 | Sky, skylight, fog, post-process | Atom environment | M6 |

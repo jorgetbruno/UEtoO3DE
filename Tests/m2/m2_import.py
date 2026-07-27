@@ -62,11 +62,16 @@ def main():
     log("prefab:   " + prefab_path)
     log("")
 
+    # Physics backend: explicit via UEO3DE_BACKEND, else detected. Detection
+    # refuses to guess when both backends resolve (constraint 5).
+    backend = os.environ.get("UEO3DE_BACKEND", "").strip() or None
+
     report, saved = importer.import_level(
         manifest_path=MANIFEST_PATH,
         source_assets_root=SOURCE_ASSETS,
         project_assets_root=project_assets,
         prefab_path=prefab_path,
+        backend=backend,
         log=log)
 
     log("")

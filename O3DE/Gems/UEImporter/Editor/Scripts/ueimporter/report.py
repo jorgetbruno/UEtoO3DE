@@ -32,6 +32,26 @@ CODES = {
         INFO, "Entity kind is recognized but is imported by a later milestone; "
               "created as a transform-only placeholder so the hierarchy and "
               "its position survive."),
+
+    # --- physics (M3) ---
+    "PHYS_SHAPE_APPROXIMATED": (
+        WARN, "A collision shape could not be authored exactly on this backend "
+              "(unsupported kind, non-uniform scale on a shape without a "
+              "per-axis image, or a degenerate dimension) and was substituted. "
+              "The same UE level legitimately differs per backend; this makes "
+              "it visible."),
+    "PHYS_PROFILE_FALLBACK": (
+        WARN, "UE collision profile has no entry in collision_profiles.json; "
+              "the named fallback layer was used. Channel semantics are lossy "
+              "by design -- see the file."),
+    "MASS_FROM_DENSITY": (
+        INFO, "UE body had no explicit mass override; the backend derives mass "
+              "from shape volume and its default density, which will not match "
+              "UE's derived mass exactly."),
+    "PHYS_MESH_FROM_RENDER": (
+        INFO, "No simple collision primitives; a mesh collider was baked from "
+              "the entity's render geometry (triangle mesh on static bodies, "
+              "convex hull on dynamic ones)."),
 }
 
 

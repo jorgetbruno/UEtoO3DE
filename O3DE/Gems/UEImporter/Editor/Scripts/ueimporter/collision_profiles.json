@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "UE collision profile -> physics layer mapping (plan M3).",
+    "Collision channel mapping is LOSSY AND EXPLICIT by design: UE has 32",
+    "channels with per-channel Block/Overlap/Ignore responses per profile;",
+    "O3DE backends have collision layers plus a collides-with mask, and the",
+    "two models do not translate 1:1. This file maps each UE profile name to",
+    "a layer name per backend; anything absent uses `_fallback` and the",
+    "importer reports PHYS_PROFILE_FALLBACK so the loss is visible.",
+    "Layer names are NOT guaranteed to mean the same thing across backends",
+    "(plan M3b), hence the per-backend sections. v1 maps everything to the",
+    "default layer -- fixture profiles are BlockAll/Trigger/NoCollision, and",
+    "trigger semantics are carried by the sensor flag, not the layer. Real",
+    "layer wiring is deliberate follow-on work once a target project defines",
+    "its layers."
+  ],
+  "jolt": {
+    "_fallback": "Default",
+    "BlockAll": "Default",
+    "BlockAllDynamic": "Default",
+    "PhysicsActor": "Default",
+    "Pawn": "Default",
+    "Trigger": "Default",
+    "OverlapAll": "Default",
+    "OverlapAllDynamic": "Default",
+    "NoCollision": "Default"
+  },
+  "physx": {
+    "_comment": "arrives in M3b; layer semantics verified then, not copied",
+    "_fallback": "Default"
+  }
+}

@@ -34,13 +34,14 @@ milestone per session; each session starts from that file.
   its exit code. `golden/Fixture_01.expected.json` is the M1 contract and is regenerated
   only by an explicit, reviewed commit (`test_m1_acceptance.py --update-golden`).
 - `Exports/` — interchange output (manifest, FBX, textures; generated, not committed).
-- `MAPPING.md` / `LANE_B.md` / `DIVERGENCES.md` — the documentation contract defined by the plan.
+- `MAPPING.md` / `LANE_B.md` / `DIVERGENCES.md` (started at M3, two-column) — the documentation contract defined by the plan.
 
 ## Running the tests
 
 ```
 Tests\m1\run_m1.bat          M1: UE export -> property tests -> validator -> golden diff
 Tests\m2\run_m2.bat [--cold] M2: export -> stage -> AP -> import -> prefab assertions
+Tests\m3\run_m3.bat          M3: detection tests -> seam guard -> simulated smoke import -> gem regression
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
 
