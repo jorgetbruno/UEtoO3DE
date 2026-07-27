@@ -6,26 +6,31 @@ test_m2_artifacts.py — the M2 acceptance checks that need no editor.
      that catches a handedness inversion."
     "Assert one FBX per unique mesh GUID (dedup works)."
 
-The mirror check runs against the **exported FBX**, in centimetres, because
-that is the artifact SceneAPI consumes and the last point in the chain where
-geometry is observable. Its vertex positions must equal the UE reference with
-Lane A's basis map applied -- same reflection the transforms get. If the
-exporter ever stops mirroring (or starts mirroring twice) the F mesh's centroid
-lands on the wrong side of Y and this fails.
+The mirror/scale check runs against the **product position buffers in the AP
+cache** -- the final artifact the Mesh component renders, after all three
+pipeline stages. Asserting any earlier artifact has already failed twice:
 
-Scope, stated plainly: this does not read vertices back out of the O3DE
-*product*. O3DE 26.05 reflects no bounds API to Python (`BoundsRequestBus` has
-no binding -- measured in M0) and the product's `.azbuffer` is compressed, so
-there is no supported way to do it yet. What covers the remaining step is the
-`.assetinfo` assertion below (the scale rule is present and correct), AP
-reporting zero failures, and `m2_acceptance.py` confirming the model loads and
-reports geometry. Recorded in LANE_B.md as the one link measured indirectly.
+  * asserting the FBX (M2, first attempt) missed that SceneAPI negates Y a
+    third time, so a "correct" FBX produced a mirrored product;
+  * asserting nothing about product scale let a doubled /100 through until a
+    human noticed a bench was 100x too small next to the shader ball.
 
-Run:  python Tests/m2/test_m2_artifacts.py
+O3DE reflects no bounds API to Python and the buffers are AZ object streams,
+so the product is read by FLOAT BYTE PATTERN: the buffer embeds the raw
+little-endian float32 vertex data, and searching for the exact byte encodings
+of known coordinates is immune to the surrounding serialization. The fixture
+makes this precise -- the engine cube's corners are exactly +/-0.5 m, and the
+F mesh's nub gives Y values that exist on only one side of zero.
+
+The FBX is still checked, but for what it actually is now: a verbatim-UE
+intermediate (the bake and UE's export negation cancel; see LANE_B.md).
+
+Run:  python Tests/m2/test_m2_artifacts.py [project_path]
 """
 
 import json
 import os
+import struct
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -36,14 +41,12 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "UE", "UEtoO3DEFixture", "Plugins",
 
 import fbx_reader  # noqa: E402
 from ueimporter import assetinfo, manifest_io  # noqa: E402
-from ueo3de import lane_a  # noqa: E402
 
 MANIFEST_PATH = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "manifest.json")
 EXPORT_ASSETS = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "Assets")
 UE_REFERENCE = os.path.join(REPO_ROOT, "Exports", "LaneB", "SM_LetterF.ue_reference.json")
 DEFAULT_PROJECT = r"C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
 
-# The FBX is still in centimetres; only the .assetinfo scales it.
 POSITION_TOLERANCE_CM = 1e-3
 
 failures = []
@@ -60,18 +63,40 @@ def check(condition, message):
     return condition
 
 
+def _float_hits(data, value):
+    """Occurrences of the exact little-endian float32 encoding of `value`."""
+    return data.count(struct.pack("<f", value))
+
+
+def _position_buffer(project, relative_fbx_path, stem):
+    """Path of the LOD0 position .azbuffer for a staged FBX, or None."""
+    folder = os.path.join(project, "Cache", "pc", "assets",
+                          os.path.dirname(relative_fbx_path)).replace("\\", "/")
+    if not os.path.isdir(folder):
+        return None
+    for name in os.listdir(folder):
+        if name.startswith(stem) and "position" in name and name.endswith(".azbuffer") \
+                and not name.startswith("default_"):
+            return os.path.join(folder, name)
+    return None
+
+
+# ---------------------------------------------------------------------------
+
 def test_manifest_declares_both_lanes(document):
-    """The importer refuses a manifest without both lane rules; prove it says so."""
     units = document["units"]
     check(units.get("lane_a_rule") == manifest_io.EXPECTED_LANE_A_RULE,
           "units.lane_a_rule is %r" % units.get("lane_a_rule"))
     check(units.get("lane_b_rule") == manifest_io.EXPECTED_LANE_B_RULE,
-          "units.lane_b_rule is %r -- without it the importer cannot know the "
-          "geometry carries the reflection" % units.get("lane_b_rule"))
+          "units.lane_b_rule is %r" % units.get("lane_b_rule"))
 
 
-def test_mirror_check(document):
-    """The F mesh's exported geometry equals Lane A applied to the UE reference."""
+def test_fbx_is_verbatim_intermediate(document):
+    """The FBX equals the UE source: bake and export negations cancelled.
+
+    If this fails while the product test passes, a stage moved -- find out
+    which before trusting either.
+    """
     with open(UE_REFERENCE, "r") as handle:
         reference = json.load(handle)
 
@@ -84,71 +109,62 @@ def test_mirror_check(document):
         return
 
     stats = fbx_reader.vertex_stats(fbx_path)
-
-    # Lane A in centimetres: the basis map without the metre conversion.
-    def to_o3de_cm(vector):
-        return [component * 100.0 for component in lane_a.convert_position(vector)]
-
-    expected_centroid = to_o3de_cm(reference["centroid"])
-    corner_a = to_o3de_cm(reference["bounds_min"])
-    corner_b = to_o3de_cm(reference["bounds_max"])
-    expected_min = [min(corner_a[i], corner_b[i]) for i in range(3)]
-    expected_max = [max(corner_a[i], corner_b[i]) for i in range(3)]
-
-    print("  UE reference bounds   (cm): %s .. %s"
-          % ([round(v, 3) for v in reference["bounds_min"]],
-             [round(v, 3) for v in reference["bounds_max"]]))
-    print("  Lane A predicts       (cm): %s .. %s"
-          % ([round(v, 3) for v in expected_min], [round(v, 3) for v in expected_max]))
-    print("  exported FBX bounds   (cm): %s .. %s  (%d control points)"
-          % ([round(v, 3) for v in stats["min"]], [round(v, 3) for v in stats["max"]],
-             stats["count"]))
-
-    # Bounds are comparable directly: the extremes are the same points however
-    # the vertices are counted.
+    print("  UE reference bounds (cm): %s .. %s"
+          % (reference["bounds_min"], reference["bounds_max"]))
+    print("  exported FBX bounds (cm): %s .. %s"
+          % ([round(v, 3) for v in stats["min"]], [round(v, 3) for v in stats["max"]]))
     for index, axis in enumerate("xyz"):
-        check(abs(stats["min"][index] - expected_min[index]) <= POSITION_TOLERANCE_CM,
-              "F mesh bounds min.%s is %.4f, expected %.4f"
-              % (axis, stats["min"][index], expected_min[index]))
-        check(abs(stats["max"][index] - expected_max[index]) <= POSITION_TOLERANCE_CM,
-              "F mesh bounds max.%s is %.4f, expected %.4f"
-              % (axis, stats["max"][index], expected_max[index]))
+        check(abs(stats["min"][index] - reference["bounds_min"][index]) <= POSITION_TOLERANCE_CM,
+              "FBX bounds min.%s is %.4f, UE source has %.4f"
+              % (axis, stats["min"][index], reference["bounds_min"][index]))
+        check(abs(stats["max"][index] - reference["bounds_max"][index]) <= POSITION_TOLERANCE_CM,
+              "FBX bounds max.%s is %.4f, UE source has %.4f"
+              % (axis, stats["max"][index], reference["bounds_max"][index]))
 
-    # Centroids are NOT comparable as absolute positions: the UE reference
-    # averages 93 render vertices (duplicated at UV and normal seams) while the
-    # FBX stores 28 unique control points, so the two means differ even when
-    # the geometry is identical. What a mirror flips -- and what survives the
-    # difference in vertex sets -- is the DIRECTION of the centroid's offset
-    # from the bounding-box centre, so that is what is asserted.
-    def offset_from_centre(centroid, low, high):
-        return [centroid[i] - (low[i] + high[i]) * 0.5 for i in range(3)]
 
-    ue_offset = offset_from_centre(reference["centroid"],
-                                   reference["bounds_min"], reference["bounds_max"])
-    expected_offset = [component * 100.0 for component
-                       in lane_a.convert_position(ue_offset)]
-    fbx_offset = offset_from_centre(stats["centroid"], stats["min"], stats["max"])
-    print("  UE centroid offset    (cm): %s" % [round(v, 4) for v in ue_offset])
-    print("  Lane A predicts       (cm): %s" % [round(v, 4) for v in expected_offset])
-    print("  exported FBX offset   (cm): %s" % [round(v, 4) for v in fbx_offset])
+def test_product_scale_and_mirror(document, project):
+    """THE Lane B assertion: the final product carries negate-Y at 1/100.
 
-    for index, axis in enumerate("xyz"):
-        # Only axes where the mesh is meaningfully asymmetric carry a signal.
-        if abs(expected_offset[index]) <= 1.0:
-            fail("the F mesh is symmetric about %s (offset %.4f cm); a mirror "
-                 "across that plane would be undetectable"
-                 % (axis.upper(), expected_offset[index]))
-            continue
-        check(fbx_offset[index] * expected_offset[index] > 0.0,
-              "F mesh centroid offset on %s is %.4f, Lane A predicts %.4f "
-              "(opposite sign) -- the geometry is mirrored about %s"
-              % (axis.upper(), fbx_offset[index], expected_offset[index], axis.upper()))
+    Cube: every corner is exactly +/-0.5 m. Wrong outcomes are equally exact:
+    +/-50 (units not converted), +/-0.005 (a scale rule stacked on the unit
+    conversion -- the bug a user caught by eye).
 
-    settings = stats["global_settings"]
-    unit_scale = settings.get("UnitScaleFactor")
-    check(unit_scale and abs(float(unit_scale[0]) - 1.0) < 1e-6,
-          "FBX UnitScaleFactor is %r; the .assetinfo assumes centimetres"
-          % (unit_scale,))
+    F mesh: UE nub Y in [+12.5, +37.5] cm -> correct product Y extreme is
+    -0.375 m and +0.375 must not exist. A net-zero mirror (the second M2 bug)
+    produces exactly the opposite signature.
+    """
+    # --- cube ---
+    buffer_path = _position_buffer(project, "uetoo3de/engine/basicshapes/cube.fbx", "cube")
+    if not check(buffer_path is not None, "no product position buffer for the cube"):
+        return
+    data = open(buffer_path, "rb").read()
+    plus = _float_hits(data, 0.5)
+    minus = _float_hits(data, -0.5)
+    print("  cube product:    +0.5 x%d  -0.5 x%d  (+50 x%d  +0.005 x%d)"
+          % (plus, minus, _float_hits(data, 50.0), _float_hits(data, 0.005)))
+    check(plus >= 24 and minus >= 24,
+          "cube product does not contain +/-0.5 m corners (+%d/-%d); scale is wrong"
+          % (plus, minus))
+    check(_float_hits(data, 50.0) == 0 and _float_hits(data, -50.0) == 0,
+          "cube product contains +/-50: units were not converted")
+    check(_float_hits(data, 0.005) == 0 and _float_hits(data, -0.005) == 0,
+          "cube product contains +/-0.005: a scale rule is stacked on the unit "
+          "conversion (the 100x-too-small bug)")
+
+    # --- F mesh mirror ---
+    buffer_path = _position_buffer(project, "uetoo3de/game/meshes/sm_letterf.fbx", "sm_letterf")
+    if not check(buffer_path is not None, "no product position buffer for SM_LetterF"):
+        return
+    data = open(buffer_path, "rb").read()
+    correct = _float_hits(data, -0.375)
+    mirrored = _float_hits(data, 0.375)
+    print("  letterf product: -0.375 x%d  +0.375 x%d" % (correct, mirrored))
+    check(correct > 0,
+          "F mesh product has no vertex at Y = -0.375 m; the nub is missing or "
+          "the geometry is not negate-Y")
+    check(mirrored == 0,
+          "F mesh product has vertices at Y = +0.375 m: the geometry is MIRRORED "
+          "(net-zero Y negation; a bake or conversion stage is missing/doubled)")
 
 
 def test_one_fbx_per_unique_mesh_guid(document):
@@ -167,7 +183,6 @@ def test_one_fbx_per_unique_mesh_guid(document):
         path = os.path.join(EXPORT_ASSETS, asset["o3de_relative_path"])
         check(os.path.exists(path), "missing FBX for %s: %s" % (asset["ue_path"], path))
 
-    # The check is only meaningful if some mesh is genuinely shared.
     used = [entity["mesh"]["asset_guid"] for entity in document["entities"]
             if "mesh" in entity]
     check(len(used) > len(set(used)),
@@ -178,7 +193,8 @@ def test_one_fbx_per_unique_mesh_guid(document):
 
 
 def test_assetinfo_sidecars(document, project):
-    """Every staged FBX has the sidecar LANE_B.md specifies."""
+    """Every staged FBX has the sidecar contract: node selection + LodRule +
+    MaterialRule, and NO CoordinateSystemRule (SceneAPI owns both conversions)."""
     project_assets = os.path.join(project, "Assets")
     for asset in manifest_io.static_mesh_assets(document):
         relative_path = asset["o3de_relative_path"]
@@ -196,20 +212,13 @@ def test_assetinfo_sidecars(document, project):
         nodes = group["nodeSelectionList"]["selectedNodes"]
         expected_node = "RootNode." + asset["fbx_node_name"]
         check(nodes == [expected_node],
-              "%s: selectedNodes is %r, expected %r (a wrong path fails the AP "
-              "job with 'No valid ModelLodAssets have been added')"
-              % (relative_path, nodes, [expected_node]))
+              "%s: selectedNodes is %r, expected %r" % (relative_path, nodes, [expected_node]))
 
         rules = {rule["$type"]: rule for rule in group["rules"]["rules"]}
-        coordinate_rule = rules.get("CoordinateSystemRule")
-        if check(coordinate_rule is not None,
-                 "%s: no CoordinateSystemRule; the model would import 100x too "
-                 "large" % relative_path):
-            check(coordinate_rule.get("useAdvancedData") is True,
-                  "%s: CoordinateSystemRule is not in advanced mode" % relative_path)
-            check(abs(coordinate_rule.get("scale", 0) - assetinfo.CM_TO_M_SCALE) < 1e-9,
-                  "%s: scale is %r, expected %r"
-                  % (relative_path, coordinate_rule.get("scale"), assetinfo.CM_TO_M_SCALE))
+        check("CoordinateSystemRule" not in rules,
+              "%s: carries a CoordinateSystemRule; SceneAPI already converts "
+              "units and axes, and a scale rule stacks a second /100 on top "
+              "(the 100x-too-small bug)" % relative_path)
         check(assetinfo.LOD_RULE_TYPE in rules,
               "%s: the LodRule is missing; the AP job fails without it" % relative_path)
         check("MaterialRule" in rules, "%s: the MaterialRule is missing" % relative_path)
@@ -233,8 +242,6 @@ def test_import_report():
     check(counters.get("assets_waited_for") == 5,
           "import waited for %r assets, expected 5" % counters.get("assets_waited_for"))
 
-    # The fixture has two non-uniformly scaled actors; if that record ever
-    # disappears, either the fixture changed or the scale silently collapsed.
     codes = {record["code"] for record in report["warnings"]}
     check("XFORM_NONUNIFORM_SCALE_COMPONENT" in codes,
           "no non-uniform scale was reported; Fixture_Floor (10,10,1) and "
@@ -252,7 +259,8 @@ def main():
 
     for name, test in (
             ("manifest declares both lanes", lambda: test_manifest_declares_both_lanes(document)),
-            ("mirror check (F mesh vs UE reference)", lambda: test_mirror_check(document)),
+            ("FBX is the verbatim-UE intermediate", lambda: test_fbx_is_verbatim_intermediate(document)),
+            ("PRODUCT scale + mirror (byte-level)", lambda: test_product_scale_and_mirror(document, project)),
             ("one FBX per unique mesh GUID", lambda: test_one_fbx_per_unique_mesh_guid(document)),
             ("assetinfo sidecars", lambda: test_assetinfo_sidecars(document, project)),
             ("import report", test_import_report),

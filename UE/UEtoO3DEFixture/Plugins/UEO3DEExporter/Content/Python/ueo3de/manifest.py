@@ -28,20 +28,21 @@ import json
 # the transforms do.
 SCHEMA_VERSION = 2
 TOOL_NAME = "UEO3DEExporter"
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.2.1"
 
 # The Lane A basis map actually applied, recorded so the O3DE importer can
 # refuse a manifest produced under a different convention rather than
 # silently importing a mirrored level. See lane_a.py.
 LANE_A_RULE = "negate_y"
 
-# Lane B applies the SAME basis map to geometry -- and UE's FBX exporter is what
-# applies it, converting left-handed to right-handed by negating Y on the way
-# out (measured: Tests/ue/probe_m2_fbx_handedness.py). Recorded so the importer
-# can tell this pipeline apart from one that mirrors geometry itself, or from
-# one that mirrors nothing; both would place meshes and transforms in
-# disagreement.
-LANE_B_RULE = "negate_y_by_ue_fbx_export"
+# Lane B: the product geometry ends up carrying the same negate-Y map as Lane A
+# through THREE stage negations that net to one: the exporter bakes a mirror,
+# UE's FBX writer negates Y (LH->RH), and SceneAPI negates Y again converting
+# the declared FBX axes into O3DE's frame. Units are converted by SceneAPI
+# (UnitScaleFactor cm->m); no .assetinfo scale rule exists. All measured at the
+# product-buffer byte level (Tests/m2/test_m2_artifacts.py). Recorded so the
+# importer can refuse a manifest from a pipeline with a different net map.
+LANE_B_RULE = "negate_y_net_of_three"
 
 FLOAT_DIGITS = 6
 

@@ -23,7 +23,7 @@ import json
 
 SUPPORTED_SCHEMA_VERSION = 2
 EXPECTED_LANE_A_RULE = "negate_y"
-EXPECTED_LANE_B_RULE = "negate_y_by_ue_fbx_export"
+EXPECTED_LANE_B_RULE = "negate_y_net_of_three"
 EXPECTED_COORDINATE_SYSTEM = "o3de_right_handed_z_up"
 EXPECTED_LENGTH_UNIT = "meters"
 

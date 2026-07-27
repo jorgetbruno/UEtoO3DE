@@ -1346,7 +1346,7 @@
     "angle": "degrees",
     "coordinate_system": "o3de_right_handed_z_up",
     "lane_a_rule": "negate_y",
-    "lane_b_rule": "negate_y_by_ue_fbx_export",
+    "lane_b_rule": "negate_y_net_of_three",
     "length": "meters"
   },
   "warnings": [

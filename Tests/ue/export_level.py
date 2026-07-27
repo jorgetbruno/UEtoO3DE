@@ -18,7 +18,9 @@ gives a script no clean way to take arguments:
 `run_ue_python.bat` sets these; see `export_level.bat` for the wrapper.
 
 Writes <out>/manifest.json and <out>/Assets/**.fbx, then re-reads every FBX and
-checks it against Lane A -- see export_fixture.py for why that check exists.
+checks it is verbatim UE geometry (the bake and UE's export negation cancel at
+the file level; SceneAPI applies the net reflection and unit conversion in the
+product) -- see export_fixture.py and LANE_B.md.
 """
 
 import os
@@ -36,7 +38,7 @@ for _path in (PACKAGE_ROOT, LIB_ROOT):
         sys.path.insert(0, _path)
 
 import fbx_reader  # noqa: E402
-from ueo3de import lane_a, mesh_export, ue_level  # noqa: E402
+from ueo3de import mesh_export, ue_level  # noqa: E402
 from ueo3de.warnings import ERROR, WARN  # noqa: E402
 
 MAP_PATH = os.environ.get("UEO3DE_MAP", "").strip()
@@ -60,15 +62,14 @@ def log(message):
     unreal.log("[EXPORT_LEVEL] " + str(message))
 
 
-def verify_lane_b(record):
-    """The written FBX must equal Lane A applied to the source asset's bounds."""
-    def to_o3de_cm(vector):
-        return [component * 100.0 for component in lane_a.convert_position(vector)]
+def verify_fbx_intermediate(record):
+    """The written FBX must equal the source asset's bounds verbatim (cm).
 
-    corner_a = to_o3de_cm(record["ue_bounds_min"])
-    corner_b = to_o3de_cm(record["ue_bounds_max"])
-    expected_min = [min(corner_a[i], corner_b[i]) for i in range(3)]
-    expected_max = [max(corner_a[i], corner_b[i]) for i in range(3)]
+    Bake and UE-export negations cancel at the file level; SceneAPI applies
+    the net reflection and the cm->m conversion in the product (LANE_B.md).
+    """
+    expected_min = list(record["ue_bounds_min"])
+    expected_max = list(record["ue_bounds_max"])
 
     path = os.path.join(ASSETS_ROOT, record["relative_path"]).replace("\\", "/")
     stats = fbx_reader.vertex_stats(path)
@@ -76,9 +77,11 @@ def verify_lane_b(record):
                   abs(stats["max"][i] - expected_max[i])) for i in range(3)]
     if max(deltas) > BOUNDS_TOLERANCE_CM:
         raise RuntimeError(
-            "%s: exported geometry disagrees with Lane A.\n"
-            "  FBX bounds      %s .. %s\n"
-            "  Lane A predicts %s .. %s"
+            "%s: FBX is not verbatim UE geometry.\n"
+            "  FBX bounds %s .. %s\n"
+            "  UE source  %s .. %s\n"
+            "The bake stage and UE's export negation should cancel here; one "
+            "is missing or doubled, and the product will be mirrored."
             % (record["relative_path"],
                [round(v, 3) for v in stats["min"]], [round(v, 3) for v in stats["max"]],
                [round(v, 3) for v in expected_min], [round(v, 3) for v in expected_max]))
@@ -127,10 +130,10 @@ try:
                            % (len(exported), len(mesh_assets)))
 
     log("")
-    log("== Lane B check: every written FBX against Lane A ==")
+    log("== FBX intermediate check: bake and export negations cancel ==")
     for record in exported:
-        verify_lane_b(record)
-    log("  ok: all %d meshes match Lane A" % len(exported))
+        verify_fbx_intermediate(record)
+    log("  ok: all %d FBX files are verbatim UE" % len(exported))
 except Exception:
     log("EXPORT FAILED")
     log(traceback.format_exc())

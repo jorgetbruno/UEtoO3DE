@@ -9,14 +9,14 @@ those paths. Two scripts would be two places to keep in sync.
     Exports/Fixture_01/manifest.json                     (M1)
     Exports/Fixture_01/Assets/uetoo3de/**/*.fbx          (M2, one per unique GUID)
 
-After exporting, every written FBX is re-read and its bounds checked against
-`lane_a.convert_position` applied to the source asset's bounds. That check is
-the reason this milestone works at all: Lane B's reflection is applied by UE's
-FBX exporter (it converts left- to right-handed by negating Y), and an earlier
-revision of `mesh_export` applied a second one, which cancelled it out
-perfectly. Nothing downstream noticed -- the meshes simply came out mirrored
-relative to their own placement. Checking the artifact rather than the
-intention is what caught it, so the check lives here and runs every time.
+After exporting, every written FBX is re-read and its bounds checked. The
+expectation is **verbatim UE bounds (in cm)**: the exporter's baked mirror and
+UE's own FBX-writer negation cancel at the file level, and SceneAPI's axis
+conversion then applies the net reflection in the product. (The product-level
+Lane A assertion lives in `Tests/m2/test_m2_artifacts.py`, reading the cache's
+position buffers directly -- the FBX is the wrong place to assert the final
+orientation, which is exactly the mistake that shipped a mirrored pipeline
+during M2. See LANE_B.md.)
 
 Run:  run_ue_python.bat export_fixture.py
 Writes Tests/ue/results/export_fixture_result.txt and exits non-zero on failure.
@@ -56,19 +56,17 @@ def log(message):
     unreal.log("[EXPORT_FIXTURE] " + str(message))
 
 
-def verify_lane_b(record):
-    """The written FBX must equal Lane A applied to the source asset's bounds.
+def verify_fbx_intermediate(record):
+    """The written FBX must equal the SOURCE asset's bounds verbatim (cm).
 
-    Lane A in centimetres -- the basis map without the metre conversion, since
-    the `.assetinfo` supplies that later.
+    The baked mirror (stage 1) and UE's FBX-writer negation (stage 2) cancel
+    at the file level; SceneAPI (stage 3) applies the net reflection and the
+    unit conversion in the product. An FBX that does NOT match verbatim means
+    one of the first two stages is missing or doubled -- and the product would
+    come out mirrored.
     """
-    def to_o3de_cm(vector):
-        return [component * 100.0 for component in lane_a.convert_position(vector)]
-
-    corner_a = to_o3de_cm(record["ue_bounds_min"])
-    corner_b = to_o3de_cm(record["ue_bounds_max"])
-    expected_min = [min(corner_a[i], corner_b[i]) for i in range(3)]
-    expected_max = [max(corner_a[i], corner_b[i]) for i in range(3)]
+    expected_min = list(record["ue_bounds_min"])
+    expected_max = list(record["ue_bounds_max"])
 
     path = os.path.join(ASSETS_ROOT, record["relative_path"]).replace("\\", "/")
     stats = fbx_reader.vertex_stats(path)
@@ -77,11 +75,11 @@ def verify_lane_b(record):
                   abs(stats["max"][i] - expected_max[i])) for i in range(3)]
     if max(deltas) > BOUNDS_TOLERANCE_CM:
         raise RuntimeError(
-            "%s: exported geometry disagrees with Lane A.\n"
-            "  FBX bounds      %s .. %s\n"
-            "  Lane A predicts %s .. %s\n"
-            "Either the exporter stopped negating Y, or something mirrored the "
-            "mesh a second time and cancelled it out."
+            "%s: FBX is not verbatim UE geometry.\n"
+            "  FBX bounds %s .. %s\n"
+            "  UE source  %s .. %s\n"
+            "The bake stage and UE's export negation should cancel here; one "
+            "of them is missing or doubled, and the product will be mirrored."
             % (record["relative_path"],
                [round(v, 3) for v in stats["min"]], [round(v, 3) for v in stats["max"]],
                [round(v, 3) for v in expected_min], [round(v, 3) for v in expected_max]))
@@ -108,13 +106,13 @@ try:
         raise RuntimeError("exported %d FBX files for %d mesh assets"
                            % (len(exported), len(mesh_assets)))
 
-    log("== Lane B check: every written FBX against Lane A ==")
+    log("== FBX intermediate check: bake and export negations cancel ==")
     for record in exported:
-        stats, expected_min, expected_max = verify_lane_b(record)
+        stats, expected_min, expected_max = verify_fbx_intermediate(record)
         log("  %-46s y [%.3f, %.3f] (UE source y [%.3f, %.3f])"
             % (record["relative_path"], stats["min"][1], stats["max"][1],
                record["ue_bounds_min"][1], record["ue_bounds_max"][1]))
-    log("  ok: all %d meshes match Lane A" % len(exported))
+    log("  ok: all %d FBX files are verbatim UE; SceneAPI applies the net map" % len(exported))
 except Exception:
     log("EXPORT FAILED")
     log(traceback.format_exc())

@@ -43,9 +43,9 @@
         "coordinate_system": { "type": "string", "const": "o3de_right_handed_z_up" },
         "lane_a_rule": { "type": "string", "const": "negate_y" },
         "lane_b_rule": {
-          "description": "How the referenced geometry was reflected. UE is left-handed and O3DE is right-handed, so the meshes must carry the same determinant -1 map the transforms do. UE's FBX exporter applies it on the way out by negating Y (measured); SceneAPI applies nothing further, so only the unit scale is left to the .assetinfo.",
+          "description": "How the referenced geometry ends up reflected in the O3DE product. Three stages each negate Y (exporter bake, UE FBX writer, SceneAPI axis conversion), netting the one reflection Lane A requires; SceneAPI also converts cm to m from the FBX UnitScaleFactor. Measured at the product-buffer level.",
           "type": "string",
-          "const": "negate_y_by_ue_fbx_export"
+          "const": "negate_y_net_of_three"
         }
       }
     },

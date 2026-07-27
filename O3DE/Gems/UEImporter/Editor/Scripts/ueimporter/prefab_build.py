@@ -252,6 +252,12 @@ def create_prefab_in_memory(root_entity_ids, prefab_path):
     import azlmbr.prefab as prefab
 
     os.makedirs(os.path.dirname(prefab_path), exist_ok=True)
+    # CreatePrefabInMemory can throw an opaque "unknown exception" when a file
+    # with a different template already exists at the target path. Re-import
+    # over an old prefab is the normal workflow, so clear it first. M10's
+    # incremental re-import replaces this with matched updates.
+    if os.path.exists(prefab_path):
+        os.remove(prefab_path)
     create = prefab.PrefabPublicRequestBus(
         bus.Broadcast, 'CreatePrefabInMemory', root_entity_ids, prefab_path)
     if create is None or not create.IsSuccess():

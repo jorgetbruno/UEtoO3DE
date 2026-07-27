@@ -30,7 +30,10 @@ if not exist "%UPROJECT%" (
     exit /b 2
 )
 
-"D:\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "%UPROJECT%" -run=pythonscript -script="%SCRIPT%" -unattended -nop4 -nullrhi
+rem GeometryScripting is required by the exporter's mirror bake (LANE_B.md) and
+rem is not enabled by default in most projects; -EnablePlugins turns it on for
+rem this run only, without touching the target .uproject.
+"D:\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "%UPROJECT%" -run=pythonscript -script="%SCRIPT%" -unattended -nop4 -nullrhi -EnablePlugins=GeometryScripting
 set "EC=%ERRORLEVEL%"
 endlocal & exit /b %EC%
 

@@ -40,22 +40,24 @@ terrain) depends on that convention. The alternative with determinant −1 that 
 forward on forward is swapping X and Y; it is a strictly larger change (it permutes the
 scale components too) and is not what the plan specifies.
 
-### Lane B — geometry (settled in M2)
+### Lane B — geometry (settled in M2, corrected twice — read LANE_B.md)
 
-Geometry gets the **same** basis map as the transforms, and the two halves come from
-different places:
+Geometry reaches the product carrying the same basis map as the transforms through
+**three Y-negations that net to one**, plus a unit conversion SceneAPI performs itself:
 
-| Stage | Applies |
-|---|---|
-| UE FBX export | negate Y — the exporter does the left- → right-handed conversion itself (measured) |
-| SceneAPI + generated `.assetinfo` | ÷100 — `CoordinateSystemRule` with `scale: 0.01`; SceneAPI applies no conversion of its own |
-| **net** | `(x, −y, z) / 100` = exactly Lane A |
+| # | Stage | Y | Units |
+|---|---|---|---|
+| 1 | exporter bakes `scale_mesh(1,−1,1)` | negate | — |
+| 2 | UE FBX export | negate | writes cm |
+| 3 | SceneAPI import | negate (declared FBX axes) | **cm → m ÷100** (`UnitScaleFactor`) |
+| | **net** | negate once | ÷100 = exactly Lane A |
 
-So the exporter must **not** mirror geometry: a second reflection cancels the first
-exactly, and the level comes out with meshes mirrored relative to their placement while
-every transform assertion still passes. `Tests/ue/export_fixture.py` re-reads every FBX
-it writes and checks its bounds against Lane A for that reason. Full measurement and
-the reason S0.2 reported "verbatim": [LANE_B.md](LANE_B.md).
+The intermediate FBX is therefore **verbatim UE geometry**, and the `.assetinfo`
+carries **no CoordinateSystemRule** — SceneAPI owns both conversions. Getting either
+of those wrong produced the two bugs that shipped mid-M2 (meshes 100× too small; a
+net-zero mirror), both invisible to every intermediate check. The permanent assertion
+reads the **product position buffers** by float byte-pattern
+(`Tests/m2/test_m2_artifacts.py`); full history and evidence: [LANE_B.md](LANE_B.md).
 
 ## Interchange (M1)
 
