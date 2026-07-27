@@ -62,10 +62,6 @@ CODES = {
     "MAT_BLEND_UNSUPPORTED": (
         WARN, "UE blend mode outside Opaque/Masked/Translucent; imported as "
               "translucent."),
-    "MAT_SLOTS_FLATTENED": (
-        INFO, "The baked export FBX carries a single material slot, so a "
-              "multi-slot UE mesh renders every section with slot 0's "
-              "material until slot fidelity lands (M4 known limitation)."),
 
     # --- physics source data (M1 records, M3 consumes) ---
     "PHYS_NO_SIMPLE_COLLISION": (

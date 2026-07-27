@@ -323,9 +323,9 @@ def assert_coverage(document):
     entities = by_name(document)
     expected_names = {
         "Fixture_Floor", "Prim_Box", "Prim_Sphere", "Prim_Cylinder", "SM_LetterF",
-        "RotatedParent_Cube", "RotatedChild_Sphere", "Cube_Dynamic", "Cube_Kinematic",
-        "TriggerBox_01", "Light_Point", "Light_Spot", "Light_Directional",
-        "Atmo_SkyLight", "Atmo_HeightFog", "PPV_01",
+        "SM_TwoTone", "RotatedParent_Cube", "RotatedChild_Sphere", "Cube_Dynamic",
+        "Cube_Kinematic", "TriggerBox_01", "Light_Point", "Light_Spot",
+        "Light_Directional", "Atmo_SkyLight", "Atmo_HeightFog", "PPV_01",
     }
     missing = sorted(expected_names - set(entities))
     check(not missing, "fixture actors missing from the manifest: %r" % missing)
@@ -350,6 +350,23 @@ def assert_coverage(document):
     used = [e["mesh"]["asset_guid"] for e in document["entities"] if "mesh" in e]
     check(len(used) > len(set(used)),
           "no mesh is shared between actors; the dedup assertion is vacuous")
+
+
+def assert_two_tone_slots(document):
+    """The per-slot canary must actually be multi-material in the manifest.
+
+    If a fixture edit ever collapsed SM_TwoTone to one slot (or one material),
+    every downstream per-slot check would pass vacuously -- same failure shape
+    as a symmetric mirror canary."""
+    entities = by_name(document)
+    entity = entities.get("SM_TwoTone")
+    if not check(entity is not None, "fixture is missing SM_TwoTone"):
+        return
+    slots = entity.get("mesh", {}).get("material_slots", [])
+    check(len(slots) == 2, "SM_TwoTone has %d slots, expected 2" % len(slots))
+    guids = [slot.get("material_guid") for slot in slots]
+    check(all(guids) and len(set(guids)) == 2,
+          "SM_TwoTone slots do not carry two distinct materials: %r" % guids)
 
 
 def assert_generator(document):
@@ -414,6 +431,7 @@ def main(argv=None):
             ("hierarchy composes", assert_hierarchy_composes),
             ("physics flags", assert_physics_flags),
             ("coverage + dedup", assert_coverage),
+            ("two-tone slot canary", assert_two_tone_slots),
             ("generator pins", assert_generator),
     ):
         before = len(_failures)

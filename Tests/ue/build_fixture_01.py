@@ -13,6 +13,8 @@ Creates (deterministically — no randomness, no wall-clock anywhere):
     /Game/Materials/M_Fixture_Translucent(BlendMode = Translucent, alpha -> Opacity)
     /Game/Materials/M_Fixture_Unsupported(Lerp driven by VertexColor -> warnings path in M4)
     /Game/Meshes/SM_LetterF              (asymmetric static mesh, 3 boxes via Geometry Scripting)
+    /Game/Meshes/SM_TwoTone              (TWO material slots: ID0 base box -> M_Fixture_PBR,
+                                          ID1 top box -> M_Fixture_ORM; per-slot fidelity canary)
   Level: /Game/Maps/Fixture_01 (non World-Partition)
 
 Deterministic layout (UE cm, Z-up, left-handed):
@@ -21,6 +23,7 @@ Deterministic layout (UE cm, Z-up, left-handed):
     Prim_Sphere          Sphere  (600,0,50)         scale (1,1,1)     static   M_Fixture_ORM
     Prim_Cylinder        Cylinder(900,0,50)         scale (1,1,1)     static   M_Fixture_Masked
     SM_LetterF           LetterF (1500,0,0)         identity rot      static   (asset default material)
+    SM_TwoTone           TwoTone (1800,0,0)         identity rot      static   (asset slots: PBR + ORM)
     RotatedParent_Cube   Cube    (0,400,50)         rot (P0,Y45,R0)   static   M_Fixture_Translucent
     RotatedChild_Sphere  Sphere  rel (150,0,50)     rel rot (P30,Y0)  static   M_Fixture_Unsupported (attached to RotatedParent_Cube)
     Cube_Dynamic         Cube    (-300,0,100)       movable, Simulate Physics = true
@@ -72,6 +75,7 @@ MATERIALS_DIR = "/Game/Materials"
 TEXTURES_DIR = "/Game/Textures"
 
 SM_LETTERF_PATH = MESHES_DIR + "/SM_LetterF"
+SM_TWOTONE_PATH = MESHES_DIR + "/SM_TwoTone"
 
 ENGINE_CUBE = "/Engine/BasicShapes/Cube.Cube"
 ENGINE_SPHERE = "/Engine/BasicShapes/Sphere.Sphere"
@@ -274,6 +278,48 @@ def build_letter_f():
     return unreal.EditorAssetLibrary.load_asset(SM_LETTERF_PATH)
 
 
+def build_two_tone(materials):
+    """Two boxes with distinct material IDs baked to /Game/Meshes/SM_TwoTone.
+
+    The per-slot fidelity canary (M4): material ID 0 (base box) carries
+    M_Fixture_PBR, ID 1 (top box) M_Fixture_ORM, as named entries in the
+    asset's static_materials. The export must carry BOTH through the FBX and
+    the importer must land each on its own model slot; a single-slot
+    regression renders the top box with the base material and fails the
+    artifact checks."""
+    delete_asset_if_exists(SM_TWOTONE_PATH)
+
+    dyn = unreal.DynamicMesh()
+    dyn.enable_material_i_ds()
+    opts = unreal.GeometryScriptPrimitiveOptions()
+    origin = unreal.GeometryScriptPrimitiveOriginMode.BASE
+
+    xform = unreal.Transform(location=unreal.Vector(0.0, 0.0, 0.0))
+    dyn = dyn.append_box(opts, xform, 100.0, 50.0, 100.0, 0, 0, 0, origin)
+    base_triangles = unreal.GeometryScript_MeshQueries.get_num_triangle_i_ds(dyn)
+    xform = unreal.Transform(location=unreal.Vector(0.0, 0.0, 150.0))
+    dyn = dyn.append_box(opts, xform, 50.0, 50.0, 50.0, 0, 0, 0, origin)
+    total_triangles = unreal.GeometryScript_MeshQueries.get_num_triangle_i_ds(dyn)
+    for triangle in range(base_triangles, total_triangles):
+        dyn.set_triangle_material_id(triangle, 1)
+
+    create_opts = unreal.GeometryScriptCreateNewStaticMeshAssetOptions()
+    mesh = _unwrap(unreal.GeometryScript_NewAssetUtils.create_new_static_mesh_asset_from_mesh(
+        dyn, SM_TWOTONE_PATH, create_opts))
+    if mesh is None:
+        raise RuntimeError("CreateNewStaticMeshAssetFromMesh returned no mesh for SM_TwoTone")
+
+    slots = []
+    for slot_name, material in (("Base", materials["pbr"]), ("Top", materials["orm"])):
+        entry = unreal.StaticMaterial()
+        entry.set_editor_property("material_slot_name", slot_name)
+        entry.set_editor_property("material_interface", material)
+        slots.append(entry)
+    mesh.set_editor_property("static_materials", slots)
+    save_asset(SM_TWOTONE_PATH)
+    return unreal.EditorAssetLibrary.load_asset(SM_TWOTONE_PATH)
+
+
 # ---------------------------------------------------------------------------
 # level construction
 # ---------------------------------------------------------------------------
@@ -321,6 +367,9 @@ def build_level(meshes, materials):
 
     # --- asymmetric mesh (handedness canary) ---
     spawn_static_mesh_actor(actor_sub, "SM_LetterF", meshes["letter_f"], (1500.0, 0.0, 0.0))
+
+    # --- two-slot mesh (per-slot material fidelity canary) ---
+    spawn_static_mesh_actor(actor_sub, "SM_TwoTone", meshes["two_tone"], (1800.0, 0.0, 0.0))
 
     # --- rotated child under rotated parent (transform composition canary) ---
     parent = spawn_static_mesh_actor(actor_sub, "RotatedParent_Cube", meshes["cube"],
@@ -420,12 +469,16 @@ def main():
     log("building SM_LetterF")
     letter_f = build_letter_f()
 
+    log("building SM_TwoTone")
+    two_tone = build_two_tone(materials)
+
     meshes = {
         "cube": unreal.EditorAssetLibrary.load_asset(ENGINE_CUBE),
         "sphere": unreal.EditorAssetLibrary.load_asset(ENGINE_SPHERE),
         "cylinder": unreal.EditorAssetLibrary.load_asset(ENGINE_CYLINDER),
         "plane": unreal.EditorAssetLibrary.load_asset(ENGINE_PLANE),
         "letter_f": letter_f,
+        "two_tone": two_tone,
     }
     for key, mesh in meshes.items():
         if mesh is None:

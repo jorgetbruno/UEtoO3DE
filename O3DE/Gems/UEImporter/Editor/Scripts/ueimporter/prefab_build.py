@@ -32,6 +32,17 @@ MODEL_ASSET_PROPERTY = "Controller|Configuration|Model Asset"
 MATERIAL_COMPONENT_NAME = "Material"
 # Verified live: probe_m4_material — assigns and reads back an azmaterial.
 MATERIAL_ASSET_PROPERTY = "Default Material|Material Asset"
+# Per-slot rows of the Material component. The technique is o3dimport's
+# (lumbermixalot): FindMaterialAssignmentId maps a slot label to a stable id,
+# and the row whose "Material Slot Stable Id" matches is the one to set.
+MODEL_SLOT_STABLE_ID = "Model Materials|[%d]|Material Slot Stable Id"
+MODEL_SLOT_ASSET = "Model Materials|[%d]|Material Asset"
+# LOD wildcard for FindMaterialAssignmentId (u32 -1).
+NO_LOD = 0xFFFFFFFF
+# The Model Materials rows exist only once the entity's model asset has
+# streamed in; how long assign_material_slots waits for that, total frames.
+MODEL_READY_WAIT_FRAMES = 600
+MODEL_READY_POLL_FRAMES = 30
 
 # Below this, a scale is treated as uniform and goes in the transform.
 UNIFORM_SCALE_EPSILON = 1e-6
@@ -192,14 +203,8 @@ def create_level_root(name):
     return root_id
 
 
-def assign_material(entity_id, material_asset_id, entity_name):
-    """Add a Material component and set the default slot's material (M4).
-
-    The default slot covers the whole model, which matches what the export
-    ships today: the baked FBX carries a single material slot (mesh_export's
-    known M4 limitation), so per-slot assignment beyond slot 0 would target
-    slots that do not exist.
-    """
+def _add_material_component(entity_id, entity_name):
+    """Add (or fetch) the Material component; returns its component pair."""
     import azlmbr.bus as bus
     import azlmbr.editor as editor
 
@@ -209,14 +214,110 @@ def assign_material(entity_id, material_asset_id, entity_name):
     if not outcome or not outcome.IsSuccess():
         raise PrefabBuildError("%s: AddComponentsOfType(Material) failed: %s"
                                % (entity_name, outcome.GetError() if outcome else "?"))
-    pair = editor.EditorComponentAPIBus(
+    return editor.EditorComponentAPIBus(
         bus.Broadcast, 'GetComponentOfType', entity_id, material_type).GetValue()
+
+
+def _get_property(pair, path):
+    """(found, value) for a component property; found=False for missing rows."""
+    import azlmbr.bus as bus
+    import azlmbr.editor as editor
+
+    outcome = editor.EditorComponentAPIBus(bus.Broadcast, 'GetComponentProperty',
+                                           pair, path)
+    if outcome and outcome.IsSuccess():
+        return True, outcome.GetValue()
+    return False, None
+
+
+def assign_material(entity_id, material_asset_id, entity_name):
+    """Add a Material component and set the DEFAULT slot's material (M4).
+
+    Right for the entities that use it: every model slot without an explicit
+    per-slot override inherits the default slot, so a model whose mapped slots
+    all share one material is fully covered without touching the (asset-load-
+    dependent) Model Materials rows. Multi-material models go through
+    `assign_material_slots` instead.
+    """
+    import azlmbr.bus as bus
+    import azlmbr.editor as editor
+
+    pair = _add_material_component(entity_id, entity_name)
     set_outcome = editor.EditorComponentAPIBus(
         bus.Broadcast, 'SetComponentProperty', pair,
         MATERIAL_ASSET_PROPERTY, material_asset_id)
     if not set_outcome or not set_outcome.IsSuccess():
         raise PrefabBuildError("%s: setting %s failed"
                                % (entity_name, MATERIAL_ASSET_PROPERTY))
+
+
+def assign_material_slots(entity_id, assignments, entity_name, report):
+    """Per-slot assignment by label, o3dimport's technique (M4 slot fidelity).
+
+    `assignments` is an ordered list of (label, material_asset_id) with unique
+    labels; the label is the UE material asset name, which is the FBX material
+    name, which is the azmodel slot label (`mesh_export` docstring). The Model
+    Materials rows only exist after the entity's model streams in, so this
+    waits for row 0 first, bounded; if the model never turns up the first
+    material goes on the default slot so the entity is never worse off than
+    the flattened behaviour this replaces. Returns the number of slots set.
+    """
+    import azlmbr.bus as bus
+    import azlmbr.editor as editor
+    import azlmbr.legacy.general as general
+    import azlmbr.render as render
+
+    pair = _add_material_component(entity_id, entity_name)
+
+    waited = 0
+    while True:
+        found, _value = _get_property(pair, MODEL_SLOT_STABLE_ID % 0)
+        if found:
+            break
+        if waited >= MODEL_READY_WAIT_FRAMES:
+            report.warn("MAT_MODEL_NOT_READY", entity_name,
+                        "Model Materials rows never appeared within %d frames; "
+                        "assigned %r on the default slot instead"
+                        % (MODEL_READY_WAIT_FRAMES, assignments[0][0]))
+            editor.EditorComponentAPIBus(
+                bus.Broadcast, 'SetComponentProperty', pair,
+                MATERIAL_ASSET_PROPERTY, assignments[0][1])
+            return 0
+        general.idle_wait_frames(MODEL_READY_POLL_FRAMES)
+        waited += MODEL_READY_POLL_FRAMES
+
+    # Stable id per row, once; rows are as many as the model has unique slots.
+    row_stable_ids = []
+    for row in range(len(assignments) + 8):
+        found, value = _get_property(pair, MODEL_SLOT_STABLE_ID % row)
+        if not found:
+            break
+        row_stable_ids.append(value)
+
+    assigned = 0
+    for label, asset_id in assignments:
+        assignment_id = render.MaterialComponentRequestBus(
+            bus.Event, 'FindMaterialAssignmentId', entity_id, NO_LOD, label)
+        stable_id = getattr(assignment_id, "materialSlotStableId", None)
+        row = None
+        if stable_id is not None:
+            for index, row_stable in enumerate(row_stable_ids):
+                if row_stable == stable_id:
+                    row = index
+                    break
+        if row is None:
+            report.warn("MAT_SLOT_UNMATCHED", entity_name,
+                        "model has no slot labelled %r (rows: %d)"
+                        % (label, len(row_stable_ids)))
+            continue
+        set_outcome = editor.EditorComponentAPIBus(
+            bus.Broadcast, 'SetComponentProperty', pair,
+            MODEL_SLOT_ASSET % row, asset_id)
+        if not set_outcome or not set_outcome.IsSuccess():
+            raise PrefabBuildError("%s: setting %s failed"
+                                   % (entity_name, MODEL_SLOT_ASSET % row))
+        assigned += 1
+    return assigned
 
 
 def create_entities(document, asset_ids_by_guid, report, level_root_id, log=None):

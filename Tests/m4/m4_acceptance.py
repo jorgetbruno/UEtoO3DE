@@ -4,11 +4,14 @@ m4_acceptance.py — M4 acceptance, editor half.
 Instantiates the SAVED prefab (fresh session, same reasoning as M2: the file
 that ships is the artifact, not the importing session's memory) and asserts:
 
-  * every entity whose slot-0 material was converted carries a Material
+  * every entity whose mapped slots share ONE material carries a Material
     component whose default slot resolves to the expected .azmaterial product;
-  * entities on unmapped materials (the deliberately unsupported one, and the
-    engine's WorldGrid) have NO Material component -- the backend default, by
-    design, visibly grey rather than silently wrong.
+  * every entity with DISTINCT materials per slot (SM_TwoTone) resolves each
+    slot label -- FindMaterialAssignmentId, o3dimport's technique, same as the
+    importer -- to its own expected .azmaterial on the Model Materials rows;
+  * entities on unmapped materials (the deliberately unsupported one) have NO
+    Material component -- the backend default, by design, visibly grey rather
+    than silently wrong.
 
 Run:  Tests/o3de/run_o3de_python.bat Tests/m4/m4_acceptance.py
 """
@@ -63,20 +66,35 @@ def main():
         document = json.load(handle)
     assets_by_guid = {a["guid"]: a for a in document["assets"]}
 
-    # entity name -> expected azmaterial product path (or None for default)
+    def product_of(material):
+        return ("assets/%s.azmaterial"
+                % material["o3de_relative_path"].rsplit(".", 1)[0]).lower()
+
+    # entity name -> None (no Material component expected),
+    #   ("default", product)  all mapped slots share one material, or
+    #   ("slots", [(label, product), ...])  per-slot assignment (M4 fidelity)
     expected = {}
     for item in document["entities"]:
         mesh = item.get("mesh")
         if mesh is None:
             continue
         slots = mesh.get("material_slots") or []
-        guid = slots[0].get("material_guid") if slots else None
-        material = assets_by_guid.get(guid) if guid else None
-        if material and material.get("material_data"):
-            product = "assets/%s.azmaterial" % material["o3de_relative_path"].rsplit(".", 1)[0]
-            expected[item["name"]] = product.lower()
-        else:
+        mapped = []
+        for slot in slots:
+            material = assets_by_guid.get(slot.get("material_guid") or "")
+            if material and material.get("material_data"):
+                mapped.append(material)
+        distinct = []
+        for material in mapped:
+            if material["guid"] not in [m["guid"] for m in distinct]:
+                distinct.append(material)
+        if not distinct:
             expected[item["name"]] = None
+        elif len(distinct) == 1:
+            expected[item["name"]] = ("default", product_of(distinct[0]))
+        else:
+            expected[item["name"]] = ("slots", [(m["name"], product_of(m))
+                                                for m in distinct])
 
     project_root = general.get_game_folder().rstrip('/\\')
     prefab_path = os.path.join(project_root, *PREFAB_REL_PATH.split('/')).replace(os.sep, '/')
@@ -110,6 +128,21 @@ def main():
     material_type = editor.EditorComponentAPIBus(
         bus.Broadcast, 'FindComponentTypeIdsByEntityType', ['Material'], game_type)[0]
 
+    def get_property(pair, path):
+        value = editor.EditorComponentAPIBus(bus.Broadcast, 'GetComponentProperty',
+                                             pair, path)
+        if value and value.IsSuccess():
+            return True, value.GetValue()
+        return False, None
+
+    def path_of(asset_id):
+        if asset_id is None:
+            return ''
+        return asset.AssetCatalogRequestBus(bus.Broadcast, 'GetAssetPathById', asset_id) or ''
+
+    import azlmbr.render as render
+    NO_LOD = 0xFFFFFFFF
+
     log('== material assignments in the saved prefab ==')
     for name in sorted(expected):
         entity_id = by_name.get(name)
@@ -129,12 +162,48 @@ def main():
             continue
         pair = editor.EditorComponentAPIBus(
             bus.Broadcast, 'GetComponentOfType', entity_id, material_type).GetValue()
-        value = editor.EditorComponentAPIBus(
-            bus.Broadcast, 'GetComponentProperty', pair, 'Default Material|Material Asset')
-        asset_id = value.GetValue() if value and value.IsSuccess() else None
-        back = asset.AssetCatalogRequestBus(bus.Broadcast, 'GetAssetPathById', asset_id) if asset_id else ''
-        check(back == want,
-              '%s default material is %r, expected %r' % (name, back, want))
+
+        kind, detail = want
+        if kind == "default":
+            found, asset_id = get_property(pair, 'Default Material|Material Asset')
+            back = path_of(asset_id if found else None)
+            check(back == detail,
+                  '%s default material is %r, expected %r' % (name, back, detail))
+            continue
+
+        # Per-slot: the Model Materials rows exist only once the model has
+        # streamed in; bounded wait, same reasoning as the importer's.
+        waited = 0
+        while True:
+            found, _value = get_property(pair, 'Model Materials|[0]|Material Slot Stable Id')
+            if found:
+                break
+            if waited >= 600:
+                break
+            general.idle_wait_frames(30)
+            waited += 30
+        if not check(found, '%s: Model Materials rows never appeared' % name):
+            continue
+        row_stable_ids = []
+        for row in range(len(detail) + 8):
+            found, value = get_property(pair, 'Model Materials|[%d]|Material Slot Stable Id' % row)
+            if not found:
+                break
+            row_stable_ids.append(value)
+        for label, product in detail:
+            assignment_id = render.MaterialComponentRequestBus(
+                bus.Event, 'FindMaterialAssignmentId', entity_id, NO_LOD, label)
+            stable_id = getattr(assignment_id, 'materialSlotStableId', None)
+            row = next((index for index, value in enumerate(row_stable_ids)
+                        if value == stable_id), None)
+            if not check(row is not None,
+                         '%s: no model slot labelled %r (rows: %d)'
+                         % (name, label, len(row_stable_ids))):
+                continue
+            found, asset_id = get_property(pair, 'Model Materials|[%d]|Material Asset' % row)
+            back = path_of(asset_id if found else None)
+            check(back == product,
+                  '%s slot %r material is %r, expected %r' % (name, label, back, product))
 
 
 try:

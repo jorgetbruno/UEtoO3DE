@@ -46,9 +46,16 @@ fails loudly at the first `DynamicMesh()`, never silently.
 and LOD nodes would reach SceneAPI as extra meshes the `.assetinfo` does not
 name. Collision travels in the manifest.
 
-Known limitation, owned by M4: the baked temp asset carries a single default
-material slot, so multi-slot meshes flatten to one slot in the FBX. The
-manifest records the real slot list from the source asset.
+Material slots: the baked temp asset carries the SOURCE asset's material list
+(`static_materials`, verbatim), so the FBX carries one material per used slot
+and the material NAMES are the UE material asset names. That name is what
+SceneAPI turns into the azmodel's material slot label, which is what the
+importer's per-slot assignment matches on (`prefab_build.assign_material_slots`).
+Slot names ("Wood") do NOT survive the FBX -- measured in
+`Tests/ue/probe_slots.py`: the FBX contains `M_Fixture_PBR`/`M_Fixture_ORM`
+but not `SlotA`/`SlotB` -- so the material asset name is the only label there
+is. Per-triangle material IDs survive copy -> scale_mesh -> bake unchanged
+(same probe).
 """
 
 import os
@@ -111,6 +118,47 @@ def _mirrored_dynamic_mesh(source_mesh):
     if dyn is None:
         raise MeshExportError("scale_mesh returned no mesh")
     return dyn
+
+
+def _triangle_material_ids(dyn):
+    """Per-triangle material IDs as a plain list (index == triangle id; the
+    dynamic mesh is always a fresh compact copy here)."""
+    result = unreal.GeometryScript_Materials.get_all_triangle_material_i_ds(dyn)
+    id_list = None
+    for item in (result if isinstance(result, tuple) else (result,)):
+        if isinstance(item, unreal.GeometryScriptIndexList):
+            id_list = item
+    if id_list is None:
+        raise MeshExportError("get_all_triangle_material_i_ds returned no index list")
+    return list(unreal.GeometryScript_List.convert_index_list_to_array(id_list))
+
+
+def _compact_slots(dyn, source):
+    """Compact the mesh's material IDs to 0..n-1 and return the matching
+    source slot list.
+
+    The bake creates one slot per material ID, so IDs must be contiguous or
+    the baked asset's slot indices would not line up with the slot list we
+    attach. Sparse IDs (a source slot unused by LOD0) are remapped here,
+    deterministically, rather than trusting the bake to compact them.
+    """
+    ids = _triangle_material_ids(dyn)
+    used = sorted(set(ids)) if ids else [0]
+    if used != list(range(len(used))):
+        remap = {old: new for new, old in enumerate(used)}
+        for triangle, material_id in enumerate(ids):
+            dyn.set_triangle_material_id(triangle, remap[material_id])
+
+    source_slots = list(source.get_editor_property("static_materials") or [])
+    slots = []
+    for old_id in used:
+        if old_id < len(source_slots):
+            slots.append(source_slots[old_id])
+        else:
+            # A material ID beyond the source slot list: keep the index space
+            # aligned with an empty entry; the importer skips unmapped slots.
+            slots.append(unreal.StaticMaterial())
+    return slots
 
 
 def _bake_temp_asset(dyn, asset_name):
@@ -190,8 +238,14 @@ def export_meshes(assets, output_root, log=None):
         output_path = os.path.join(output_root, asset["o3de_relative_path"]).replace("\\", "/")
 
         dyn = _mirrored_dynamic_mesh(source)
+        slots = _compact_slots(dyn, source)
         temp_path, baked = _bake_temp_asset(dyn, node_name)
         try:
+            # The FBX carries one material per slot, named after the UE
+            # material asset -- the label the importer assigns by. Set for
+            # every mesh (single-slot included) so labels are always real
+            # material names, never the bake's WorldGridMaterial default.
+            baked.set_editor_property("static_materials", slots)
             _export_fbx(baked, output_path, options)
         finally:
             unreal.EditorAssetLibrary.delete_asset(temp_path)

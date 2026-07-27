@@ -225,6 +225,53 @@ def test_assetinfo_sidecars(document, project):
     print("  %d sidecars verified" % len(manifest_io.static_mesh_assets(document)))
 
 
+def test_two_tone_slots(document, project):
+    """Per-slot material fidelity, at both artifact levels (M4).
+
+    FBX: the two-slot canary must carry BOTH material names -- they are the
+    azmodel slot labels the importer matches on. A single-name FBX means the
+    bake flattened the slots again.
+
+    Prefab: the SM_TwoTone entity's own subtree must reference both
+    .azmaterial products. The default-slot mechanism can only ever carry one
+    material per entity, so two distinct hints inside one entity is the
+    signature of per-slot assignment having landed.
+    """
+    asset = next((a for a in document["assets"]
+                  if a["ue_path"] == "/Game/Meshes/SM_TwoTone"), None)
+    if not check(asset is not None, "manifest has no SM_TwoTone mesh asset"):
+        return
+    fbx_path = os.path.join(EXPORT_ASSETS, asset["o3de_relative_path"])
+    if not check(os.path.exists(fbx_path), "exported FBX missing: " + fbx_path):
+        return
+    data = open(fbx_path, "rb").read()
+    for name in (b"M_Fixture_PBR", b"M_Fixture_ORM"):
+        check(data.count(name) > 0,
+              "SM_TwoTone FBX does not carry material %r; the bake flattened "
+              "the slots" % name.decode())
+    check(data.count(b"WorldGridMaterial") == 0,
+          "SM_TwoTone FBX carries the bake's default WorldGridMaterial slot")
+
+    prefab_path = os.path.join(project, "Prefabs", "Fixture_01.prefab")
+    if not check(os.path.exists(prefab_path), "prefab missing: " + prefab_path):
+        return
+    with open(prefab_path, "r") as handle:
+        prefab = json.load(handle)
+    subtree = None
+    for key, entity in (prefab.get("Entities") or {}).items():
+        if entity.get("Name") == "SM_TwoTone":
+            subtree = json.dumps(entity)
+            break
+    if not check(subtree is not None, "prefab has no SM_TwoTone entity"):
+        return
+    for hint in ("m_fixture_pbr.azmaterial", "m_fixture_orm.azmaterial"):
+        check(hint in subtree,
+              "SM_TwoTone's prefab entity does not reference %s; per-slot "
+              "assignment did not land" % hint)
+    print("  FBX carries both material names; prefab entity references both "
+          "azmaterials")
+
+
 def test_import_report():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "results", "m2_import_report_Fixture_01.json")
@@ -237,19 +284,28 @@ def test_import_report():
     check(not errors, "import report contains errors: %r" % [r["code"] for r in errors])
 
     counters = report["counters"]
-    check(counters.get("entities_created") == 16,
-          "import created %r entities, expected 16" % counters.get("entities_created"))
-    # 5 mesh products + 5 converted materials (the 4 fixture PBR set plus
+    check(counters.get("entities_created") == 17,
+          "import created %r entities, expected 17" % counters.get("entities_created"))
+    # 6 mesh products + 5 converted materials (the 4 fixture PBR set plus
     # WorldGridMaterial, whose Multiply graph resolves through the texture-DFS
     # approximation); image products are dependencies of the material jobs and
     # are not waited on directly.
-    check(counters.get("assets_waited_for") == 10,
-          "import waited for %r assets, expected 10" % counters.get("assets_waited_for"))
+    check(counters.get("assets_waited_for") == 11,
+          "import waited for %r assets, expected 11" % counters.get("assets_waited_for"))
+    # SM_TwoTone is the only multi-material mesh: exactly its 2 slots go
+    # through per-slot assignment, and both labels must match model slots.
+    check(counters.get("material_slots_assigned") == 2,
+          "per-slot assignment set %r slots, expected 2 (SM_TwoTone)"
+          % counters.get("material_slots_assigned"))
 
     codes = {record["code"] for record in report["warnings"]}
     check("XFORM_NONUNIFORM_SCALE_COMPONENT" in codes,
           "no non-uniform scale was reported; Fixture_Floor (10,10,1) and "
           "Prim_Box (2,1,0.5) both need one")
+    for code in ("MAT_SLOT_UNMATCHED", "MAT_MODEL_NOT_READY",
+                 "MAT_SLOT_LABEL_AMBIGUOUS"):
+        check(code not in codes,
+              "%s reported on the fixture; per-slot assignment degraded" % code)
     print("  counters: %r" % counters)
 
 
@@ -267,6 +323,7 @@ def main():
             ("PRODUCT scale + mirror (byte-level)", lambda: test_product_scale_and_mirror(document, project)),
             ("one FBX per unique mesh GUID", lambda: test_one_fbx_per_unique_mesh_guid(document)),
             ("assetinfo sidecars", lambda: test_assetinfo_sidecars(document, project)),
+            ("two-tone per-slot fidelity", lambda: test_two_tone_slots(document, project)),
             ("import report", test_import_report),
     ):
         before = len(failures)

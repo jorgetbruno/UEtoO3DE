@@ -256,10 +256,20 @@ resolve through their parent's graph with instance parameter values.
 | TwoSided | `general.doubleSided` | |
 | texture sRGB/linear | **filename role suffix** (`_basecolor`/`_normal`/`_roughness`/`_metallic`/`_ao`/`_opacity`) | the Atom image builder's own filemask table picks the preset (measured from ImageBuilder.settings) |
 
-Assignment: a `Material` component per entity, default slot
-(`Default Material|Material Asset`, verified live). The baked FBX carries one
-material slot, so per-slot assignment beyond slot 0 waits on slot fidelity
-(`MAT_SLOTS_FLATTENED` reserved).
+Assignment: a `Material` component per entity. When every mapped slot shares
+one material, the default slot carries it (`Default Material|Material Asset`,
+verified live) — it covers all model slots and does not depend on the model
+asset having streamed in. When slots differ, assignment is **per slot by
+label** (o3dimport's technique): the baked FBX carries the source's material
+list, so the azmodel's slot labels are the **UE material asset names**
+(slot names like `Wood` do not survive the FBX — measured in
+`Tests/ue/probe_slots.py`); `FindMaterialAssignmentId(label)` maps each label
+to a stable id, and the `Model Materials|[i]|Material Asset` row whose
+`Material Slot Stable Id` matches gets that material's `.azmaterial`.
+Importer-side degradations are reported: `MAT_SLOT_UNMATCHED`,
+`MAT_SLOT_LABEL_AMBIGUOUS` (two slots, same material name, different
+materials), `MAT_MODEL_NOT_READY` (model never streamed in; first material
+lands on the default slot instead).
 
 ## Content mapping (later milestones)
 

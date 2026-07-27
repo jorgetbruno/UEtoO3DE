@@ -398,6 +398,34 @@
       "ue_path": "/Game/Meshes/SM_LetterF"
     },
     {
+      "bounds_local": {
+        "max": [
+          0.5,
+          0.25,
+          2.0
+        ],
+        "min": [
+          -0.5,
+          -0.25,
+          0.0
+        ]
+      },
+      "collision": {
+        "shapes": [],
+        "source": "none"
+      },
+      "fbx_node_name": "SM_TwoTone",
+      "guid": "7d80c28a-dc62-5d3e-b230-4a3d7ac950b8",
+      "kind": "static_mesh",
+      "material_slot_names": [
+        "Base",
+        "Top"
+      ],
+      "name": "SM_TwoTone",
+      "o3de_relative_path": "uetoo3de/game/meshes/sm_twotone.fbx",
+      "ue_path": "/Game/Meshes/SM_TwoTone"
+    },
+    {
       "channel": null,
       "guid": "535ce261-aa02-5343-9da2-75c25a5418d5",
       "kind": "texture",
@@ -1498,6 +1526,85 @@
       "ue_class": "StaticMeshActor"
     },
     {
+      "id": "f640da44-7e73-52b6-b7b1-3feb32d1b467",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "7d80c28a-dc62-5d3e-b230-4a3d7ac950b8",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "18b1006f-036c-5469-a38e-2346372328a4",
+            "slot_name": "Base"
+          },
+          {
+            "index": 1,
+            "material_guid": "a4d5d0b1-71e5-5c31-8833-6214c29ad37d",
+            "slot_name": "Top"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "SM_TwoTone",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "7d80c28a-dc62-5d3e-b230-4a3d7ac950b8",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            18.0,
+            0.0,
+            0.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            18.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_9",
+      "ue_class": "StaticMeshActor"
+    },
+    {
       "id": "f0df9421-9360-589e-a7b1-42bb3ab4d2ce",
       "kind": "trigger",
       "mobility": "movable",
@@ -1648,6 +1755,12 @@
       "detail": "BodySetup carries no simple collision primitives",
       "severity": "info",
       "subject": "/Game/Meshes/SM_LetterF"
+    },
+    {
+      "code": "PHYS_NO_SIMPLE_COLLISION",
+      "detail": "BodySetup carries no simple collision primitives",
+      "severity": "info",
+      "subject": "/Game/Meshes/SM_TwoTone"
     }
   ]
 }

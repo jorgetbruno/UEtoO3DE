@@ -153,28 +153,57 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     created = prefab_build.create_entities(document, mesh_asset_ids, report, level_root, log=emit)
     report.count("entities_created", len(created))
 
-    # --- materials (M4): assign the default slot per entity ---
+    # --- materials (M4): per entity, default slot or per-slot by label ---
+    # A model whose mapped slots all share one material takes the default
+    # slot (covers everything, no dependency on the model asset having
+    # streamed in). Distinct materials per slot go through o3dimport's
+    # label-matching technique in assign_material_slots.
+    assets_by_guid = manifest_io.assets_by_guid(document)
     emit("assigning materials (%d converted)" % len(material_asset_ids))
     assigned = 0
+    slots_assigned = 0
     for item in document["entities"]:
         entity_id = created.get(item["id"])
         mesh = item.get("mesh")
         if entity_id is None or mesh is None:
             continue
         slots = mesh.get("material_slots") or []
-        material_guid = slots[0].get("material_guid") if slots else None
-        if material_guid is None or material_guid not in material_asset_ids:
+        mapped = [slot for slot in slots
+                  if slot.get("material_guid") in material_asset_ids]
+        if not mapped:
             continue  # unmapped material: the backend default stays, by design
-        prefab_build.assign_material(entity_id, material_asset_ids[material_guid],
-                                     item["name"])
+        distinct = []
+        for slot in mapped:
+            if slot["material_guid"] not in distinct:
+                distinct.append(slot["material_guid"])
+        if len(distinct) == 1:
+            prefab_build.assign_material(
+                entity_id, material_asset_ids[distinct[0]], item["name"])
+            assigned += 1
+            continue
+        assignments = []
+        labels_seen = {}
+        for slot in mapped:
+            guid = slot["material_guid"]
+            label = assets_by_guid[guid]["name"]
+            if label in labels_seen:
+                if labels_seen[label] != guid:
+                    report.warn("MAT_SLOT_LABEL_AMBIGUOUS", item["name"],
+                                "label %r maps to two materials; first wins"
+                                % label)
+                continue
+            labels_seen[label] = guid
+            assignments.append((label, material_asset_ids[guid]))
+        slots_assigned += prefab_build.assign_material_slots(
+            entity_id, assignments, item["name"], report)
         assigned += 1
     report.count("materials_assigned", assigned)
+    report.count("material_slots_assigned", slots_assigned)
 
     # --- physics authoring, all through the adapter (M3) ---
     # After the meshes: mesh colliders bake from the entity's own render model,
     # which must already be assigned (and its product waited for, above).
     emit("authoring physics through the %r adapter" % adapter.name())
-    assets_by_guid = manifest_io.assets_by_guid(document)
     bodies = 0
     for item in document["entities"]:
         entity_id = created.get(item["id"])
@@ -194,7 +223,9 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # Material components stream their textures in asynchronously as well;
     # serializing while either is mid-flight makes CreatePrefabInMemory throw
     # (measured: cumulative threshold, not tied to any specific entity).
-    general.idle_wait_frames(60 + 5 * bake_count + 5 * assigned)
+    # Per-slot assignments load one material instance each on top of the
+    # per-entity ones, so they scale the wait too.
+    general.idle_wait_frames(60 + 5 * bake_count + 5 * assigned + 5 * slots_assigned)
     report.count("manifest_roots", sum(1 for item in document["entities"]
                                        if item["parent_id"] is None))
     if not created:
@@ -203,16 +234,23 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     emit("saving prefab")
     # One entity, at the origin: the container lands at the origin too, so
     # instantiating the prefab at the origin reproduces the level exactly.
-    try:
-        prefab_build.create_prefab_in_memory([level_root], prefab_path)
-    except RuntimeError:
-        # CreatePrefabInMemory surfaces internal failures as an opaque
-        # exception; on a large level the plausible cause is state still
-        # settling (bakes, asset streaming). One retry after a long settle
-        # distinguishes transient from structural.
-        emit("  CreatePrefabInMemory threw; settling 900 frames and retrying once")
-        general.idle_wait_frames(900)
-        prefab_build.create_prefab_in_memory([level_root], prefab_path)
+    #
+    # CreatePrefabInMemory surfaces internal failures as an opaque exception;
+    # on a large level the plausible cause is state still settling (bakes,
+    # asset streaming -- per-slot material loads raised the bar again on
+    # L_Overview). Escalating settles distinguish transient from structural:
+    # a structural failure survives every settle and still raises.
+    settles = [0, 900, 1800, 3600]
+    for attempt, settle in enumerate(settles):
+        if settle:
+            emit("  CreatePrefabInMemory threw; settling %d frames and retrying" % settle)
+            general.idle_wait_frames(settle)
+        try:
+            prefab_build.create_prefab_in_memory([level_root], prefab_path)
+            break
+        except RuntimeError:
+            if attempt == len(settles) - 1:
+                raise
     prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit)
 
     return report, prefab_path

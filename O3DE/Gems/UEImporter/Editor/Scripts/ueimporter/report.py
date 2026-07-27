@@ -33,6 +33,20 @@ CODES = {
               "created as a transform-only placeholder so the hierarchy and "
               "its position survive."),
 
+    # --- materials (M4 slot fidelity) ---
+    "MAT_SLOT_UNMATCHED": (
+        WARN, "A converted material had no matching slot label on the entity's "
+              "model; that slot keeps the model's own default material. The "
+              "label is the UE material asset name via the FBX."),
+    "MAT_SLOT_LABEL_AMBIGUOUS": (
+        WARN, "Two material slots on one mesh resolve to the same label but "
+              "different materials; only the first can be assigned, because "
+              "the FBX carries material names, not UE slot names."),
+    "MAT_MODEL_NOT_READY": (
+        WARN, "The entity's model asset did not stream in within the wait "
+              "budget, so per-slot assignment fell back to the default slot "
+              "with the first slot's material."),
+
     # --- physics (M3) ---
     "PHYS_SHAPE_APPROXIMATED": (
         WARN, "A collision shape could not be authored exactly on this backend "
