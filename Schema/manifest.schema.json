@@ -16,9 +16,9 @@
   ],
   "properties": {
     "schema_version": {
-      "description": "Bumped whenever a change would break an existing importer. 2 (M2) added assets[].fbx_node_name and units.lane_b_rule; 3 (M4) added material_data and the texture asset kind; 4 (M6) added entities[].environment.",
+      "description": "Bumped whenever a change would break an existing importer. 2 (M2) added assets[].fbx_node_name and units.lane_b_rule; 3 (M4) added material_data and the texture asset kind; 4 (M6) added entities[].environment; 5 (M4 slot fidelity) added assets[].material_slot_material_names.",
       "type": "integer",
-      "const": 4
+      "const": 5
     },
     "generator": {
       "type": "object",
@@ -333,6 +333,13 @@
         },
         "material_data": {
           "$ref": "#/definitions/material_data"
+        },
+        "material_slot_material_names": {
+          "description": "Per slot, the name of the MESH ASSET's own material -- what the baked FBX carries and therefore what the azmodel's slot label is. Distinct from the entity's effective material, which a component override can change (plan M4 slot fidelity).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

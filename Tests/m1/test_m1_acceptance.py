@@ -373,6 +373,24 @@ def assert_two_tone_slots(document):
     check(all(guids) and len(set(guids)) == 2,
           "SM_TwoTone slots do not carry two distinct materials: %r" % guids)
 
+    # The actor OVERRIDES a slot, so its effective material differs from the
+    # mesh asset's own. That difference is the whole point of the canary: the
+    # FBX carries the ASSET's material names, so an importer that matches a
+    # slot by its effective material name finds nothing. Without an override
+    # the two names coincide and the bug is invisible -- which is exactly how
+    # it reached a real level and silently un-styled 97 trees.
+    assets = {asset["guid"]: asset for asset in document["assets"]}
+    mesh_asset = assets.get(entity["mesh"]["asset_guid"], {})
+    asset_slot_names = mesh_asset.get("material_slot_material_names") or []
+    check(len(asset_slot_names) == 2,
+          "SM_TwoTone's mesh asset should record 2 slot material names, got %r"
+          % (asset_slot_names,))
+    effective = [assets[guid]["name"] for guid in guids]
+    check(asset_slot_names != effective,
+          "SM_TwoTone's effective materials %r match its asset's slot materials "
+          "%r; the actor's material override is gone and the label-vs-override "
+          "distinction is untested" % (effective, asset_slot_names))
+
 
 def assert_light_units_covered(document):
     """Every intensity-unit mode M5 converts must exist in the fixture.

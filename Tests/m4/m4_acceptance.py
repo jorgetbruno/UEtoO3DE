@@ -93,8 +93,26 @@ def main():
         elif len(distinct) == 1:
             expected[item["name"]] = ("default", product_of(distinct[0]))
         else:
-            expected[item["name"]] = ("slots", [(m["name"], product_of(m))
-                                                for m in distinct])
+            # The slot LABEL comes from the mesh asset's own material for that
+            # slot (what the FBX carries), while the expected MATERIAL is the
+            # entity's effective one -- they differ wherever a component
+            # override is in play, which is the case this asserts.
+            mesh_asset = assets_by_guid.get(mesh["asset_guid"], {})
+            asset_slot_names = mesh_asset.get("material_slot_material_names") or []
+            pairs = []
+            seen = set()
+            for slot in slots:
+                material = assets_by_guid.get(slot.get("material_guid") or "")
+                if not material or not material.get("material_data"):
+                    continue
+                index = slot.get("index", 0)
+                label = (asset_slot_names[index] if index < len(asset_slot_names)
+                         else "") or material["name"]
+                if label in seen:
+                    continue
+                seen.add(label)
+                pairs.append((label, product_of(material)))
+            expected[item["name"]] = ("slots", pairs)
 
     project_root = general.get_game_folder().rstrip('/\\')
     prefab_path = os.path.join(project_root, *PREFAB_REL_PATH.split('/')).replace(os.sep, '/')

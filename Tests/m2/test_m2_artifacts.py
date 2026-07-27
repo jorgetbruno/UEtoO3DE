@@ -293,6 +293,12 @@ def test_two_tone_slots(document, project):
     .azmaterial products. The default-slot mechanism can only ever carry one
     material per entity, so two distinct hints inside one entity is the
     signature of per-slot assignment having landed.
+
+    The two lists deliberately DIFFER: the actor overrides slot 1, so the FBX
+    carries the mesh asset's materials (PBR + ORM) while the prefab must carry
+    the effective ones (PBR + Masked). An importer that matched slots by the
+    effective material name would find no label and assign nothing -- the bug
+    L_Showcase exposed on 97 trees.
     """
     asset = next((a for a in document["assets"]
                   if a["ue_path"] == "/Game/Meshes/SM_TwoTone"), None)
@@ -321,12 +327,16 @@ def test_two_tone_slots(document, project):
             break
     if not check(subtree is not None, "prefab has no SM_TwoTone entity"):
         return
-    for hint in ("m_fixture_pbr.azmaterial", "m_fixture_orm.azmaterial"):
+    # The EFFECTIVE materials, after the actor's slot-1 override.
+    for hint in ("m_fixture_pbr.azmaterial", "m_fixture_masked.azmaterial"):
         check(hint in subtree,
               "SM_TwoTone's prefab entity does not reference %s; per-slot "
               "assignment did not land" % hint)
-    print("  FBX carries both material names; prefab entity references both "
-          "azmaterials")
+    check("m_fixture_orm.azmaterial" not in subtree,
+          "SM_TwoTone's prefab entity references the mesh asset's ORM material; "
+          "the actor's slot-1 override was ignored")
+    print("  FBX carries the asset's material names; prefab carries the "
+          "effective (overridden) ones")
 
 
 def test_import_report(document):

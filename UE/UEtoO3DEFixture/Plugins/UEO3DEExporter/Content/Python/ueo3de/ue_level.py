@@ -332,8 +332,17 @@ class AssetTable:
                                              _vec3(_field(box, "max")))
 
         slot_names = []
+        # The material NAMES the baked FBX will carry, per slot. These are the
+        # mesh asset's own materials -- NOT the actor's effective ones, which
+        # may be overridden per component. They are what SceneAPI turns into
+        # the azmodel's slot labels, so they are what the importer matches on.
+        # (UE slot names like "Bark" do not survive the FBX; material asset
+        # names do -- measured in Tests/ue/probe_slots.py.)
+        slot_material_names = []
         for slot in _field(mesh, "static_materials", []) or []:
             slot_names.append(_name_str(_field(slot, "material_slot_name")))
+            material = _field(slot, "material_interface")
+            slot_material_names.append(material.get_name() if material else "")
 
         self._entries[guid] = {
             "guid": guid,
@@ -350,6 +359,7 @@ class AssetTable:
             "bounds_local": {"min": aabb_min, "max": aabb_max},
             "collision": {"source": source, "shapes": shapes},
             "material_slot_names": slot_names,
+            "material_slot_material_names": slot_material_names,
         }
         return guid
 

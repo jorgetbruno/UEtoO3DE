@@ -191,16 +191,27 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                 entity_id, material_asset_ids[distinct[0]], item["name"])
             assigned += 1
             continue
+        # The LABEL is the mesh asset's own material name for that slot -- that
+        # is what the baked FBX carries and what the azmodel slot is called.
+        # The MATERIAL is the entity's effective one, which a component
+        # override may have changed. Keying the label off the effective
+        # material instead is the bug L_Showcase exposed: every tree overrides
+        # its leaf material per instance, so no label ever matched and 97
+        # entities silently kept the asset's default.
+        mesh_asset = assets_by_guid.get(mesh["asset_guid"], {})
+        asset_slot_names = mesh_asset.get("material_slot_material_names") or []
         assignments = []
         labels_seen = {}
         for slot in mapped:
             guid = slot["material_guid"]
-            label = assets_by_guid[guid]["name"]
+            index = slot.get("index", 0)
+            label = (asset_slot_names[index] if index < len(asset_slot_names)
+                     else "") or assets_by_guid[guid]["name"]
             if label in labels_seen:
                 if labels_seen[label] != guid:
                     report.warn("MAT_SLOT_LABEL_AMBIGUOUS", item["name"],
-                                "label %r maps to two materials; first wins"
-                                % label)
+                                "slot label %r covers two different materials; "
+                                "only the first can be assigned" % label)
                 continue
             labels_seen[label] = guid
             assignments.append((label, material_asset_ids[guid]))

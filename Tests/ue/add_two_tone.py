@@ -21,6 +21,7 @@ MAP_PATH = "/Game/Maps/Fixture_01"
 SM_TWOTONE_PATH = "/Game/Meshes/SM_TwoTone"
 MAT_PBR = "/Game/Materials/M_Fixture_PBR"
 MAT_ORM = "/Game/Materials/M_Fixture_ORM"
+MAT_MASKED = "/Game/Materials/M_Fixture_Masked"
 RESULT_TAG = "ADD_TWO_TONE"
 
 
@@ -103,6 +104,19 @@ def place_actor(mesh):
     smc = actor.static_mesh_component
     smc.set_static_mesh(mesh)
     smc.set_mobility(unreal.ComponentMobility.STATIC)
+
+    # Slot 1 is OVERRIDDEN on the component, so the effective material differs
+    # from the mesh asset's own. This is how one tree mesh becomes many species
+    # in a real level, and it is the case that broke per-slot assignment on
+    # L_Showcase: the baked FBX carries the ASSET's material names, so matching
+    # a slot by its *effective* material name never finds it. Without an
+    # override here the fixture cannot tell the two names apart.
+    override = unreal.EditorAssetLibrary.load_asset(MAT_MASKED)
+    if override is None:
+        raise RuntimeError("missing " + MAT_MASKED)
+    smc.set_material(1, override)
+    log("slot 1 overridden with %s (asset slot 1 is M_Fixture_ORM)"
+        % override.get_name())
 
     if not level_sub.save_current_level():
         raise RuntimeError("failed to save level " + MAP_PATH)
