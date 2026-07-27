@@ -1,0 +1,20 @@
+# --- Unreal Engine ---
+UE/**/Binaries/
+UE/**/Intermediate/
+UE/**/Saved/
+UE/**/DerivedDataCache/
+UE/Build/
+
+# --- O3DE ---
+O3DE/**/build/
+O3DE/**/Cache/
+O3DE/**/user/
+O3DE/**/log/
+
+# --- Python ---
+__pycache__/
+*.pyc
+
+# --- Test results ---
+Tests/**/results/
+ue-to-o3de-milestone-plan-v2.md

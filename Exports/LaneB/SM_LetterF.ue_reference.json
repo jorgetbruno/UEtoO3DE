@@ -1,0 +1,40 @@
+{
+  "actor_transform": {
+    "location": [
+      1500.0,
+      0.0,
+      0.0
+    ],
+    "rotation_rotator_pitch_yaw_roll": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "scale": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "bounds_max": [
+    50.0,
+    12.5,
+    200.0
+  ],
+  "bounds_min": [
+    -50.0,
+    -12.5,
+    0.0
+  ],
+  "centroid": [
+    0.0,
+    0.0,
+    132.5
+  ],
+  "coordinate_system": "UE asset space: centimeters, Z-up, left-handed",
+  "fbx_path": "D:/Gamedev/UEtoO3DE/Exports/LaneB/SM_LetterF.fbx",
+  "mesh_asset_path": "/Game/Meshes/SM_LetterF.SM_LetterF",
+  "notes": "UE-side reference for S0.2 / Lane B. FBX exported with UE default FbxExportOption (no axis/unit customization). Compare against O3DE SceneAPI output to lock the .assetinfo correction in LANE_B.md.",
+  "units": "cm",
+  "vertex_count": 72
+}

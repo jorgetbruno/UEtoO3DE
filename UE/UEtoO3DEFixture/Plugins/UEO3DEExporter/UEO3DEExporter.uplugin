@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "UEO3DEExporter",
+	"Description": "Exports UE levels and assets to the UEtoO3DE interchange manifest (O3DE 26.05 target).",
+	"Category": "UEtoO3DE",
+	"CreatedBy": "UEtoO3DE",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "UEO3DEExporter",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}

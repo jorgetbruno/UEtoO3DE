@@ -1,0 +1,39 @@
+# UEtoO3DE
+
+Unreal Engine level/asset porter targeting **O3DE 26.05** (engine `2.6.0`), with selectable
+physics backends: the **JoltPhysics gem** and stock **PhysX**. Scope: assets + scene layout +
+physics. Blueprints/gameplay logic are out of scope.
+
+The milestone plan (`ue-to-o3de-milestone-plan-v2.md`) is the source of truth. Work proceeds one
+milestone per session; each session starts from that file.
+
+## Environment pins
+
+- **UE 5.8** at `D:\Epic Games\UE_5.8` (one pinned version, no version-conditional code).
+- **O3DE 26.05** SDK at `C:\O3DE\26.05` (engine `o3de-sdk`, version `2.6.0`).
+- **JoltPhysics gem** at `C:\Users\jorge\O3DE\Gems\JoltPhysics`.
+- cmake: bundled with VS 2022 — `C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin` (not on PATH by default).
+
+## Layout
+
+- `UE/UEtoO3DEFixture/` — UE 5.8 fixture project hosting the `Fixture_01` acceptance level.
+  - `Plugins/UEO3DEExporter/` — the exporter editor plugin (build:
+    `RunUAT.bat BuildPlugin -Plugin=<path>.uplugin -Package=UE/Build/UEO3DEExporter -TargetPlatforms=Win64`,
+    then copy `UE/Build/UEO3DEExporter/Binaries` into the plugin folder).
+- `Tests/ue/` — UE Editor Python scripts (fixture builder, S0.2 export) + `run_ue_python.bat`.
+- `Tests/o3de/` — O3DE headless test scripts + `run_s0_1.bat`.
+- `Exports/` — interchange output (manifest, FBX, textures; generated, not committed).
+- `MAPPING.md` / `LANE_B.md` / `DIVERGENCES.md` — the documentation contract defined by the plan.
+
+## O3DE test projects (outside this repo, per O3DE convention)
+
+- `C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt` — JoltPhysics enabled, PhysX5 disabled,
+  EditorPythonBindings enabled. Build: `cmake -S . -B build/windows -G "Visual Studio 17 2022"`,
+  `cmake --build build/windows --config profile --parallel`.
+- `UEtoO3DETest-PhysX` — arrives in M3b.
+
+## Headless test pattern (Global Constraint 10)
+
+`Editor.exe --project-path=<proj> -BatchMode -autotest_mode --runpython <test>.py` — the script
+writes `RESULT: PASS`/`RESULT: FAIL` to a result file and CI asserts on the **process exit code**,
+never on console text.
