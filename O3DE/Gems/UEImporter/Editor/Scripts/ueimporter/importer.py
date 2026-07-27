@@ -43,7 +43,7 @@ def stage_only(manifest_path, source_assets_root, project_assets_root, log=None)
 
 def import_level(manifest_path, source_assets_root, project_assets_root,
                  prefab_path, level_name="DefaultLevel", asset_timeout=180.0,
-                 restage=False, backend=None, log=None):
+                 restage=False, backend=None, log=None, max_entities=None):
     """Import a manifest into a saved `.prefab`. Returns (report, prefab_path).
 
     `backend` is the explicit physics backend name ('jolt'/'physx') or None to
@@ -65,6 +65,19 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
 
     report = Report()
     document = manifest_io.load(manifest_path)
+    skip_indices = {int(i) for i in os.environ.get("UEO3DE_SKIP", "").split(",") if i.strip()}
+    if skip_indices:
+        document = dict(document)
+        document["entities"] = [e for i, e in enumerate(document["entities"])
+                                if i not in skip_indices]
+    if max_entities is not None:
+        # Diagnostic bisect knob (UEO3DE_MAX_ENTITIES): import only the first
+        # N entities to localize scale- or content-dependent failures.
+        keep = {e["id"] for e in document["entities"][:max_entities]}
+        document = dict(document)
+        document["entities"] = [e for e in document["entities"]
+                                if e["id"] in keep and
+                                (e["parent_id"] is None or e["parent_id"] in keep)]
 
     # An open level comes FIRST: prefab authoring needs a root prefab instance
     # (S0.1), and the adapter's resolve step creates a scratch entity to read
@@ -178,7 +191,10 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # serializing mid-bake made CreatePrefabInMemory throw on a 135-collider
     # level, so the wait scales with the bake count.
     bake_count = report.counters.get("mesh_colliders", 0)
-    general.idle_wait_frames(60 + 5 * bake_count)
+    # Material components stream their textures in asynchronously as well;
+    # serializing while either is mid-flight makes CreatePrefabInMemory throw
+    # (measured: cumulative threshold, not tied to any specific entity).
+    general.idle_wait_frames(60 + 5 * bake_count + 5 * assigned)
     report.count("manifest_roots", sum(1 for item in document["entities"]
                                        if item["parent_id"] is None))
     if not created:
@@ -194,8 +210,8 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         # exception; on a large level the plausible cause is state still
         # settling (bakes, asset streaming). One retry after a long settle
         # distinguishes transient from structural.
-        emit("  CreatePrefabInMemory threw; settling 300 frames and retrying once")
-        general.idle_wait_frames(300)
+        emit("  CreatePrefabInMemory threw; settling 900 frames and retrying once")
+        general.idle_wait_frames(900)
         prefab_build.create_prefab_in_memory([level_root], prefab_path)
     prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit)
 

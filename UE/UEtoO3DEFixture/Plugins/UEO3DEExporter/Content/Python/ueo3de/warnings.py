@@ -55,6 +55,10 @@ CODES = {
         WARN, "A material property is driven by an expression outside the v1 "
               "subset. If the property is base colour the whole material falls "
               "back to the default; otherwise only that property is dropped."),
+    "MAT_FUNCTION_PASSTHROUGH": (
+        INFO, "A channel driven by unsupported math (function call, contrast, "
+              "desaturation, blend chain) was approximated by the nearest "
+              "texture beneath it; the surrounding math is dropped."),
     "MAT_BLEND_UNSUPPORTED": (
         WARN, "UE blend mode outside Opaque/Masked/Translucent; imported as "
               "translucent."),

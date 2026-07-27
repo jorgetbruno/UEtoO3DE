@@ -175,6 +175,26 @@
     },
     {
       "channel": null,
+      "guid": "9d60127a-6431-50ca-b015-09b2373c0920",
+      "kind": "texture",
+      "name": "T_Default_Material_Grid_M",
+      "o3de_relative_path": "uetoo3de/engine/enginematerials/t_default_material_grid_m_basecolor.tga",
+      "role": "basecolor",
+      "srgb": false,
+      "ue_path": "/Engine/EngineMaterials/T_Default_Material_Grid_M"
+    },
+    {
+      "channel": null,
+      "guid": "4feda99a-0e0e-510a-a942-d221c135104a",
+      "kind": "texture",
+      "name": "T_Default_Material_Grid_M",
+      "o3de_relative_path": "uetoo3de/engine/enginematerials/t_default_material_grid_m_roughness.tga",
+      "role": "roughness",
+      "srgb": false,
+      "ue_path": "/Engine/EngineMaterials/T_Default_Material_Grid_M"
+    },
+    {
+      "channel": null,
       "guid": "3844f4e3-08bc-584b-9610-b1b09f6ee664",
       "kind": "texture",
       "name": "T_Default_Material_Grid_N",
@@ -186,7 +206,34 @@
     {
       "guid": "ac600dba-cba5-588e-9298-8024d45e8143",
       "kind": "material",
-      "material_data": null,
+      "material_data": {
+        "blend_mode": "opaque",
+        "properties": {
+          "base_color": {
+            "channel": null,
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "9d60127a-6431-50ca-b015-09b2373c0920"
+          },
+          "normal": {
+            "channel": null,
+            "factor": [
+              0.3,
+              0.3,
+              1.0
+            ],
+            "source": "texture",
+            "texture_guid": "3844f4e3-08bc-584b-9610-b1b09f6ee664"
+          },
+          "roughness": {
+            "channel": null,
+            "factor": null,
+            "source": "texture",
+            "texture_guid": "4feda99a-0e0e-510a-a942-d221c135104a"
+          }
+        },
+        "two_sided": false
+      },
       "name": "WorldGridMaterial",
       "o3de_relative_path": "uetoo3de/engine/enginematerials/worldgridmaterial.material",
       "ue_path": "/Engine/EngineMaterials/WorldGridMaterial"
@@ -1568,33 +1615,27 @@
     },
     {
       "code": "MAT_EXPR_UNSUPPORTED",
-      "detail": "base colour unmappable; entities keep the default material",
-      "severity": "warn",
-      "subject": "/Engine/EngineMaterials/WorldGridMaterial"
-    },
-    {
-      "code": "MAT_EXPR_UNSUPPORTED",
-      "detail": "basecolor: Multiply without a recognizable texture*constant shape",
-      "severity": "warn",
-      "subject": "/Engine/EngineMaterials/WorldGridMaterial"
-    },
-    {
-      "code": "MAT_EXPR_UNSUPPORTED",
-      "detail": "roughness driven by MaterialExpressionClamp",
-      "severity": "warn",
-      "subject": "/Engine/EngineMaterials/WorldGridMaterial"
-    },
-    {
-      "code": "MAT_EXPR_UNSUPPORTED",
-      "detail": "base colour unmappable; entities keep the default material",
-      "severity": "warn",
-      "subject": "/Game/Materials/M_Fixture_Unsupported"
-    },
-    {
-      "code": "MAT_EXPR_UNSUPPORTED",
       "detail": "basecolor driven by MaterialExpressionLinearInterpolate",
       "severity": "warn",
       "subject": "/Game/Materials/M_Fixture_Unsupported"
+    },
+    {
+      "code": "MAT_EXPR_UNSUPPORTED",
+      "detail": "no property could be mapped; entities keep the default material",
+      "severity": "warn",
+      "subject": "/Game/Materials/M_Fixture_Unsupported"
+    },
+    {
+      "code": "MAT_FUNCTION_PASSTHROUGH",
+      "detail": "basecolor: Multiply approximated by the nearest texture beneath it",
+      "severity": "info",
+      "subject": "/Engine/EngineMaterials/WorldGridMaterial"
+    },
+    {
+      "code": "MAT_FUNCTION_PASSTHROUGH",
+      "detail": "roughness: MaterialExpressionClamp approximated by the nearest texture beneath it",
+      "severity": "info",
+      "subject": "/Engine/EngineMaterials/WorldGridMaterial"
     },
     {
       "code": "PHYS_DEGENERATE_SHAPE",

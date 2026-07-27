@@ -57,7 +57,13 @@ _PROPERTIES = (
 )
 
 _TEXTURE_KINDS = ("MaterialExpressionTextureSample",
-                  "MaterialExpressionTextureSampleParameter2D")
+                  "MaterialExpressionTextureSampleParameter2D",
+                  # Texture OBJECTS: how master-material functions receive
+                  # their textures (the function samples internally). At the
+                  # call site the input expression is the object, and it
+                  # carries the same parameter/texture identity.
+                  "MaterialExpressionTextureObjectParameter",
+                  "MaterialExpressionTextureObject")
 _SCALAR_KINDS = ("MaterialExpressionConstant", "MaterialExpressionScalarParameter")
 _COLOR_KINDS = ("MaterialExpressionConstant3Vector", "MaterialExpressionConstant4Vector",
                 "MaterialExpressionVectorParameter")
@@ -147,6 +153,39 @@ def _follow(master, node, instance):
     return node, channel_hint
 
 
+def _find_texture(master, node, instance, max_nodes=64, max_depth=8):
+    """Nearest texture expression beneath `node`, input-order DFS, bounded.
+
+    Master materials bury the channel's texture under arbitrary value math
+    (Desaturation, nested Multiplies, contrast helpers -- measured shape in
+    probe_m4_tree). Enumerating those node kinds is a losing game; what the
+    channel IS is its texture, and the math is an approximation the report
+    makes visible. Returns (texture_node, channel_hint) or (None, None).
+    """
+    mel = unreal.MaterialEditingLibrary
+    stack = [(node, 0, None)]
+    visited = 0
+    while stack and visited < max_nodes:
+        current, depth, hint = stack.pop(0)
+        current, follow_hint = _follow(master, current, instance)
+        if current is None:
+            continue
+        visited += 1
+        hint = follow_hint or hint
+        if _expression_kind(current) in _TEXTURE_KINDS:
+            return current, hint
+        if depth >= max_depth:
+            continue
+        try:
+            inputs = list(mel.get_inputs_for_material_expression(master, current) or [])
+        except Exception:
+            continue
+        for part in inputs:
+            if part is not None:
+                stack.append((part, depth + 1, hint))
+    return None, None
+
+
 def _base_material_and_instance(material):
     """(master Material for graph reading, leaf instance for parameter values)."""
     if isinstance(material, unreal.MaterialInstance):
@@ -188,9 +227,10 @@ def _color_of(node, instance):
 
 def _texture_of(node, instance):
     kind = _expression_kind(node)
-    if kind == "MaterialExpressionTextureSample":
+    if kind in ("MaterialExpressionTextureSample", "MaterialExpressionTextureObject"):
         return node.get_editor_property("texture")
-    if kind == "MaterialExpressionTextureSampleParameter2D":
+    if kind in ("MaterialExpressionTextureSampleParameter2D",
+                "MaterialExpressionTextureObjectParameter"):
         name = node.get_editor_property("parameter_name")
         if instance is not None:
             found = (unreal.MaterialEditingLibrary
@@ -286,7 +326,7 @@ def classify_property(master, instance, prop_enum, bank, role_suffix, warnings, 
 
 
 def classify_expression(master, instance, node, output_name, bank, role_suffix,
-                        warnings, subject):
+                        warnings, subject, depth=0):
     """Classify an expression feeding a property-shaped input."""
     mel = unreal.MaterialEditingLibrary
     node, channel_hint = _follow(master, node, instance)
@@ -317,6 +357,79 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
     if color is not None:
         return {"source": "color", "value": color}
 
+    if kind == "MaterialExpressionMaterialFunctionCall":
+        # Master materials wrap channels in helper functions (CheapContrast,
+        # tint, detail-blend, ...). The function body is not walkable through
+        # MEL, but the channel's identity is whatever feeds the call's primary
+        # input -- measured shape: CheapContrast_RGB(In=Multiply(texture,...),
+        # Contrast=param). So the call's inputs are classified RECURSIVELY,
+        # primary-named pins first, and the first texture-yielding one wins;
+        # the function's own math is dropped and visibly reported.
+        if depth >= 4:
+            warnings.add("MAT_EXPR_UNSUPPORTED", subject,
+                         "%s: function calls nested deeper than 4" % role_suffix)
+            return None
+        try:
+            names = [str(n) for n in
+                     (mel.get_material_expression_input_names(node) or [])]
+        except Exception:
+            names = []
+        try:
+            inputs = list(mel.get_inputs_for_material_expression(master, node) or [])
+        except Exception:
+            inputs = []
+
+        def priority(pair):
+            name = pair[0].lower()
+            for rank, key in enumerate(("in", "input", "texture", "base", "albedo", "a")):
+                if name == key:
+                    return rank
+            return 99
+
+        pairs = sorted(zip(names + ["?"] * (len(inputs) - len(names)), inputs),
+                       key=priority)
+        function_asset = node.get_editor_property("material_function")
+        function_name = function_asset.get_name() if function_asset else "function"
+
+        from .warnings import Warnings as _ScratchWarnings
+        fallback_spec = None
+        for name, part in pairs:
+            if part is None:
+                continue
+            scratch = _ScratchWarnings()
+            spec = classify_expression(master, instance, part, output_name, bank,
+                                       role_suffix, scratch, subject, depth + 1)
+            if spec is not None and spec.get("source") == "texture":
+                warnings.add("MAT_FUNCTION_PASSTHROUGH", subject,
+                             "%s: %s approximated by its %r input"
+                             % (role_suffix, function_name, name))
+                return spec
+            if spec is not None and fallback_spec is None and priority((name, part)) < 99:
+                fallback_spec = (spec, name)
+        if fallback_spec is not None:
+            spec, name = fallback_spec
+            warnings.add("MAT_FUNCTION_PASSTHROUGH", subject,
+                         "%s: %s approximated by its %r input (non-texture)"
+                         % (role_suffix, function_name, name))
+            return spec
+        texture_node, hint = _find_texture(master, node, instance)
+        if texture_node is not None:
+            texture = _texture_of(texture_node, instance)
+            if texture is not None:
+                channel = output_name if output_name in ("R", "G", "B", "A") else hint
+                if channel is not None and role_suffix in ("basecolor", "normal"):
+                    channel = None
+                warnings.add("MAT_FUNCTION_PASSTHROUGH", subject,
+                             "%s: %s approximated by the nearest texture beneath it"
+                             % (role_suffix, function_name))
+                entry = bank.request(texture, role_suffix, channel)
+                return {"source": "texture", "texture_guid": entry["guid"],
+                        "channel": channel, "factor": None}
+        warnings.add("MAT_EXPR_UNSUPPORTED", subject,
+                     "%s driven by %s with no classifiable input"
+                     % (role_suffix, function_name))
+        return None
+
     if kind == "MaterialExpressionMultiply":
         inputs = mel.get_inputs_for_material_expression(master, node)
         # Follow wrappers on each operand too: real masters put Reroutes and
@@ -325,6 +438,16 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
                  for p in (inputs or []) if p is not None]
         texture_node = next((p for p in parts if p is not None
                              and _expression_kind(p) in _TEXTURE_KINDS), None)
+        if texture_node is None:
+            # An operand may itself be a wrapper function around the texture
+            # (normal-flatten helpers etc.); recurse through the classifier,
+            # which handles the single-texture-input passthrough.
+            for part in parts:
+                if part is not None and _expression_kind(part) == "MaterialExpressionMaterialFunctionCall":
+                    spec = classify_expression(master, instance, part, output_name,
+                                               bank, role_suffix, warnings, subject, depth + 1)
+                    if spec is not None and spec.get("source") == "texture":
+                        return spec
         factor_node = next((p for p in parts if p is not None
                             and (_scalar_of(p, instance) is not None
                                  or _color_of(p, instance) is not None)), None)
@@ -339,10 +462,40 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
                         factor = _color_of(factor_node, instance)
                 return {"source": "texture", "texture_guid": entry["guid"],
                         "channel": None, "factor": factor}
+        texture_node, hint = _find_texture(master, node, instance)
+        if texture_node is not None:
+            texture = _texture_of(texture_node, instance)
+            if texture is not None:
+                channel = output_name if output_name in ("R", "G", "B", "A") else hint
+                if channel is not None and role_suffix in ("basecolor", "normal"):
+                    channel = None
+                warnings.add("MAT_FUNCTION_PASSTHROUGH", subject,
+                             "%s: Multiply approximated by the nearest texture "
+                             "beneath it" % role_suffix)
+                entry = bank.request(texture, role_suffix, channel)
+                return {"source": "texture", "texture_guid": entry["guid"],
+                        "channel": channel, "factor": None}
         warnings.add("MAT_EXPR_UNSUPPORTED", subject,
                      "%s: Multiply without a recognizable texture*constant shape"
                      % role_suffix)
         return None
+
+    # Last resort before dropping the channel: the nearest texture in the
+    # subtree, with the surrounding math dropped and reported. A channel with
+    # no texture anywhere beneath it stays unmapped.
+    texture_node, hint = _find_texture(master, node, instance)
+    if texture_node is not None:
+        texture = _texture_of(texture_node, instance)
+        if texture is not None:
+            channel = output_name if output_name in ("R", "G", "B", "A") else hint
+            if channel is not None and role_suffix in ("basecolor", "normal"):
+                channel = None
+            warnings.add("MAT_FUNCTION_PASSTHROUGH", subject,
+                         "%s: %s approximated by the nearest texture beneath it"
+                         % (role_suffix, kind))
+            entry = bank.request(texture, role_suffix, channel)
+            return {"source": "texture", "texture_guid": entry["guid"],
+                    "channel": channel, "factor": None}
 
     warnings.add("MAT_EXPR_UNSUPPORTED", subject,
                  "%s driven by %s" % (role_suffix, kind))
@@ -430,6 +583,11 @@ def build_material_data(material, bank, warnings):
             spec = classify_property(master, instance, prop, bank, role, warnings, subject)
             if spec is not None:
                 properties[key] = spec
+
+    if not properties:
+        warnings.add("MAT_EXPR_UNSUPPORTED", subject,
+                     "no property could be mapped; entities keep the default material")
+        return None
 
     if "base_color" not in properties:
         driven = unreal.MaterialEditingLibrary.get_material_property_input_node(

@@ -208,16 +208,22 @@ def build_materials(tex_basecolor, tex_normal, tex_orm, tex_scalar):
     mel.recompile_material(mat)
     save_asset(path)
 
-    # --- M_Fixture_Unsupported: Lerp driven by vertex color (outside the subset) ---
+    # --- M_Fixture_Unsupported: Lerp of vertex color and constants ---
+    # Deliberately WITHOUT any texture anywhere beneath BaseColor: M4's
+    # texture-DFS approximation legitimately rescues texture-bearing graphs
+    # (that is how real foliage converts), so a canary with a texture in its
+    # Lerp converts too and tests nothing. Vertex color + constants cannot be
+    # approximated by any texture, present or future.
     mat, path = _new_material("M_Fixture_Unsupported")
-    ts = _tex_sample(mat, tex_basecolor, -900, 0)
+    vcol = mel.create_material_expression(mat, unreal.MaterialExpressionVertexColor, -900, 0)
     const_b = mel.create_material_expression(mat, unreal.MaterialExpressionConstant3Vector, -900, 300)
-    const_b.set_editor_property("constant", unreal.LinearColor(1.0, 0.0, 0.0, 1.0))
-    vcol = mel.create_material_expression(mat, unreal.MaterialExpressionVertexColor, -900, 600)
+    const_b.set_editor_property("constant", unreal.LinearColor(0.0, 0.5, 1.0, 1.0))
+    alpha = mel.create_material_expression(mat, unreal.MaterialExpressionConstant, -900, 600)
+    alpha.set_editor_property("r", 0.5)
     lerp = mel.create_material_expression(mat, unreal.MaterialExpressionLinearInterpolate, -400, 100)
-    mel.connect_material_expressions(ts, "RGB", lerp, "A")
+    mel.connect_material_expressions(vcol, "", lerp, "A")
     mel.connect_material_expressions(const_b, "", lerp, "B")
-    mel.connect_material_expressions(vcol, "", lerp, "Alpha")
+    mel.connect_material_expressions(alpha, "", lerp, "Alpha")
     _connect_prop(lerp, "", unreal.MaterialProperty.MP_BASE_COLOR)
     mel.recompile_material(mat)
     save_asset(path)

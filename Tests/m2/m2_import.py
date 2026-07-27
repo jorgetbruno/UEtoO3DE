@@ -65,6 +65,7 @@ def main():
     # Physics backend: explicit via UEO3DE_BACKEND, else detected. Detection
     # refuses to guess when both backends resolve (constraint 5).
     backend = os.environ.get("UEO3DE_BACKEND", "").strip() or None
+    max_entities = int(os.environ.get("UEO3DE_MAX_ENTITIES", "0") or 0) or None
 
     report, saved = importer.import_level(
         manifest_path=MANIFEST_PATH,
@@ -72,6 +73,7 @@ def main():
         project_assets_root=project_assets,
         prefab_path=prefab_path,
         backend=backend,
+        max_entities=max_entities,
         log=log)
 
     log("")
