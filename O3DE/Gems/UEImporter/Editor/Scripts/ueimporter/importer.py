@@ -26,6 +26,62 @@ from . import staging
 from .report import Report
 
 
+def chunk_of(document, index, count):
+    """The `index`-th of `count` slices of a manifest, split by whole subtrees.
+
+    A level can be too large to import as one prefab. Measured on a 44,504-entity
+    marketplace city: 4,000 entities import in 126 s at a 4.8 GB peak, and
+    12,000 kills the editor outright during `saving prefab` (no assert, no
+    log line, exit 0xC0000409). Nothing about that is going to be fixed by
+    waiting longer, so the level has to arrive as several prefabs.
+
+    Split by ROOT SUBTREE, never by entity index. An index range would cut
+    parents away from their children, and a child whose parent is missing
+    either vanishes or lands at the level root -- a building's windows
+    scattered at the origin, in a prefab that saved cleanly. Slicing whole
+    subtrees means every entity keeps the parent it was exported with.
+
+    Bins are filled largest-subtree-first onto the currently-emptiest bin, so
+    chunks come out close to even (this level: 1051 roots, largest subtree 646
+    entities, 674 of them singletons) without any bin exceeding what one import
+    can hold.
+
+    Guarantees, asserted by `Tests/perf/test_chunk.py`: every entity appears in
+    exactly one chunk, no subtree is split across chunks, and the chunks
+    reassemble to the original entity set.
+    """
+    entities = document["entities"]
+    children = {}
+    for entity in entities:
+        children.setdefault(entity["parent_id"], []).append(entity)
+
+    def subtree(root):
+        out = [root]
+        stack = [root["id"]]
+        while stack:
+            for child in children.get(stack.pop(), ()):
+                out.append(child)
+                stack.append(child["id"])
+        return out
+
+    # Manifest order decides ties, so the same manifest always splits the same
+    # way -- a chunk that moved between runs would make re-import meaningless.
+    groups = [subtree(root) for root in children.get(None, ())]
+    groups.sort(key=lambda g: (-len(g), g[0]["id"]))
+
+    bins = [[] for _ in range(count)]
+    sizes = [0] * count
+    for group in groups:
+        target = sizes.index(min(sizes))
+        bins[target].extend(group)
+        sizes[target] += len(group)
+
+    keep = {entity["id"] for entity in bins[index]}
+    sliced = dict(document)
+    sliced["entities"] = [e for e in entities if e["id"] in keep]
+    return sliced
+
+
 def settle_frames(bake_count, skeletal_authored):
     """Frames to idle after authoring, before serializing the prefab.
 
@@ -158,6 +214,19 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         document = dict(document)
         document["entities"] = [e for i, e in enumerate(document["entities"])
                                 if i not in skip_indices]
+    # UEO3DE_CHUNK=i/n -- import only the i-th of n slices (1-based), split by
+    # whole subtrees. For levels no single prefab can hold; see `chunk_of`.
+    chunk = os.environ.get("UEO3DE_CHUNK", "").strip()
+    if chunk:
+        index, _, total = chunk.partition("/")
+        index, total = int(index), int(total)
+        if not (total >= 1 and 1 <= index <= total):
+            raise ValueError("UEO3DE_CHUNK must be i/n with 1 <= i <= n, got %r"
+                             % chunk)
+        document = chunk_of(document, index - 1, total)
+        emit("UEO3DE_CHUNK=%s -- %d of this manifest's entities"
+             % (chunk, len(document["entities"])))
+
     if max_entities is not None:
         # Diagnostic bisect knob (UEO3DE_MAX_ENTITIES): import only the first
         # N entities to localize scale- or content-dependent failures.

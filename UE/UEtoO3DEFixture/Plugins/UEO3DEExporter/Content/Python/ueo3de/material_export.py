@@ -287,6 +287,53 @@ class TextureBank:
     def entries(self):
         return [record["entry"] for record in self._records.values()]
 
+    def _run_export_task(self, texture, path):
+        task = unreal.AssetExportTask()
+        task.object = texture
+        task.filename = path
+        task.automated = True
+        task.replace_identical = True
+        task.prompt = False
+        return (unreal.Exporter.run_asset_export_task(task)
+                and os.path.exists(path)
+                and os.path.getsize(path) > 0)
+
+    def _export_raw(self, texture, ue_path, raw_path, log=None):
+        """Write one raw TGA, falling back through PNG when TGA is refused.
+
+        `UTextureExporterTGA::SupportsObject` accepts only some source formats,
+        and a texture it refuses used to end the whole export:
+
+            No tga exporter found for Texture2D .../T_Grunge_06_O
+            MaterialExportError: texture export failed: .../T_Grunge_06_O
+
+        Measured across that level's 155 distinct textures
+        (Tests/ue/probe_texture_export.py): TGA refused 1, PNG refused 0. So
+        the fallback is an export FORMAT, and the PNG is converted back to a
+        TGA at the same path rather than being passed through -- the manifest
+        was written three steps earlier and already names a `.tga`, and the
+        opacity/ORM channel split reads pixels out of the file. Converting
+        keeps every one of those unchanged and unaware.
+        """
+        from . import png
+
+        if self._run_export_task(texture, raw_path):
+            return raw_path
+
+        png_path = raw_path[:-len(".tga")] + ".png"
+        if not self._run_export_task(texture, png_path):
+            raise MaterialExportError(
+                "texture export failed as both TGA and PNG: %s. UE refuses "
+                "this texture's source format outright; convert it in UE (a "
+                "plain 8-bit RGBA source exports cleanly) or exclude it."
+                % ue_path)
+        png.to_tga(png_path, raw_path)
+        os.remove(png_path)
+        if log is not None:
+            log("  %s: TGA refused by UE, exported as PNG and converted"
+                % ue_path)
+        return raw_path
+
     def export_all(self, output_root, raw_root, log=None):
         """Export raw TGAs (one per unique texture) then derive per-role files."""
         from . import tga
@@ -299,15 +346,8 @@ class TextureBank:
                 continue
             raw_path = os.path.join(
                 raw_root, naming.sanitize_path(ue_path).replace("/", "_") + ".tga")
-            task = unreal.AssetExportTask()
-            task.object = record["texture"]
-            task.filename = raw_path
-            task.automated = True
-            task.replace_identical = True
-            task.prompt = False
-            if not unreal.Exporter.run_asset_export_task(task) or not os.path.exists(raw_path):
-                raise MaterialExportError("texture export failed: " + ue_path)
-            raw_by_path[ue_path] = raw_path
+            raw_by_path[ue_path] = self._export_raw(
+                record["texture"], ue_path, raw_path, log=log)
 
         exported = []
         for record in self._records.values():

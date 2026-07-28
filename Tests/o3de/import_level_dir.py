@@ -51,7 +51,14 @@ def main():
     from ueimporter import importer
 
     project_root = general.get_game_folder().rstrip('/\\')
-    prefab_path = "%s/Prefabs/%s.prefab" % (project_root, LEVEL_NAME)
+    # UEO3DE_CHUNK=i/n gets its own prefab, or every chunk would overwrite the
+    # last and the level would end up as its final twelfth.
+    chunk = os.environ.get("UEO3DE_CHUNK", "").strip()
+    suffix = ""
+    if chunk:
+        index, _, total = chunk.partition("/")
+        suffix = "_part%02d_of_%02d" % (int(index), int(total))
+    prefab_path = "%s/Prefabs/%s%s.prefab" % (project_root, LEVEL_NAME, suffix)
 
     # The bisect knob importer.py documents but nothing exposed: import only
     # the first N entities. A 2905-entity level is a 13-minute measurement,

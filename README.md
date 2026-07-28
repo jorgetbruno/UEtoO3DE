@@ -174,6 +174,38 @@ Re-running an import is incremental by default: entities are matched by manifest
 in O3DE is reported as `REIMPORT_ENTITY_CONFLICT` and **kept**. Pass
 `--reimport=0` to author everything from the manifest and overwrite those edits.
 
+**Levels too large for one prefab.** There is a ceiling, and it is not graceful.
+Measured on a 44,504-entity marketplace city: 4,000 entities import in ~2 minutes
+at a 4.8 GB peak, and 12,000 kill the editor outright while serializing — exit
+`0xC0000409`, no assert, no log line, no result file. Nothing detects it from
+inside, so a level of that size has to arrive as several prefabs:
+
+```
+set UEO3DE_CHUNK=1/12    &  rem ...then 2/12, 3/12, ... 12/12
+```
+
+Each chunk becomes `<Level>_partNN_of_NN.prefab`. Every chunk's container sits at
+the origin, so instantiating all of them in one level reproduces the level exactly.
+
+The split is by **whole root subtree**, never by entity index, and that is the
+load-bearing detail: an index range would cut parents away from children, and an
+orphaned child does not fail — it imports at the level root. A building's windows
+scattered at the origin, in a prefab that saved without a warning. The partition
+is deterministic, covers every entity exactly once, and never separates a child
+from its parent (`Tests/perf/test_chunk.py`).
+
+That city converted in twelve chunks: 44,504 entities, 42,088 mesh colliders with
+every bake verified present, 715 MB of prefabs, ~24 minutes, no errors.
+
+**Textures UE will not export.** `UTextureExporterTGA` accepts only some source
+formats and refuses others outright, which used to end an export at the first one
+(`No tga exporter found for Texture2D ...`). Measured across one pack's 155
+textures: TGA refused 1, PNG refused 0. The exporter now falls back to PNG and
+converts it back to a TGA at the path the manifest already names, so staging, the
+Atom preset chosen by filename suffix, and the ORM/opacity channel split are all
+unchanged. If a texture is refused by *both*, the export still stops — with a
+message naming the texture and what to change.
+
 Each import writes a ledger beside its prefab (`<Prefab>.ueimport.json`) recording
 what that import *authored*. It is what makes hand-edit detection possible, so
 **commit it with the prefab** — a teammate who has the prefab but not the ledger
