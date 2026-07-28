@@ -99,6 +99,57 @@ def test_corrected_transform_touches_only_rotation():
           "input transform was mutated")
 
 
+def _compose_child_world(parent_rot, parent_pos, parent_scale, child):
+    """O3DE's composition: child_world = parent_world * child_local."""
+    rotated = skel_build._rotate(parent_rot, child["translation"])
+    return ([parent_pos[i] + parent_scale * rotated[i] for i in range(3)],
+            skel_build._quat_mul(parent_rot, child["rotation"]))
+
+
+def test_counter_correction_preserves_child_world_transform():
+    """A frame correction must not move the entity's DESCENDANTS.
+
+    The Rz180 compensates for how one entity's own geometry was baked, but
+    O3DE composes child_world = parent_world * child_local, so without the
+    counter-correction every child swings 180 degrees around the parent --
+    a torch attached to a ghoul ends up behind it. Measured before the fix:
+    0.46 m of error on a 0.3 m offset.
+    """
+    child = {"translation": [0.0, 0.30, 1.50], "rotation": [0.0, 0.0, 0.0, 1.0],
+             "scale": [1.0, 1.0, 1.0]}
+    for q in quat_samples():
+        want_pos, want_rot = _compose_child_world(q, [3.0, -2.0, 0.5], 1.0, child)
+        corrected_parent = skel_build.compose_rz180(q)
+        fixed = skel_build.counter_correct_child(child, skel_build.RZ180, 1.0)
+        got_pos, got_rot = _compose_child_world(
+            corrected_parent, [3.0, -2.0, 0.5], 1.0, fixed)
+        check(all(abs(a - b) < 1e-9 for a, b in zip(want_pos, got_pos)),
+              "child world POSITION moved under parent %r: %r vs %r"
+              % ([round(v, 3) for v in q], [round(v, 6) for v in got_pos],
+                 [round(v, 6) for v in want_pos]))
+        # Quaternions are double covers: q and -q are the same rotation.
+        same = min(max(abs(a - b) for a, b in zip(want_rot, got_rot)),
+                   max(abs(a + b) for a, b in zip(want_rot, got_rot)))
+        check(same < 1e-9,
+              "child world ROTATION moved under parent %r" % ([round(v, 3) for v in q],))
+
+
+def test_counter_correction_divides_out_a_uniform_scale_ratio():
+    """A decal's correction also rescales the entity; uniform scale DOES
+    reach children in O3DE (non-uniform does not -- it lands on
+    EditorNonUniformScaleComponent), so the ratio must divide out."""
+    child = {"translation": [0.5, 0.25, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0],
+             "scale": [1.0, 1.0, 1.0]}
+    identity = [0.0, 0.0, 0.0, 1.0]
+    want_pos, _ = _compose_child_world(identity, [0.0, 0.0, 0.0], 1.0, child)
+    fixed = skel_build.counter_correct_child(child, identity, 4.0)
+    got_pos, _ = _compose_child_world(identity, [0.0, 0.0, 0.0], 4.0, fixed)
+    check(all(abs(a - b) < 1e-12 for a, b in zip(want_pos, got_pos)),
+          "uniform parent scale not divided out: %r vs %r" % (got_pos, want_pos))
+    check(all(abs(v - 0.25) < 1e-12 for v in fixed["scale"]),
+          "child scale not divided by the ratio: %r" % (fixed["scale"],))
+
+
 def test_plan_with_animation():
     plan = skel_build.plan_skeletal(
         {"asset_guid": "g", "animation_guid": "a", "loop": True, "play": False,
@@ -128,6 +179,8 @@ def main():
     for test in (test_compose_is_right_multiplied_rz180,
                  test_compose_twice_is_identity,
                  test_corrected_transform_touches_only_rotation,
+                 test_counter_correction_preserves_child_world_transform,
+                 test_counter_correction_divides_out_a_uniform_scale_ratio,
                  test_plan_with_animation,
                  test_plan_without_animation_has_no_simple_motion):
         test(),

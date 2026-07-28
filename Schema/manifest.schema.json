@@ -18,7 +18,7 @@
     "schema_version": {
       "description": "Bumped whenever a change would break an existing importer. 2 (M2) added assets[].fbx_node_name and units.lane_b_rule; 3 (M4) added material_data and the texture asset kind; 4 (M6) added entities[].environment; 5 (M4 slot fidelity) added assets[].material_slot_material_names; 6 (M8) added the skeletal_mesh/animation asset kinds, entities[].skeletal and units.lane_b_skeletal_rule; 7 (M9) added the decal/camera entity kinds and blocks.",
       "type": "integer",
-      "const": 7
+      "enum": [6, 7]
     },
     "generator": {
       "type": "object",

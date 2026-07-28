@@ -79,6 +79,7 @@ def check(condition, msg):
 
 
 def main():
+    import azlmbr.asset as asset_api
     import azlmbr.atom as atom
     import azlmbr.bus as bus
     import azlmbr.components as components
@@ -170,7 +171,6 @@ def main():
             manifest_entities[name]["skeletal"]["asset_guid"]]["o3de_relative_path"]
         expected_product = staging.skeletal_product_path_for(
             expected_relative, product_prefix, "skeletal_mesh")
-        import azlmbr.asset as asset_api
         path_back = asset_api.AssetCatalogRequestBus(
             bus.Broadcast, 'GetAssetPathById', value) if value is not None else ""
         log('  %-14s Actor asset -> %s' % (name, path_back))
@@ -178,9 +178,22 @@ def main():
               "%s Actor asset resolves to %r, expected %r"
               % (name, path_back, expected_product))
 
+    # The motion must be THIS entity's own animation, not merely some
+    # motion: a wiring bug that gave every character the same clip would
+    # keep the playback pixel-delta perfectly happy.
     motion_value = component_property(entities["SkelWave"], motion_type,
                                       skel_build.MOTION_PROPERTY)
     check(motion_value is not None, "SkelWave: Simple Motion Motion unreadable")
+    if motion_value is not None:
+        expected_motion = staging.skeletal_product_path_for(
+            assets_by_guid[wave_manifest["animation_guid"]]["o3de_relative_path"],
+            product_prefix, "animation")
+        motion_path = asset_api.AssetCatalogRequestBus(
+            bus.Broadcast, 'GetAssetPathById', motion_value)
+        log('  SkelWave Motion -> %s' % motion_path)
+        check((motion_path or "").lower() == expected_motion,
+              "SkelWave's Simple Motion resolves to %r, expected its OWN "
+              "animation %r" % (motion_path, expected_motion))
     play = component_property(entities["SkelWave"], motion_type,
                               skel_build.PLAY_ON_ACTIVE_PROPERTY)
     loop = component_property(entities["SkelWave"], motion_type,
@@ -234,6 +247,39 @@ def main():
     general.enter_game_mode()
     general.idle_wait_frames(300)   # fixture dynamic bodies settle; loops run on
     if not check(general.is_in_game_mode(), "editor did not enter game mode"):
+        return
+
+    # VISIBILITY PRECONDITION. Two near-identical frames mean either "the
+    # motion is not playing" or "there is no character on screen yet" --
+    # opposite diagnoses that the delta alone cannot tell apart, and after a
+    # full asset reprocess the second one really happens (the actor is still
+    # streaming when the first frame is captured). So wait for the canary to
+    # actually render, judged against a frame of empty sky, before measuring
+    # anything. A timeout here is a precise failure, not a misleading one.
+    def sky_reference():
+        general.set_current_view_position(WAVE_POSITION[0], WAVE_POSITION[1],
+                                          CAMERA_HEIGHT)
+        general.set_current_view_rotation(89.0, 0.0, 0.0)     # straight up
+        general.idle_wait_frames(30)
+        return capture("game_sky.png")
+
+    empty = sky_reference()
+    visible = False
+    for attempt in range(6):
+        aim_at(WAVE_POSITION)
+        shot = capture("game_visible_%d.png" % attempt)
+        if empty and shot:
+            against_empty = png_diff.delta(empty, shot)
+            log('  visibility attempt %d: %r' % (attempt, against_empty))
+            if against_empty["changed"] >= 0.05:
+                visible = True
+                break
+        general.idle_wait_frames(120)
+    if not check(visible,
+                 "the skeletal canary never rendered: %d game-mode frames "
+                 "were indistinguishable from empty sky, so the playback "
+                 "deltas below would measure nothing" % 6):
+        general.exit_game_mode()
         return
 
     aim_at(WAVE_POSITION)

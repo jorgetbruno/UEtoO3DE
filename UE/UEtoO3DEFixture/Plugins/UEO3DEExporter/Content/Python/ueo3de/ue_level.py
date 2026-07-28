@@ -118,10 +118,11 @@ def _transform_from_parts(location_cm, quat_xyzw, scale, subject, warnings,
         converted_scale, negative_axes = lane_a.convert_scale(scale)
         if negative_axes:
             warnings.add("XFORM_NEGATIVE_SCALE", subject,
-                         "negative on axis %s in an attach hierarchy; the "
-                         "mirror is NOT represented (mirrored-variant folding "
-                         "only applies to flat actors)"
-                         % ",".join(negative_axes))
+                         "negative on axis %s; the mirror is NOT represented "
+                         "(mirrored-variant folding applies only to flat "
+                         "static-mesh actors -- an attach hierarchy or a kind "
+                         "with no skinned/baked mirror variant takes this "
+                         "path)" % ",".join(negative_axes))
     return {
         "translation": lane_a.convert_position(location_cm),
         "rotation": lane_a.convert_quat(quat_xyzw),
@@ -129,7 +130,7 @@ def _transform_from_parts(location_cm, quat_xyzw, scale, subject, warnings,
     }, mirrored
 
 
-def _actor_transforms(actor, subject, warnings):
+def _actor_transforms(actor, subject, warnings, mirror_variant_available=True):
     """World + parent-relative transforms. Returns (transforms, mirrored).
 
     `mirrored` means the actor's geometry must reference the mirror-X mesh
@@ -140,12 +141,20 @@ def _actor_transforms(actor, subject, warnings):
     children would inherit the mirror in turn). Both real levels measured so
     far have zero such actors; the fallback keeps them placed, unmirrored,
     and reported rather than wrong.
+
+    `mirror_variant_available=False` takes that same fallback for actor
+    kinds that HAVE no mirror variant to reference -- skeletal meshes above
+    all, since no skinned mirror bake exists. Folding decomposes an odd sign
+    pattern as SIGMA_rot * mirror and keeps SIGMA_rot in the rotation, which
+    is only correct if the mirror actually arrives: for UE scale (1,-1,1)
+    that is a 180-degree yaw, so a mirrored ghoul would have imported
+    facing backwards while the warning claimed it was merely "unmirrored".
     """
     in_hierarchy = (actor.get_attach_parent_actor() is not None
                     or bool(actor.get_attached_actors()))
     world_scale = _vec3(actor.get_actor_scale3d())
     wants_mirror = (world_scale[0] < 0.0) ^ (world_scale[1] < 0.0) ^ (world_scale[2] < 0.0)
-    fold = not (wants_mirror and in_hierarchy)
+    fold = not (wants_mirror and (in_hierarchy or not mirror_variant_available))
 
     world, mirrored_world = _transform_from_parts(
         _vec3(actor.get_actor_location()),
@@ -1301,16 +1310,18 @@ def _extract_mesh_components(actor, actor_entity, assets, warnings):
     return children
 
 
-def _child_transforms(world_ue, actor, subject, warnings):
+def _child_transforms(world_ue, actor, subject, warnings,
+                      mirror_variant_available=True):
     """(world, local, mirrored) for a component/instance world transform."""
+    fold = mirror_variant_available
     world, mirrored = _transform_from_parts(
         _vec3(world_ue.translation), _quat_xyzw(world_ue.rotation),
-        _vec3(world_ue.scale3d), subject, warnings)
+        _vec3(world_ue.scale3d), subject, warnings, fold=fold)
     relative_ue = unreal.MathLibrary.make_relative_transform(
         world_ue, actor.get_actor_transform())
     local, mirrored_local = _transform_from_parts(
         _vec3(relative_ue.translation), _quat_xyzw(relative_ue.rotation),
-        _vec3(relative_ue.scale3d), subject, warnings)
+        _vec3(relative_ue.scale3d), subject, warnings, fold=fold)
     if mirrored != mirrored_local:
         warnings.add("XFORM_NEGATIVE_SCALE", subject,
                      "component/actor mirror parity disagrees; not represented")
@@ -1321,8 +1332,17 @@ def _child_transforms(world_ue, actor, subject, warnings):
 def _spline_child(actor, actor_entity, component, subject, assets, warnings):
     """One child entity over a '#spline' baked asset (M9)."""
     mesh_guid = assets.add_spline_bake(actor.get_path_name(), component, warnings)
-    world, local, _mirrored = _child_transforms(
-        component.get_world_transform(), actor, subject, warnings)
+    world, local, mirrored = _child_transforms(
+        component.get_world_transform(), actor, subject, warnings,
+        mirror_variant_available=False)
+    if mirrored:
+        # Defensive: _child_transforms takes the unmirrored path for spline
+        # components, because _export_spline hard-codes the normal bake and
+        # no mirrored spline variant exists. Keeping a fold rotation without
+        # one would place unmirrored geometry at a 180-degree rotation.
+        warnings.add("XFORM_NEGATIVE_SCALE", subject,
+                     "mirrored spline component; no mirrored bake exists, "
+                     "imported unmirrored")
 
     slots = []
     for index in range(component.get_num_materials()):
@@ -1375,10 +1395,16 @@ def _instance_children(actor, actor_entity, component, subject, assets, warnings
         if not ok:
             continue
         instance_subject = "%s#%d" % (subject, index)
+        # Transform warnings are genuinely per-instance (one instance can be
+        # mirrored while its siblings are not), so they keep the indexed
+        # subject. Mesh and physics warnings are properties of the COMPONENT
+        # and identical for every instance -- reporting them per instance
+        # defeated Warnings' dedupe (its key includes the subject) and would
+        # put thousands of identical records in a foliage level's manifest.
         world, local, mirrored = _child_transforms(
             world_ue, actor, instance_subject, warnings)
         mesh_block, mesh_guid = _mesh_block_from_component(
-            component, assets, instance_subject, warnings, mirrored=mirrored)
+            component, assets, subject, warnings, mirrored=mirrored)
         if mesh_block is None:
             break   # no mesh on the component: nothing to place, once
         entity = {
@@ -1394,8 +1420,7 @@ def _instance_children(actor, actor_entity, component, subject, assets, warnings
             "transform": {"world": world, "local": local},
             "mesh": mesh_block,
         }
-        physics = _physics_block(component, mesh_guid, instance_subject,
-                                 warnings)
+        physics = _physics_block(component, mesh_guid, subject, warnings)
         if physics["has_collision"]:
             entity["physics"] = physics
         children.append(entity)
@@ -1455,7 +1480,11 @@ def _build_entity(actor, assets, warnings):
     label = actor.get_actor_label()
     kind = _classify(actor)
 
-    transforms, mirrored = _actor_transforms(actor, label, warnings)
+    # Only static meshes have a mirror-X variant bake to reference; every
+    # other kind must take the unmirrored fallback rather than keep a fold
+    # rotation that compensates for geometry that never arrives.
+    transforms, mirrored = _actor_transforms(
+        actor, label, warnings, mirror_variant_available=(kind == "static_mesh"))
     entity = {
         "id": naming.entity_id(actor_path),
         "name": label,
@@ -1484,6 +1513,11 @@ def _build_entity(actor, assets, warnings):
             entity["mesh"] = mesh_block
 
     if kind == "skeletal_mesh":
+        # `mirrored` is always False here since M9's review: skeletal actors
+        # take the unmirrored fallback in _actor_transforms (which reports
+        # XFORM_NEGATIVE_SCALE itself), because folding would leave a
+        # SIGMA_rot in the rotation waiting on a skinned mirror bake that
+        # cannot exist. Kept as a guard, not as the reporting path.
         if mirrored:
             # A skeletal mirror variant would need a mirrored SKINNED bake,
             # which the native exporter cannot produce; the fold already made

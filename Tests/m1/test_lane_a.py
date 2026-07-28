@@ -271,6 +271,58 @@ def test_path_sanitization():
           "different folders must not collapse onto one path")
 
 
+def test_fragment_keys_stay_distinct_through_both_naming_layers():
+    """'#terrain'/'#spline' keys are built from ACTOR object paths.
+
+    Two independent truncations used to destroy them, and each one silently
+    made distinct assets share output:
+
+      1. `package_path` cut at the first '.', and an actor object path always
+         has one -- every spline bake and the landscape of a level collapsed
+         onto ONE guid and ONE staged FBX (shipped since M7);
+      2. the sanitizer kept '.', and the Asset Processor derives PRODUCT
+         names from the source stem up to its first dot -- so even with
+         distinct source files, two splines fought over one .azbuffer and AP
+         refused the job outright.
+
+    '#mx' keys are built from an already-truncated package path, so they must
+    come through both layers unchanged.
+    """
+    spline_a = "/Game/Maps/M.M:PersistentLevel.Actor_1:SplineMesh#spline"
+    spline_b = "/Game/Maps/M.M:PersistentLevel.Actor_2:SplineMesh#spline"
+    terrain = "/Game/Maps/M.M:PersistentLevel.Landscape_0#terrain"
+    keys = [spline_a, spline_b, terrain]
+
+    guids = {naming.asset_guid(k) for k in keys}
+    check(len(guids) == len(keys),
+          "fragment keys share a guid: %d keys -> %d guids" % (len(keys), len(guids)))
+
+    stems = {naming.sanitize_path(k) for k in keys}
+    check(len(stems) == len(keys),
+          "fragment keys share an o3de path: %r" % sorted(stems))
+
+    # The Asset Processor's product stem: the filename up to its FIRST dot.
+    product_stems = {naming.sanitize_path(k).rsplit("/", 1)[-1].split(".")[0]
+                     for k in keys}
+    check(len(product_stems) == len(keys),
+          "fragment keys share an AP PRODUCT stem %r -- AP would reject the "
+          "second source outright" % sorted(product_stems))
+    for stem in stems:
+        check("." not in stem.rsplit("/", 1)[-1],
+              "a sanitized stem must contain no dot, got %r" % stem)
+
+    # Unchanged for the paths every other milestone depends on.
+    check(naming.package_path("/Game/Meshes/SM_LetterF.SM_LetterF")
+          == "/Game/Meshes/SM_LetterF", "ordinary asset paths must still truncate")
+    check(naming.asset_guid("/Game/Meshes/SM_LetterF#mx")
+          != naming.asset_guid("/Game/Meshes/SM_LetterF.SM_LetterF"),
+          "the #mx variant must keep its own identity")
+    check(naming.sanitize_path("/Game/Meshes/SM_LetterF#mx")
+          == "uetoo3de/game/meshes/sm_letterf_mx",
+          "the #mx path must be unchanged, got %r"
+          % naming.sanitize_path("/Game/Meshes/SM_LetterF#mx"))
+
+
 def test_path_collisions_are_detected():
     registry = naming.PathRegistry()
     registry.claim("/Game/Foo Bar/Thing")
@@ -338,6 +390,7 @@ TESTS = [
     test_scale_sign_folding_reproduces_the_matrix,
     test_mirror_x_conjugation,
     test_path_sanitization,
+    test_fragment_keys_stay_distinct_through_both_naming_layers,
     test_path_collisions_are_detected,
     test_guids_are_stable,
     test_warning_catalogue,

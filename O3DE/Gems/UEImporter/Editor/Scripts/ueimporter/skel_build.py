@@ -23,6 +23,10 @@ entire authoring surface; playback is asserted by the M8 acceptance through
 frame captures, not joint queries.
 """
 
+# The frame correction itself, as a quaternion: a 180-degree yaw. Self-
+# inverse, which is why compose_rz180 applied twice is the identity.
+RZ180 = (0.0, 0.0, 1.0, 0.0)
+
 ACTOR_COMPONENT = "Actor"
 SIMPLE_MOTION_COMPONENT = "Simple Motion"
 ACTOR_ASSET_PROPERTY = "Actor asset"
@@ -50,6 +54,53 @@ def corrected_local_transform(transform):
     corrected = dict(transform)
     corrected["rotation"] = compose_rz180(transform["rotation"])
     return corrected
+
+
+def _quat_mul(a, b):
+    ax, ay, az, aw = (float(c) for c in a)
+    bx, by, bz, bw = (float(c) for c in b)
+    return [aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz]
+
+
+def _rotate(q, v):
+    x, y, z, w = (float(c) for c in q)
+    vx, vy, vz = (float(c) for c in v)
+    # v + 2w(q_vec x v) + 2 q_vec x (q_vec x v)
+    tx, ty, tz = 2.0 * (y * vz - z * vy), 2.0 * (z * vx - x * vz), 2.0 * (x * vy - y * vx)
+    return [vx + w * tx + (y * tz - z * ty),
+            vy + w * ty + (z * tx - x * tz),
+            vz + w * tz + (x * ty - y * tx)]
+
+
+def counter_correct_child(child_local, correction_xyzw, parent_scale_ratio=1.0):
+    """Undo a parent's frame correction for ONE child's local transform.
+
+    A skeletal Rz180 (or a decal's Ry(-90)) compensates for how THAT
+    entity's own product geometry was baked -- but O3DE composes
+    child_world = parent_world * child_local, so the correction also swings
+    every descendant around the parent's origin. Left-multiplying the
+    child's local transform by the correction's INVERSE cancels exactly
+    that: rotation C^-1*L, translation C^-1 applied to L, and (when the
+    parent's correction changed a UNIFORM scale) the position and scale
+    divided by that ratio. Net child world transform is unchanged.
+
+    Non-uniform parent scale needs no ratio: O3DE carries it on
+    EditorNonUniformScaleComponent, which does not reach children at all
+    (DIVERGENCES.md, XFORM_NONUNIFORM_SCALE_NOT_INHERITED).
+    """
+    x, y, z, w = (float(c) for c in correction_xyzw)
+    inverse = [-x, -y, -z, w]                      # unit quaternion inverse
+    ratio = float(parent_scale_ratio) or 1.0
+
+    out = dict(child_local)
+    out["rotation"] = _quat_mul(inverse, child_local["rotation"])
+    rotated = _rotate(inverse, child_local["translation"])
+    out["translation"] = [component / ratio for component in rotated]
+    out["scale"] = [component / ratio for component in child_local["scale"]]
+    return out
 
 
 def plan_skeletal(skeletal, entity_name):

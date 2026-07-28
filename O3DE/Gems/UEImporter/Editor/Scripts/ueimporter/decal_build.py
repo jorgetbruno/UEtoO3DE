@@ -21,7 +21,8 @@ MATERIAL_PROPERTY = "Controller|Configuration|Material"
 SORT_KEY_PROPERTY = "Controller|Configuration|Sort Key"
 
 # q for Ry(-90): (x, y, z, w) = (0, -sin45, 0, cos45).
-_RY_MINUS_90 = (0.0, -0.7071067811865476, 0.0, 0.7071067811865476)
+RY_MINUS_90 = (0.0, -0.7071067811865476, 0.0, 0.7071067811865476)
+_RY_MINUS_90 = RY_MINUS_90
 
 
 def compose_projection_rotation(rotation_xyzw):
@@ -39,13 +40,22 @@ def compose_projection_rotation(rotation_xyzw):
 
 
 def corrected_local_transform(transform, half_extents_m):
-    """Manifest local transform remapped for the Atom decal volume."""
+    """Manifest local transform remapped for the Atom decal volume.
+
+    The entity's own scale is permuted ALONGSIDE the extents. UE sizes a
+    decal as DecalSize * ActorScale componentwise in UE axes, so the UE x
+    (depth) scale belongs on Atom's Z, and the UE z scale on Atom's X --
+    the same permutation the extents take. Multiplying the un-permuted
+    scale in (base[0] on Atom X, which carries the UE z extent) stretched a
+    non-uniformly scaled decal along the wrong axis and gave it the wrong
+    projection depth; uniform scales were unaffected, which is why the
+    unscaled canary never showed it.
+    """
     hx, hy, hz = (abs(float(v)) for v in half_extents_m)
     corrected = dict(transform)
     corrected["rotation"] = compose_projection_rotation(transform["rotation"])
-    base = transform.get("scale") or [1.0, 1.0, 1.0]
-    corrected["scale"] = [base[0] * 2.0 * hz, base[1] * 2.0 * hy,
-                          base[2] * 2.0 * hx]
+    sx, sy, sz = (transform.get("scale") or [1.0, 1.0, 1.0])
+    corrected["scale"] = [sz * 2.0 * hz, sy * 2.0 * hy, sx * 2.0 * hx]
     return corrected
 
 

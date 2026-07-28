@@ -140,6 +140,23 @@ def test_projection_direction_survives_any_rotation():
                      [round(v, 6) for v in got], [round(v, 6) for v in want]))
 
 
+def test_scaled_decal_permutes_its_scale_with_its_extents():
+    """UE sizes a decal as DecalSize * ActorScale in UE axes, so the SCALE
+    must take the same permutation the extents take: UE x (depth) belongs on
+    Atom Z, UE z on Atom X. Leaving the scale in UE order stretched a
+    non-uniformly scaled decal along the wrong axis and gave it the wrong
+    projection depth -- invisible on the unscaled canary."""
+    transform = {"translation": [0.0, 0.0, 0.0],
+                 "rotation": [0.0, 0.0, 0.0, 1.0],
+                 "scale": [2.0, 3.0, 5.0]}          # sx, sy, sz all distinct
+    half = [0.64, 1.28, 1.92]                        # hx (depth), hy, hz
+    got = decal_build.corrected_local_transform(transform, half)["scale"]
+    # Atom X <- UE z: 2*hz*sz | Atom Y <- UE y: 2*hy*sy | Atom Z <- UE x: 2*hx*sx
+    want = [2 * 1.92 * 5.0, 2 * 1.28 * 3.0, 2 * 0.64 * 2.0]
+    check(all(close(a, b, 1e-9) for a, b in zip(got, want)),
+          "scaled decal volume %r != %r" % (got, want))
+
+
 def test_corrected_transform_scale_mapping():
     transform = {"translation": [1.0, 2.0, 3.0],
                  "rotation": [0.0, 0.0, 0.0, 1.0],
@@ -161,6 +178,7 @@ def main():
                  test_decal_rotation_is_right_multiplied_ry_minus_90,
                  test_projection_axis_lands_on_plus_x,
                  test_projection_direction_survives_any_rotation,
+                 test_scaled_decal_permutes_its_scale_with_its_extents,
                  test_corrected_transform_scale_mapping):
         test()
     if failures:

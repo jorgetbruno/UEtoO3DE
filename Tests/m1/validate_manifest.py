@@ -159,7 +159,16 @@ def validate_references(document):
             role_key = asset["role"] if not asset.get("channel") \
                 else "%s@%s" % (asset["role"], asset["channel"])
             expected_guid = naming.asset_guid(ue_path + "#" + role_key)
-            expected_prefix = naming.sanitize_path(ue_path) + "_" + asset["role"]
+            # The role stays the filename SUFFIX (it selects the Atom image
+            # preset); a channel split adds an infix between stem and role,
+            # so the stem is a prefix and the role is a suffix, not one
+            # contiguous string.
+            expected_prefix = naming.sanitize_path(ue_path) + "_"
+            if not asset["o3de_relative_path"].endswith("_%s.tga" % asset["role"]):
+                errors.append("texture %s: path %r does not end with its role "
+                              "suffix %r, so the Atom image preset will not "
+                              "match" % (ue_path, asset["o3de_relative_path"],
+                                         asset["role"]))
         else:
             expected_guid = naming.asset_guid(ue_path)
             expected_prefix = naming.sanitize_path(ue_path) + "."
@@ -277,9 +286,10 @@ def validate_references(document):
             errors.append("warning: unknown code %r (not in ueo3de.warnings.CODES)"
                           % record["code"])
 
-    if document["schema_version"] != manifest_module.SCHEMA_VERSION:
-        errors.append("schema_version %r does not match the exporter's %r"
-                      % (document["schema_version"], manifest_module.SCHEMA_VERSION))
+    if document["schema_version"] not in manifest_module.SUPPORTED_SCHEMA_VERSIONS:
+        errors.append("schema_version %r is not one of the supported %r"
+                      % (document["schema_version"],
+                         manifest_module.SUPPORTED_SCHEMA_VERSIONS))
     for key, expected in (("lane_a_rule", manifest_module.LANE_A_RULE),
                           ("lane_b_rule", manifest_module.LANE_B_RULE),
                           ("lane_b_skeletal_rule",
@@ -336,7 +346,16 @@ def _self_test():
 
     bad = json.loads(json.dumps(minimal))
     bad["schema_version"] = manifest_module.SCHEMA_VERSION + 1
-    expect_errors("wrong schema_version", bad, "const")
+    expect_errors("newer-than-supported schema_version", bad, "is not one of")
+
+    # The supported range must actually be validatable: a v6 document
+    # failing STRUCTURALLY suppressed every referential check for half the
+    # range the importer accepts (manifest_io.SUPPORTED_SCHEMA_VERSIONS).
+    older = json.loads(json.dumps(minimal))
+    older["schema_version"] = min(manifest_module.SUPPORTED_SCHEMA_VERSIONS)
+    if validate(older, schema):
+        failures.append("a supported older schema_version was rejected: %r"
+                        % validate(older, schema))
 
     bad = json.loads(json.dumps(minimal))
     bad["units"]["lane_a_rule"] = "identity"
@@ -426,6 +445,31 @@ def _self_test():
     bad["entities"] = [wrong]
     expect_errors("animation_guid at a non-animation", bad, "non-animation")
 
+    # M9 review: two texture entries writing ONE file. The same texture can
+    # be requested for one role both whole and as an ORM channel split; a
+    # role-only filename made them collide and one silently overwrote the
+    # other's image data (measured on L_Showcase's T_Grass_ORM).
+    bad = json.loads(json.dumps(minimal))
+    tex = {"guid": naming.asset_guid("/Game/T#ao"), "kind": "texture",
+           "ue_path": "/Game/T", "name": "T",
+           "o3de_relative_path": "uetoo3de/game/t_ao.tga",
+           "role": "ao", "channel": None, "srgb": False}
+    split = json.loads(json.dumps(tex))
+    split["guid"] = naming.asset_guid("/Game/T#ao@R")
+    split["channel"] = "R"                       # same file as the whole one
+    bad["assets"] = [tex, split]
+    expect_errors("two textures claiming one file", bad, "collision")
+
+    # ... and the role must stay the filename SUFFIX, or the Atom image
+    # preset stops matching and the texture imports with the wrong settings.
+    bad = json.loads(json.dumps(minimal))
+    mis = json.loads(json.dumps(tex))
+    mis["guid"] = naming.asset_guid("/Game/T#ao@R")
+    mis["channel"] = "R"
+    mis["o3de_relative_path"] = "uetoo3de/game/t_ao_r.tga"
+    bad["assets"] = [mis]
+    expect_errors("role no longer the filename suffix", bad, "role suffix")
+
     # M8: bone_count must equal len(bone_names) -- the .actor byte assertion
     # keys off the names, and a silent mismatch would weaken it.
     bad = json.loads(json.dumps(minimal))
@@ -441,7 +485,7 @@ def _self_test():
         print("SELF-TEST FAIL: " + failure)
     if failures:
         return 1
-    print("validator self-test: %d rejection cases pass" % 15)
+    print("validator self-test: %d rejection cases pass" % 19)
     return 0
 
 

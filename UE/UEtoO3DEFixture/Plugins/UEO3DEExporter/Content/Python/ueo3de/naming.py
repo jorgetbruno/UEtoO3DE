@@ -49,7 +49,13 @@ PROJECT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL,
 
 IMPORTER_ROOT = "uetoo3de"
 
-_ALLOWED = set("abcdefghijklmnopqrstuvwxyz0123456789_.-")
+# NO DOT. A sanitized stem never legitimately contains one (package_path has
+# already dropped the `.Object` suffix), and the Asset Processor derives its
+# PRODUCT names from the source filename's pre-first-dot stem: a stem with a
+# dot in it makes two distinct sources fight over one product, which AP
+# rejects outright ("another source has already produced the same product").
+# Fragment keys carry a full actor object path, so dots reach here for real.
+_ALLOWED = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
 
 # Reserved on Windows regardless of extension; a file named `con.fbx` cannot
 # be created, and the exporter must not depend on the host OS.
@@ -61,8 +67,23 @@ _RESERVED = {
 
 
 def package_path(ue_path):
-    """`/Game/Meshes/SM_LetterF.SM_LetterF` -> `/Game/Meshes/SM_LetterF`."""
+    """`/Game/Meshes/SM_LetterF.SM_LetterF` -> `/Game/Meshes/SM_LetterF`.
+
+    A `#fragment` key is returned WHOLE. Those keys (`#mx` M4.5, `#terrain`
+    M7, `#spline` M9) are already explicit identities, and two of them are
+    built from an ACTOR object path -- which always contains a dot
+    (`/Game/Maps/M.M:PersistentLevel.Actor_1:SplineMesh`). Truncating at the
+    first dot threw away the actor AND the component, collapsing every
+    spline bake and the landscape of one level onto a single guid and a
+    single staged FBX: the second spline silently rendered the first's
+    geometry, and a level with both a spline and a terrain had them
+    overwrite each other's file. `#mx` keys are unaffected either way --
+    they are built from an already-truncated package path, so there is no
+    dot left to cut.
+    """
     ue_path = str(ue_path).strip()
+    if "#" in ue_path:
+        return ue_path
     head, sep, _tail = ue_path.partition(".")
     return head if sep else ue_path
 

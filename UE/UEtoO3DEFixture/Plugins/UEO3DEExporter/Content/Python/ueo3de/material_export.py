@@ -258,7 +258,18 @@ class TextureBank:
             return self._records[key]["entry"]
 
         stem = self._registry.claim(ue_path)  # idempotent for the same asset
-        relative = "%s_%s.tga" % (stem, role_suffix)
+        # The CHANNEL belongs in the filename, not just in the guid: one
+        # texture can be requested for the same role both whole and as an
+        # ORM channel split (measured on L_Showcase's T_Grass_ORM, which
+        # produced ao/roughness/metallic twice over), and a role-only name
+        # made the two write the SAME file -- whichever exported last won,
+        # so one material silently got the wrong image data. The channel
+        # goes BEFORE the role because the role must stay the filename
+        # SUFFIX: that is what selects the Atom image preset.
+        if channel is None:
+            relative = "%s_%s.tga" % (stem, role_suffix)
+        else:
+            relative = "%s_%s_%s.tga" % (stem, str(channel).lower(), role_suffix)
         guid = naming.asset_guid(ue_path + "#" + role_key)
         entry = {
             "guid": guid,

@@ -33,6 +33,12 @@ import json
 # components expand to child entities and spline bakes ride `#spline`
 # fragments (no schema shape change for either).
 SCHEMA_VERSION = 7
+# Versions the pipeline still accepts. v7 is additive over v6 (new entity
+# kinds and blocks only; no existing field changed, neither Lane B rule
+# moved), so v6 exports of real levels import unchanged -- and must stay
+# VALIDATABLE, or half the supported range gets no referential checking at
+# all. Mirrors ueimporter.manifest_io.SUPPORTED_SCHEMA_VERSIONS.
+SUPPORTED_SCHEMA_VERSIONS = (6, 7)
 TOOL_NAME = "UEO3DEExporter"
 TOOL_VERSION = "0.6.0"
 

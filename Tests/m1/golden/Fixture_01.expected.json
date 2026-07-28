@@ -586,7 +586,7 @@
       "guid": "fc7099e1-1d03-546c-ad97-4afb687960e4",
       "kind": "texture",
       "name": "T_Fixture_BaseColor",
-      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_basecolor_opacity.tga",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_basecolor_a_opacity.tga",
       "role": "opacity",
       "srgb": true,
       "ue_path": "/Game/Textures/T_Fixture_BaseColor"
@@ -606,7 +606,7 @@
       "guid": "fa3cd129-3c35-509b-83df-5e27c3a9b877",
       "kind": "texture",
       "name": "T_Fixture_ORM",
-      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_ao.tga",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_r_ao.tga",
       "role": "ao",
       "srgb": false,
       "ue_path": "/Game/Textures/T_Fixture_ORM"
@@ -626,7 +626,7 @@
       "guid": "06c03b11-e93b-5ce0-aaaa-9f86ca5ed46e",
       "kind": "texture",
       "name": "T_Fixture_ORM",
-      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_metallic.tga",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_b_metallic.tga",
       "role": "metallic",
       "srgb": false,
       "ue_path": "/Game/Textures/T_Fixture_ORM"
@@ -636,7 +636,7 @@
       "guid": "535b5329-bf12-5818-ab03-84ea236d0912",
       "kind": "texture",
       "name": "T_Fixture_ORM",
-      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_roughness.tga",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_orm_g_roughness.tga",
       "role": "roughness",
       "srgb": false,
       "ue_path": "/Game/Textures/T_Fixture_ORM"
@@ -646,7 +646,7 @@
       "guid": "b6415050-259c-5788-843e-59655643f838",
       "kind": "texture",
       "name": "T_Fixture_Scalar",
-      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_scalar_metallic.tga",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_scalar_r_metallic.tga",
       "role": "metallic",
       "srgb": false,
       "ue_path": "/Game/Textures/T_Fixture_Scalar"
@@ -656,7 +656,7 @@
       "guid": "9d14157e-6902-5bd6-8dd2-d601e68c34fb",
       "kind": "texture",
       "name": "T_Fixture_Scalar",
-      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_scalar_roughness.tga",
+      "o3de_relative_path": "uetoo3de/game/textures/t_fixture_scalar_r_roughness.tga",
       "role": "roughness",
       "srgb": false,
       "ue_path": "/Game/Textures/T_Fixture_Scalar"

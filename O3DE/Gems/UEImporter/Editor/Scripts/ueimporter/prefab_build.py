@@ -448,6 +448,15 @@ def create_entities(document, asset_ids_by_guid, report, level_root_id, log=None
             children_count[item["parent_id"]] = children_count.get(item["parent_id"], 0) + 1
 
     created = {}
+    # A frame correction (skeletal Rz180, decal Ry(-90)) compensates for how
+    # ONE entity's product geometry was baked, but O3DE composes
+    # child_world = parent_world * child_local, so it would also swing every
+    # descendant around that entity. Corrections are recorded here and
+    # undone on each child's own local transform (skel_build.
+    # counter_correct_child) -- the same hazard the exporter already guards
+    # for mirror folds (DIVERGENCES.md: "folding rewrites the parent frame
+    # out from under its children").
+    corrections = {}
     for item in ordered:
         parent_entity_id = created.get(item["parent_id"]) if item["parent_id"] else None
         if parent_entity_id is None:
@@ -462,20 +471,35 @@ def create_entities(document, asset_ids_by_guid, report, level_root_id, log=None
         editor.EditorEntityAPIBus(bus.Event, 'SetName', entity_id, item["name"])
         created[item["id"]] = entity_id
 
+        from . import skel_build
         local = item["transform"]["local"]
+        parent_correction = corrections.get(item["parent_id"])
+        if parent_correction is not None:
+            local = skel_build.counter_correct_child(
+                local, parent_correction["quat"], parent_correction["ratio"])
+
         if item.get("skeletal") is not None:
             # Skeletal products carry LaneA * Rz180 (native FBX export, no
             # bake stage); the compensation is one local yaw-180 composed
             # into the rotation (skel_build, LANE_B.md M8).
-            from . import skel_build
             local = skel_build.corrected_local_transform(local)
+            corrections[item["id"]] = {"quat": skel_build.RZ180, "ratio": 1.0}
         if item.get("decal") is not None:
             # Atom decals project along local -Z over a scaled unit box; UE
             # projected along local +X with half-extent sizes. One local
             # Ry(-90) plus the extent scale remaps the volume (decal_build).
             from . import decal_build
+            before = local
             local = decal_build.corrected_local_transform(
                 local, item["decal"]["half_extents_m"])
+            # Only a UNIFORM scale reaches children in O3DE; a non-uniform
+            # one lands on EditorNonUniformScaleComponent, which does not
+            # propagate (XFORM_NONUNIFORM_SCALE_NOT_INHERITED).
+            ratio = 1.0
+            if _is_uniform(local["scale"]) and before["scale"][0]:
+                ratio = local["scale"][0] / float(before["scale"][0])
+            corrections[item["id"]] = {"quat": decal_build.RY_MINUS_90,
+                                       "ratio": ratio}
         _apply_transform(entity_id, local, report, item["name"],
                          children_count.get(item["id"], 0) > 0)
 
