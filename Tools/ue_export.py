@@ -29,19 +29,53 @@ DEFAULT_PACKAGE_ROOT = os.path.join(
     "UE", "UEtoO3DEFixture", "Plugins", "UEO3DEExporter", "Content", "Python")
 
 
+def _write_failure(message):
+    """Emit a RESULT: FAIL verdict when nothing else can be, then quit."""
+    for candidate in (os.path.join(os.getcwd(), "export_result.txt"),):
+        try:
+            with open(candidate, "w") as handle:
+                handle.write(message + "\nRESULT: FAIL\n")
+        except Exception:
+            pass
+    print("RESULT: FAIL")
+    try:
+        unreal.SystemLibrary.quit_editor()
+    except Exception:
+        pass
+
+
 def parse_args(argv):
+    """`--key=value` -> options. Unknown tokens are reported, never dropped:
+    a typo'd flag that silently falls back to a default is how a run exports
+    the wrong thing and still says PASS."""
     options = {"map": "", "out": "", "result": "", "package-root": ""}
+    unknown = []
     for token in argv:
         if not token.startswith("--"):
+            unknown.append(token)
             continue
-        key, _sep, value = token[2:].partition("=")
-        if key in options:
+        key, sep, value = token[2:].partition("=")
+        if key not in options or not sep:
+            unknown.append(token)
+        else:
             options[key] = value
+    if unknown:
+        raise ValueError("unrecognized argument(s): %s (expected --key=value "
+                         "from %s)" % (", ".join(repr(u) for u in unknown),
+                                       sorted(options)))
     return options
 
 
 def main():
-    options = parse_args(sys.argv[1:])
+    try:
+        options = parse_args(sys.argv[1:])
+    except ValueError as exc:
+        # Still write a verdict: a caller that finds no result file cannot
+        # tell "bad arguments" from "the editor never started".
+        options = {"map": "", "out": "", "result": "", "package-root": ""}
+        unreal.log_error("[ue_export] " + str(exc))
+        _write_failure(str(exc))
+        return 1
     package_root = options["package-root"] or DEFAULT_PACKAGE_ROOT
     if package_root not in sys.path:
         sys.path.insert(0, package_root)
@@ -55,7 +89,13 @@ def main():
     status = "PASS"
     try:
         if not options["map"] or not options["out"]:
-            raise SystemExit("--map and --out are both required")
+            # ValueError, not SystemExit: SystemExit derives from
+            # BaseException and would sail past the `except Exception` below,
+            # so a typo'd flag wrote NO result file -- leaving an earlier
+            # run's `RESULT: PASS` on disk for any caller that does not delete
+            # it first, and never calling quit_editor.
+            raise ValueError("--map and --out are both required (got map=%r "
+                             "out=%r)" % (options["map"], options["out"]))
         from ueo3de import export_api
 
         log("exporting %s -> %s" % (options["map"], options["out"]))

@@ -98,10 +98,15 @@ def main():
     check(application is not None,
           "no QApplication in this editor; the dialog cannot be built at all")
 
-    for available, hint, expect_enabled, expect_count in (
-            ([], None, False, 0),
-            (["jolt"], None, False, 1),
-            (["jolt", "physx"], "physx", True, 2)):
+    for available, hint, expect_enabled, expect_count, expect_current in (
+            ([], None, False, 0, ""),
+            (["jolt"], None, False, 1, "jolt"),
+            # The hint is the SECOND entry, so a combo left on its default
+            # index 0 shows 'jolt' and fails. Asserting `currentText() in
+            # available` instead would be a tautology -- the combo is
+            # populated FROM that list, so any in-range index passes it.
+            (["jolt", "physx"], "physx", True, 2, "physx"),
+            (["jolt", "physx"], None, True, 2, "jolt")):
         widget = dialog.make_import_dialog(available, hint, "", "")
         combo = widget.backend_combo
         log("  available=%-18r combo: count=%d enabled=%s current=%r import=%s"
@@ -117,10 +122,10 @@ def main():
               "the Import button must be disabled exactly when no backend "
               "resolves (available=%r, enabled=%s)"
               % (available, widget.ok_button.isEnabled()))
-        if available:
-            check(combo.currentText() in available,
-                  "combo pre-selected %r which is not in %r"
-                  % (combo.currentText(), available))
+        check(combo.currentText() == expect_current,
+              "combo pre-selected %r, expected %r for available=%r hint=%r "
+              "-- the Settings Registry hint must drive the selection"
+              % (combo.currentText(), expect_current, available, hint))
         widget.deleteLater()
 
     log("")

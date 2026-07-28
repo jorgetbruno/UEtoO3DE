@@ -145,6 +145,20 @@ CODES = {
               "(never imported by this version, or the file was deleted). "
               "Treated as a first import: everything is authored fresh and "
               "no hand edits can be detected."),
+    "REIMPORT_ENTITY_UNMATCHED": (
+        WARN, "The previous import authored an entity of this name and the "
+              "prefab no longer contains one -- it was renamed or deleted in "
+              "O3DE. Entities are matched back to the prefab by name, so any "
+              "hand edits on it cannot be found and are replaced by the "
+              "manifest's values. Renaming an imported entity in O3DE breaks "
+              "the link; rename the actor in UE instead."),
+    "REIMPORT_CONFLICT_NOT_PRESERVED": (
+        ERROR, "An entity was reported as hand-edited but its edit could not "
+               "be restored into the rebuilt prefab, because no entity of the "
+               "expected name was found there. The edit is lost. Being told "
+               "an edit was kept when it was not is worse than either "
+               "outcome on its own, so this is an error rather than a "
+               "warning."),
     "REIMPORT_NAME_COLLISION": (
         WARN, "Two manifest entities share a name. Entities are matched back "
               "to the prefab by name, so hand-edit detection cannot tell "

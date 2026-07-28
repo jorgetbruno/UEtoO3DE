@@ -71,8 +71,8 @@ rem Every product the import references must exist before the import asks the
 rem catalogue for it. import_level also waits per asset, but a cold cache
 rem without this step turns a 3-minute run into a timeout.
 "%O3DE_BIN%\AssetProcessorBatch.exe" --project-path="%PROJECT%" --platforms=pc
-if errorlevel 1 (
-  echo   Asset Processor failed 1>&2
+if %ERRORLEVEL% NEQ 0 (
+  echo   Asset Processor failed with exit code %ERRORLEVEL% 1>&2
   goto :failed
 )
 
@@ -80,9 +80,23 @@ echo === 3/3  import into %PROJECT% ===
 set "ARGS=--manifest=%OUTDIR%\manifest.json --report=%IMPORT_REPORT%"
 if not "%PREFAB%"=="" set "ARGS=%ARGS% --prefab=%PREFAB%"
 if not "%BACKEND%"=="" set "ARGS=%ARGS% --backend=%BACKEND%"
+rem Delete the report first: without this, a run that dies before writing one
+rem leaves the PREVIOUS run's report on disk, and the only artefact a caller
+rem inspects afterwards describes an import that did not happen.
+if exist "%IMPORT_REPORT%" del /q "%IMPORT_REPORT%"
 "%O3DE_BIN%\Editor.exe" --project-path="%PROJECT%" -BatchMode -autotest_mode --runpython "%REPO%\Tools\o3de_import.py" --runpythonargs "%ARGS%"
-if errorlevel 1 (
-  echo   import failed; see %IMPORT_REPORT% 1>&2
+rem NEQ 0, not `errorlevel 1`. `if errorlevel N` is a signed >= test, so it is
+rem FALSE for every negative exit code -- which is exactly what a crashed
+rem editor returns (access violation -1073741819, heap corruption
+rem -1073740940, stack overrun -1073740791). A crash would have passed as
+rem success, and the pipeline's whole purpose is that it cannot.
+if %ERRORLEVEL% NEQ 0 (
+  echo   import failed with exit code %ERRORLEVEL%; see %IMPORT_REPORT% 1>&2
+  goto :failed
+)
+rem An exit code of 0 is necessary but not sufficient: assert the artefact.
+if not exist "%IMPORT_REPORT%" (
+  echo   import exited 0 but wrote no report -- treating as failure 1>&2
   goto :failed
 )
 

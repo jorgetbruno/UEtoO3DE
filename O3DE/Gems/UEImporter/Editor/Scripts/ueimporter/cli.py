@@ -36,13 +36,34 @@ DEFAULTS = {
 
 
 def parse_args(argv):
+    """`--key=value` tokens -> options. Raises on anything it does not know.
+
+    Refusing unknown tokens is not pedantry. The editor tokenizes
+    `--runpythonargs` on whitespace, so `--prefab=Show case` arrives as
+    `["--prefab=Show", "case"]`. Silently dropping the stray "case" imported
+    into a prefab called `Show`, exited 0 and printed RESULT: PASS -- and the
+    NEXT run found no ledger for the name the user asked for, so it treated a
+    re-import as a first import and replaced every hand edit in it.
+    """
     options = dict(DEFAULTS)
+    unknown = []
     for token in argv:
         if not token.startswith("--"):
+            unknown.append(token)
             continue
-        key, _sep, value = token[2:].partition("=")
-        if key in options:
+        key, sep, value = token[2:].partition("=")
+        if key not in options:
+            unknown.append(token)
+        elif not sep:
+            unknown.append(token + " (expected --%s=value)" % key)
+        else:
             options[key] = value
+    if unknown:
+        raise ValueError(
+            "unrecognized argument(s): %s. Values must not contain spaces -- "
+            "the editor splits --runpythonargs on whitespace, so a name with a "
+            "space in it cannot survive and must not be silently truncated."
+            % ", ".join(repr(u) for u in unknown))
     return options
 
 
@@ -111,8 +132,8 @@ def run(options, log=print):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    options = parse_args(argv)
     try:
+        options = parse_args(argv)
         _report, _saved, errors = run(options)
     except Exception:
         print("IMPORT FAILED\n" + traceback.format_exc())

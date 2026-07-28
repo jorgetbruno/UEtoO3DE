@@ -94,27 +94,44 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # stands right now -- which is where the user's hand edits are. Once the
     # rebuild starts, that state is gone.
     previous_ledger = reimport_module.load_ledger(prefab_path) if reimport else None
-    transforms_before = reimport_module.read_prefab(prefab_path)
-    reimport_plan = reimport_module.plan(previous_ledger, document, transforms_before)
+    prefab_duplicates = set()
+    transforms_before = reimport_module.read_prefab(prefab_path,
+                                                   duplicates=prefab_duplicates)
+    reimport_plan = reimport_module.plan(previous_ledger, document,
+                                         transforms_before,
+                                         prefab_duplicates=prefab_duplicates)
     emit(reimport_module.summarize(reimport_plan))
     if reimport and previous_ledger is None and transforms_before:
         report.warn("REIMPORT_LEDGER_MISSING", os.path.basename(prefab_path),
                     "a prefab exists at this path but has no ledger beside it; "
                     "hand edits in it cannot be detected and will be replaced")
-    for name in reimport_plan["name_collisions"]:
+    for name in sorted(set(reimport_plan["name_collisions"]) | prefab_duplicates):
         report.warn("REIMPORT_NAME_COLLISION", name,
-                    "two entities in the manifest share this name")
+                    "more than one entity carries this name (two manifest "
+                    "entities, or an actor sharing the level root's name), so "
+                    "hand edits on it cannot be told apart and are neither "
+                    "detected nor preserved")
     for removed in reimport_plan["removed"]:
         report.warn("REIMPORT_ENTITY_REMOVED", removed["name"] or removed["id"],
                     "present in the previous import, absent from this manifest")
+    for unmatched in reimport_plan["unmatched"]:
+        report.warn("REIMPORT_ENTITY_UNMATCHED",
+                    unmatched["name"] or unmatched["id"],
+                    "the previous import authored this entity but the prefab "
+                    "has no entity of that name; any hand edits on it cannot "
+                    "be matched and are replaced")
     # "Added" means "new SINCE THE LAST IMPORT". On a first import every
     # entity is new in the trivial sense, and counting them all reads as
     # "12 actors appeared" on a report where nothing appeared -- so the
     # re-import counters stay at zero until there is a previous import to be
     # different from.
     if not reimport_plan["first_import"]:
+        names_by_id = {e["id"]: e.get("name") for e in document["entities"]}
         for entity_id in reimport_plan["added"]:
-            report.warn("REIMPORT_ENTITY_ADDED", entity_id,
+            # Report the NAME, not the uuid: the subject column is what a user
+            # reads to find the thing in their level, and a uuid5 identifies
+            # nothing to them.
+            report.warn("REIMPORT_ENTITY_ADDED", names_by_id.get(entity_id) or entity_id,
                         "new since the last import")
         report.count("reimport_added", len(reimport_plan["added"]))
     report.count("reimport_removed", len(reimport_plan["removed"]))
@@ -442,14 +459,41 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         prefab_build.create_prefab_in_memory([level_root], prefab_path)
     prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit)
 
-    # --- put hand edits back, then record what this import produced (M10) ---
+    # --- record what this import AUTHORED, then put hand edits back (M10) ---
+    #
+    # The order matters and is not obvious. The ledger is written FIRST, from
+    # the freshly rebuilt prefab -- that is, from the manifest's values, before
+    # any hand edit is patched back over them. Writing it afterwards instead
+    # made preservation survive exactly ONE re-import and then lose the edit in
+    # silence:
+    #
+    #   run 2: conflict -> prefab patched to the user's value C
+    #          ledger written from the patched file            -> records C
+    #   run 3: file is C, ledger says C -> no conflict detected
+    #          rebuild writes UE's value                       -> C is GONE
+    #
+    # The ledger's question is "what did WE author last time", so it must hold
+    # what we authored. Then the conflict test -- does the file differ from
+    # that? -- keeps answering yes for as long as the edit exists, and the edit
+    # survives indefinitely and is reported on every run.
+    ledger_path = reimport_module.write_ledger(
+        prefab_path, reimport_module.build_ledger(document, prefab_path))
+    emit("wrote import ledger " + os.path.basename(ledger_path))
+
     # The prefab has just been rebuilt from the manifest, so any entity the
     # user had moved is now back at UE's value. Patch those few entities in
     # the saved file and say which ones, loudly.
     if reimport_plan["conflicts"]:
         rebuilt = reimport_module.read_prefab(prefab_path)
         for conflict in reimport_plan["conflicts"]:
-            authored_now = rebuilt.get(conflict["name"])
+            # The REBUILT prefab is keyed by the NEW manifest names, so it must
+            # be looked up by `new_name`. Using the ledger's old name made
+            # `also_moved_in_ue` always False for a relabelled actor -- the
+            # report then said "only you changed this" while UE's new
+            # transform was being dropped. Same fix as preserve_conflicts;
+            # it belongs in both places, and originally landed in only one.
+            lookup = conflict.get("new_name") or conflict["name"]
+            authored_now = rebuilt.get(lookup)
             also_moved_in_ue = (
                 authored_now is not None
                 and not reimport_module.transforms_equal(authored_now,
@@ -461,14 +505,27 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             else:
                 detail = ("edited in O3DE since the last import; the edit is "
                           "kept and the manifest's transform was not applied")
-            report.warn("REIMPORT_ENTITY_CONFLICT", conflict["name"], detail)
+            # Report the name the entity has NOW, so the subject names
+            # something the user can find in their level. The two warnings for
+            # one entity used to disagree: this one used the old name while
+            # REIMPORT_CONFLICT_NOT_PRESERVED used the new one.
+            report.warn("REIMPORT_ENTITY_CONFLICT", lookup, detail)
         patched = reimport_module.preserve_conflicts(
             prefab_path, reimport_plan["conflicts"])
         report.count("reimport_preserved", len(patched))
         emit("preserved %d hand-edited transform(s)" % len(patched))
-
-    ledger_path = reimport_module.write_ledger(
-        prefab_path, reimport_module.build_ledger(document, prefab_path))
-    emit("wrote import ledger " + os.path.basename(ledger_path))
+        # Reporting a conflict and then not preserving it is the worst of both
+        # outcomes: the user is told their edit was kept, and it was not. That
+        # can only happen if an entity could not be found in the rebuilt
+        # prefab under the name we looked for, so name it rather than let the
+        # counters quietly disagree.
+        if len(patched) != len(reimport_plan["conflicts"]):
+            lost = sorted({(c.get("new_name") or c.get("name"))
+                           for c in reimport_plan["conflicts"]} - set(patched))
+            for name in lost:
+                report.warn("REIMPORT_CONFLICT_NOT_PRESERVED", name,
+                            "reported as hand-edited, but no entity of that "
+                            "name was found in the rebuilt prefab, so the edit "
+                            "could NOT be restored and has been lost")
 
     return report, prefab_path

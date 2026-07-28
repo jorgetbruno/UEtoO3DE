@@ -40,7 +40,11 @@ milestone per session; each session starts from that file.
   its exit code. `golden/Fixture_01.expected.json` is the M1 contract and is regenerated
   only by an explicit, reviewed commit (`test_m1_acceptance.py --update-golden`).
 - `Exports/` — interchange output (manifest, FBX, textures; generated, not committed).
-- `MAPPING.md` / `LANE_B.md` / `DIVERGENCES.md` (started at M3, two-column) — the documentation contract defined by the plan.
+- `MAPPING.md` / `LANE_B.md` / `DIVERGENCES.md` (started at M3, two-column) / `VERSIONS.md` —
+  the documentation contract defined by the plan. `MAPPING.md`'s warning tables are not
+  maintained by hand alone: `Tests\m11\test_docs.py` fails if a code exists in either
+  catalogue and not in the table, if a severity drifts, or if a row survives a code's
+  deletion.
 
 ## Running the tests
 
@@ -56,6 +60,7 @@ Tests\m7\run_m7.bat [dir]    M7: terrain contract -> sphere drop on the imported
 Tests\m8\run_m8.bat          M8: skeletal frame math -> .actor/.motion products -> playback by frame capture
 Tests\m9\run_m9.bat          M9: Fixture_02 export -> instance/spline/LOD/decal/camera assertions -> import readbacks
 Tests\m10\run_m10.bat        M10: menus both sides -> import dialog -> re-import diff -> full headless pipeline
+Tests\m11\run_m11.bat        M11: doc contract enforced -> a real level ported end to end with figures
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
 
@@ -139,6 +144,13 @@ Re-running an import is incremental by default: entities are matched by manifest
 (a uuid5 of the UE actor path), removals are reported, and anything edited by hand
 in O3DE is reported as `REIMPORT_ENTITY_CONFLICT` and **kept**. Pass
 `--reimport=0` to author everything from the manifest and overwrite those edits.
+
+Each import writes a ledger beside its prefab (`<Prefab>.ueimport.json`) recording
+what that import *authored*. It is what makes hand-edit detection possible, so
+**commit it with the prefab** — a teammate who has the prefab but not the ledger
+gets `REIMPORT_LEDGER_MISSING` and their next import silently replaces any manual
+fixes. See `DIVERGENCES.md` for what re-import does and does not track (transforms
+yes; component and material edits no).
 
 ## O3DE test projects (outside this repo, per O3DE convention)
 

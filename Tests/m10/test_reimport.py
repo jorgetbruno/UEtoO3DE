@@ -273,6 +273,263 @@ def test_preserving_an_identity_transform_clears_the_keys():
     check(after["A"] == reimport.IDENTITY, "round-trip broken: %r" % (after["A"],))
 
 
+def test_a_renamed_and_hand_edited_entity_is_still_preserved():
+    """The narrow case that made preservation a silent no-op.
+
+    An entity's manifest `name` is label-derived while its `id` is a uuid5 of
+    the actor PATH, so relabelling an actor in UE keeps the id and changes the
+    name. The conflict is then found in the current prefab under the OLD name
+    but must be written back into the rebuilt prefab under the NEW one.
+    Patching by the old name found nothing, preserved nothing, and still
+    reported the conflict -- telling the user their edit was kept while it was
+    being discarded.
+    """
+    before = make_manifest([("id-a", "OldName")])
+    prefab = make_prefab({"OldName": {"translate": [1.0, 0.0, 0.0]}})
+    path = write_temp(prefab)
+    try:
+        ledger = reimport.build_ledger(before, path)
+    finally:
+        os.unlink(path)
+
+    # The user then moves it in O3DE...
+    edited = write_temp(make_prefab({"OldName": {"translate": [1.0, 0.0, 7.0]}}))
+    try:
+        current = reimport.read_prefab(edited)
+    finally:
+        os.unlink(edited)
+
+    # ...and the actor is relabelled in UE, keeping its id.
+    after = make_manifest([("id-a", "NewName")])
+    result = reimport.plan(ledger, after, current)
+    check(len(result["conflicts"]) == 1,
+          "the hand edit must still be detected across a rename: %r"
+          % (result["conflicts"],))
+    if not result["conflicts"]:
+        return
+    conflict = result["conflicts"][0]
+    check(conflict.get("new_name") == "NewName",
+          "the conflict must carry the name the rebuild will use, got %r"
+          % (conflict.get("new_name"),))
+
+    # The rebuilt prefab uses the NEW name.
+    rebuilt = write_temp(make_prefab({"NewName": {"translate": [1.0, 0.0, 0.0]}}))
+    try:
+        patched = reimport.preserve_conflicts(rebuilt, result["conflicts"])
+        restored = reimport.read_prefab(rebuilt)
+    finally:
+        os.unlink(rebuilt)
+    check(patched == ["NewName"],
+          "expected to patch the renamed entity, patched %r" % (patched,))
+    check(restored.get("NewName", {}).get("translate") == [1.0, 0.0, 7.0],
+          "the edit was reported as kept but not restored: %r"
+          % (restored.get("NewName"),))
+
+
+def test_preserve_reports_what_it_could_not_patch():
+    """A conflict naming an entity that is not in the rebuilt prefab must come
+    back as un-patched, so the caller can say so instead of counting it as
+    preserved."""
+    rebuilt = write_temp(make_prefab({"StillHere": None}))
+    try:
+        patched = reimport.preserve_conflicts(rebuilt, [{
+            "id": "id-x", "name": "Vanished", "new_name": "Vanished",
+            "authored": dict(reimport.IDENTITY),
+            "current": {"translate": [5.0, 0.0, 0.0], "rotate": [0.0, 0.0, 0.0],
+                        "uniform_scale": 1.0},
+        }])
+    finally:
+        os.unlink(rebuilt)
+    check(patched == [],
+          "patching an entity that is not in the prefab must report nothing "
+          "patched, got %r" % (patched,))
+
+
+def test_a_hand_edit_survives_MORE_THAN_ONE_reimport():
+    """The bug this exists for: preservation that works once and then loses the
+    edit in silence.
+
+    The ledger records what the import AUTHORED, not what the file ends up as.
+    Written the other way round -- from the file after the edit was patched
+    back -- the second re-import sees file == ledger, reports no conflict, and
+    the rebuild quietly replaces the user's edit with UE's value. One
+    re-import looks perfect; two lose the data. This walks three runs.
+    """
+    manifest = make_manifest([("id-a", "A")])
+    authored = {"A": {"translate": [1.0, 0.0, 0.0]}}
+    edit = [1.0, 0.0, 9.0]
+
+    def run(current_transforms, authored_translate):
+        """One import: rebuild to `authored_translate`, ledger from the REBUILD,
+        then patch conflicts back. Mirrors importer.import_level's order."""
+        rebuilt_path = write_temp(make_prefab({"A": {"translate": authored_translate}}))
+        try:
+            plan = reimport.plan(run.ledger, manifest, current_transforms)
+            run.ledger = reimport.build_ledger(manifest, rebuilt_path)
+            reimport.preserve_conflicts(rebuilt_path, plan["conflicts"])
+            return plan, reimport.read_prefab(rebuilt_path)
+        finally:
+            os.unlink(rebuilt_path)
+
+    run.ledger = None
+
+    # Run 1: first import. Nothing to compare against.
+    _plan, state = run({}, [1.0, 0.0, 0.0])
+    check(state["A"]["translate"] == [1.0, 0.0, 0.0], "run 1 authored wrongly")
+
+    # The user moves it in O3DE.
+    state["A"]["translate"] = list(edit)
+
+    # Run 2: UE has not changed. The edit must be detected and kept.
+    plan2, state = run(state, [1.0, 0.0, 0.0])
+    check(len(plan2["conflicts"]) == 1, "run 2 did not detect the hand edit")
+    check(state["A"]["translate"] == edit,
+          "run 2 lost the hand edit: %r" % (state["A"]["translate"],))
+
+    # Run 3: still unchanged in UE. THIS is where writing the ledger from the
+    # patched file used to lose the edit without a word.
+    plan3, state = run(state, [1.0, 0.0, 0.0])
+    check(len(plan3["conflicts"]) == 1,
+          "run 3 reported no conflict, so the edit is about to be silently "
+          "overwritten -- the ledger is recording the patched file instead of "
+          "what the import authored")
+    check(state["A"]["translate"] == edit,
+          "run 3 lost the hand edit: %r" % (state["A"]["translate"],))
+
+
+def test_an_actor_named_after_the_level_never_moves_the_level_root():
+    """Found by adversarial review, and reproduced: the saved prefab contains a
+    level-root entity named after the LEVEL, sitting in `Entities` alongside
+    the actors. `read_prefab` keys by name, so an actor whose UE label equals
+    the level name collapses onto the root — and `preserve_conflicts` then
+    wrote that actor's edited transform into EVERY entity carrying the name,
+    including the root, which is the parent of every manifest root. The whole
+    prefab was offset on instantiation, reported only as a WARN whose text
+    claimed the conflict had not been reported at all.
+    """
+    manifest = make_manifest([("id-a", "Fixture_01")])
+    manifest["level"]["name"] = "Fixture_01"
+
+    # A prefab holding BOTH the level root and an actor of the same name.
+    prefab = {"ContainerEntity": {"Id": "ContainerEntity", "Name": "Root"},
+              "Entities": {}}
+    for index, (entity_id, translate) in enumerate(
+            (("Entity_[7777]", None), ("Entity_[8888]", [5.0, 0.0, 0.0]))):
+        component = {"$type": "{27F1E1A1-8D9D-4C3B-BD3A-AFB9762449C0} TransformComponent",
+                     "Id": 900 + index}
+        if translate:
+            component["Transform Data"] = {"Translate": list(translate)}
+        prefab["Entities"][entity_id] = {
+            "Id": entity_id, "Name": "Fixture_01",
+            "Components": {"TransformComponent": component}}
+
+    path = write_temp(prefab)
+    try:
+        duplicates = set()
+        current = reimport.read_prefab(path, duplicates=duplicates)
+        check(duplicates == {"Fixture_01"},
+              "read_prefab must report the duplicated name, got %r" % (duplicates,))
+        ledger = reimport.build_ledger(manifest, path)
+        result = reimport.plan(ledger, manifest, current,
+                              prefab_duplicates=duplicates)
+        check("Fixture_01" in result["name_collisions"],
+              "an actor sharing the level's name must be flagged: %r"
+              % (result["name_collisions"],))
+        check(result["conflicts"] == [],
+              "an ambiguous name must raise NO conflict — there is no way to "
+              "write it back safely. Got %r" % (result["conflicts"],))
+
+        # Second line of defence: even handed a conflict directly,
+        # preserve_conflicts must refuse rather than fan the value out.
+        patched = reimport.preserve_conflicts(path, [{
+            "id": "id-a", "name": "Fixture_01", "new_name": "Fixture_01",
+            "authored": dict(reimport.IDENTITY),
+            "current": {"translate": [5.0, 0.0, 9.0], "rotate": [0.0, 0.0, 0.0],
+                        "uniform_scale": 1.0}}])
+        after = json.load(open(path))
+        root = after["Entities"]["Entity_[7777]"]["Components"]["TransformComponent"]
+    finally:
+        os.unlink(path)
+    check(patched == [],
+          "a duplicated name must not be patched at all, patched %r" % (patched,))
+    check("Transform Data" not in root,
+          "THE LEVEL ROOT WAS MOVED (%r) — every entity in the prefab is now "
+          "offset" % (root.get("Transform Data"),))
+
+
+def test_two_entities_sharing_a_name_are_never_cross_patched():
+    """The other half of the same defect: one entity's edit written into a
+    second entity nobody touched, while the length-based guard stayed silent
+    because two names patched equalled two conflicts reported."""
+    manifest = make_manifest([("id-a", "Box"), ("id-b", "Box")])
+    prefab = {"ContainerEntity": {"Id": "ContainerEntity", "Name": "Root"},
+              "Entities": {
+                  "Entity_[1]": {"Id": "Entity_[1]", "Name": "Box", "Components": {
+                      "TransformComponent": {
+                          "$type": "{27F1E1A1-8D9D-4C3B-BD3A-AFB9762449C0} TransformComponent",
+                          "Id": 1, "Transform Data": {"Translate": [1.0, 0.0, 0.0]}}}},
+                  "Entity_[2]": {"Id": "Entity_[2]", "Name": "Box", "Components": {
+                      "TransformComponent": {
+                          "$type": "{27F1E1A1-8D9D-4C3B-BD3A-AFB9762449C0} TransformComponent",
+                          "Id": 2, "Transform Data": {"Translate": [2.0, 0.0, 9.0]}}}}}}
+    path = write_temp(prefab)
+    try:
+        duplicates = set()
+        current = reimport.read_prefab(path, duplicates=duplicates)
+        ledger = reimport.build_ledger(manifest, path)
+        result = reimport.plan(ledger, manifest, current,
+                              prefab_duplicates=duplicates)
+        check(result["conflicts"] == [],
+              "duplicated names must raise no conflicts, got %r"
+              % (result["conflicts"],))
+        patched = reimport.preserve_conflicts(path, [{
+            "id": "id-a", "name": "Box", "new_name": "Box",
+            "authored": {"translate": [1.0, 0.0, 0.0], "rotate": [0.0, 0.0, 0.0],
+                         "uniform_scale": 1.0},
+            "current": {"translate": [2.0, 0.0, 9.0], "rotate": [0.0, 0.0, 0.0],
+                        "uniform_scale": 1.0}}])
+        after = json.load(open(path))
+        first = after["Entities"]["Entity_[1]"]["Components"]["TransformComponent"]
+    finally:
+        os.unlink(path)
+    check(patched == [], "an ambiguous name must not be patched: %r" % (patched,))
+    check(first["Transform Data"]["Translate"] == [1.0, 0.0, 0.0],
+          "an entity nobody edited was overwritten with another's transform: %r"
+          % (first["Transform Data"],))
+
+
+def test_renaming_an_entity_in_O3DE_is_reported_not_silent():
+    """Entities are matched back to the prefab by name, so renaming one in
+    O3DE severs the link and its hand edits are replaced. That is a real
+    limitation and cannot be fixed by matching alone — but it must not happen
+    quietly, which is what it did until the review pointed it out."""
+    manifest = make_manifest([("id-a", "Wall"), ("id-b", "Floor")])
+    path = write_temp(make_prefab({"Wall": {"translate": [1.0, 0.0, 0.0]},
+                                   "Floor": None}))
+    try:
+        ledger = reimport.build_ledger(manifest, path)
+    finally:
+        os.unlink(path)
+
+    renamed = write_temp(make_prefab({"Wall_MyEdit": {"translate": [1.0, 0.0, 9.0]},
+                                      "Floor": None}))
+    try:
+        current = reimport.read_prefab(renamed)
+    finally:
+        os.unlink(renamed)
+
+    result = reimport.plan(ledger, manifest, current)
+    check([u["name"] for u in result["unmatched"]] == ["Wall"],
+          "an entity renamed in O3DE must be reported as unmatched, got %r"
+          % (result["unmatched"],))
+    check(result["conflicts"] == [],
+          "a renamed entity cannot be matched, so it cannot be a conflict: %r"
+          % (result["conflicts"],))
+    # The untouched entity must NOT be dragged into it.
+    check("Floor" not in [u["name"] for u in result["unmatched"]],
+          "an entity that is still present was reported as unmatched")
+
+
 def test_ledger_round_trip_and_version_gate():
     manifest = make_manifest([("id-a", "A")])
     prefab = make_prefab({"A": {"translate": [1.0, 0.0, 0.0]}})
@@ -349,6 +606,12 @@ def main():
                  test_added_and_removed_are_matched_by_id_not_by_name,
                  test_preserve_conflicts_puts_the_users_value_back,
                  test_preserving_an_identity_transform_clears_the_keys,
+                 test_a_renamed_and_hand_edited_entity_is_still_preserved,
+                 test_preserve_reports_what_it_could_not_patch,
+                 test_a_hand_edit_survives_MORE_THAN_ONE_reimport,
+                 test_an_actor_named_after_the_level_never_moves_the_level_root,
+                 test_two_entities_sharing_a_name_are_never_cross_patched,
+                 test_renaming_an_entity_in_O3DE_is_reported_not_silent,
                  test_ledger_round_trip_and_version_gate,
                  test_ledger_path_is_beside_the_prefab,
                  test_against_a_real_saved_prefab):

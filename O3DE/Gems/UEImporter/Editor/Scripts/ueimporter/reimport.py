@@ -75,8 +75,16 @@ def _transform_of(entity):
     return dict(IDENTITY)
 
 
-def read_prefab(prefab_path):
-    """`{entity name: transform}` for a saved prefab. `{}` if there is none."""
+def read_prefab(prefab_path, duplicates=None):
+    """`{entity name: transform}` for a saved prefab. `{}` if there is none.
+
+    Pass a `set` as `duplicates` to learn which names appeared more than once.
+    That matters more than it looks: a saved prefab contains a level-root
+    entity named after the LEVEL alongside the actor entities, so an actor
+    whose UE label equals the level name collapses onto the root here, and
+    whichever one the dict keeps is decided by iteration order. Callers that
+    write back through these names must refuse to touch a duplicated one.
+    """
     if not os.path.isfile(prefab_path):
         return {}
     with open(prefab_path, "r") as handle:
@@ -86,6 +94,8 @@ def read_prefab(prefab_path):
         name = entity.get("Name")
         if name is None:
             continue
+        if name in out and duplicates is not None:
+            duplicates.add(name)
         out[name] = _transform_of(entity)
     return out
 
@@ -157,7 +167,7 @@ def load_ledger(prefab_path):
 # the plan
 # ---------------------------------------------------------------------------
 
-def plan(ledger, document, current_transforms=None):
+def plan(ledger, document, current_transforms=None, prefab_duplicates=None):
     """Diff a previous import against a new manifest.
 
     `ledger`             from `load_ledger`, or None for a first import
@@ -170,14 +180,20 @@ def plan(ledger, document, current_transforms=None):
     """
     result = {"first_import": ledger is None, "added": [], "removed": [],
               "updated": [], "unchanged": [], "conflicts": [],
-              "name_collisions": []}
+              "name_collisions": [], "unmatched": []}
 
     new_by_id = {}
     seen_names = {}
+    # The prefab also contains a level-root entity named after the LEVEL, which
+    # no manifest entity corresponds to. An actor sharing that name shadows it
+    # in the by-name lookup, so the ledger would record the root's identity
+    # transform for that actor and report a conflict on every import from then
+    # on. Rare, but silently wrong rather than loudly wrong.
+    level_name = (document.get("level") or {}).get("name")
     for item in document.get("entities") or []:
         new_by_id[item["id"]] = item
         name = item.get("name")
-        if name in seen_names:
+        if name in seen_names or (level_name and name == level_name):
             result["name_collisions"].append(name)
         seen_names[name] = item["id"]
 
@@ -197,22 +213,46 @@ def plan(ledger, document, current_transforms=None):
     if current_transforms is None:
         current_transforms = {}
 
+    # A name that is ambiguous cannot be used to write anything back, so the
+    # entities carrying it are excluded from conflict detection entirely --
+    # which is what REIMPORT_NAME_COLLISION has always claimed happens. Before
+    # this, they went through the normal path and `preserve_conflicts` then
+    # wrote one entity's edited transform into EVERY entity sharing the name.
+    # With the level root among them (it is named after the level), that
+    # translated the whole prefab.
+    ambiguous = set(result["name_collisions"]) | set(prefab_duplicates or ())
+
     for entity_id in sorted(set(old) & set(new_by_id)):
         record = old[entity_id]
         name = record.get("name")
         authored = record.get("transform")
-        current = current_transforms.get(name)
+        current = None if name in ambiguous else current_transforms.get(name)
         # A name that vanished from the prefab is not an edit -- the user may
         # have deleted the entity, or the prefab may simply not have been read.
         # Either way there is nothing to preserve, so it is not a conflict.
+        new_name = new_by_id[entity_id].get("name")
+        if new_name in ambiguous:
+            current = None  # the write-back target is ambiguous too
+        elif current is None and current_transforms and name not in ambiguous:
+            # The ledger knows this entity, the prefab has no entity of that
+            # name, and the prefab is not empty: it was renamed or deleted in
+            # O3DE. Either way its hand edits cannot be matched and are about
+            # to be replaced. That used to happen without a word.
+            result["unmatched"].append({"id": entity_id, "name": name})
         if current is not None and not transforms_equal(authored, current):
             result["conflicts"].append({
                 "id": entity_id,
+                # `name` is what the entity was called when the edit was made,
+                # which is how it is found in the CURRENT prefab. `new_name` is
+                # what the rebuild will call it, which is how it must be found
+                # afterwards to put the edit back. They differ whenever the
+                # actor was renamed in UE, and patching by the old name then
+                # silently preserves nothing while still reporting a conflict.
                 "name": name,
+                "new_name": new_name,
                 "authored": authored,
                 "current": current,
             })
-        new_name = new_by_id[entity_id].get("name")
         if new_name != name:
             result["updated"].append(entity_id)
         else:
@@ -240,13 +280,35 @@ def preserve_conflicts(prefab_path, conflicts):
     with open(prefab_path, "r") as handle:
         document = json.load(handle)
 
-    wanted = {c["name"]: c["current"] for c in conflicts if c.get("name")}
+    # Match on the name the REBUILT prefab uses. `new_name` is absent only for
+    # conflicts built by older callers, where the two are the same anyway.
+    wanted = {}
+    for conflict in conflicts:
+        target = conflict.get("new_name") or conflict.get("name")
+        if target:
+            wanted[target] = conflict["current"]
+    # How many entities carry each wanted name? A name on two entities cannot
+    # be written back safely -- `plan` already refuses to raise conflicts for
+    # ambiguous names, and this is the second line of defence, because the
+    # failure it prevents is severe: the loop below has its `break` on the
+    # COMPONENT loop, so without this check one entity's edited transform is
+    # written into every entity sharing its name. When the level root shares
+    # the name (it is named after the level), that offsets the entire prefab.
+    counts = {}
+    for entity in (document.get("Entities") or {}).values():
+        name = entity.get("Name")
+        if name in wanted:
+            counts[name] = counts.get(name, 0) + 1
+    for name, count in counts.items():
+        if count > 1:
+            del wanted[name]
+
     patched = []
     for entity in (document.get("Entities") or {}).values():
         name = entity.get("Name")
         if name not in wanted:
             continue
-        target = wanted[name]
+        target = wanted.pop(name)   # once per name, never fanned out
         for component in (entity.get("Components") or {}).values():
             if "TransformComponent" not in str(component.get("$type", "")):
                 continue

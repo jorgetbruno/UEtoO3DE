@@ -44,6 +44,23 @@ class BackendAmbiguityError(BackendDetectionError):
     """Both backends resolve and no explicit choice was given. Never guess."""
 
 
+def settings_hint(settings_reader=None):
+    """The Settings Registry's backend name, or None. Never raises.
+
+    Exists so callers do not reach into `_SETREG_VALUE_TO_BACKEND` to do this
+    themselves -- the M10 dialog did, and a private mapping with an outside
+    caller is a rename away from breaking the one place a user sees it.
+    """
+    reader = settings_reader or editor_settings_reader
+    try:
+        raw = reader()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    return _SETREG_VALUE_TO_BACKEND.get(str(raw).lower())
+
+
 def available(resolver):
     """Which backends' components resolve here. Pure; never raises.
 

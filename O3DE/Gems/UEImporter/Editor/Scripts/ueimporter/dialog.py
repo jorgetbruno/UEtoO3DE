@@ -256,12 +256,7 @@ def run_import_dialog(parent=None):
         resolved = detection.available(detection.editor_resolver)
     except Exception:
         resolved = []
-    hint = None
-    try:
-        raw = detection.editor_settings_reader()
-        hint = detection._SETREG_VALUE_TO_BACKEND.get(str(raw).lower()) if raw else None
-    except Exception:
-        hint = None
+    hint = detection.settings_hint()
 
     dialog = make_import_dialog(resolved, hint, "", project_root)
     if dialog.exec_() != QtWidgets.QDialog.Accepted:
@@ -276,6 +271,23 @@ def run_import_dialog(parent=None):
     export_root = os.path.dirname(os.path.abspath(options["manifest_path"]))
     prefab_path = "%s/Prefabs/%s.prefab" % (project_root,
                                             options["prefab_name"] or "ImportedLevel")
+
+    # The import opens a scratch level to author in, and it does so with
+    # `open_level_no_prompt` -- the variant that skips the save-changes modal.
+    # From a batch script that is correct and deliberate. From a menu item it
+    # is data loss: a user with unsaved work in the level they are standing in
+    # loses it the moment they press Import, with no warning and no undo. So
+    # the UI asks first. (The batch path is unchanged; it has no user to ask.)
+    scratch_level = os.environ.get("UEO3DE_SCRATCH_LEVEL", "DefaultLevel")
+    proceed = QtWidgets.QMessageBox.warning(
+        None, "Import UE Manifest",
+        "Importing opens the '%s' level to build the prefab in.\n\n"
+        "Your current level will be closed WITHOUT a save prompt, so save "
+        "any work first.\n\nContinue?" % scratch_level,
+        QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel,
+        QtWidgets.QMessageBox.Cancel)
+    if proceed != QtWidgets.QMessageBox.Ok:
+        return None
 
     progress = QtWidgets.QProgressDialog("Importing...", "", 0, 0, None)
     progress.setWindowTitle("Import UE Manifest")
@@ -297,6 +309,7 @@ def run_import_dialog(parent=None):
             source_assets_root=os.path.join(export_root, "Assets"),
             project_assets_root=os.path.join(project_root, "Assets"),
             prefab_path=prefab_path,
+            level_name=scratch_level,
             backend=options["backend"],
             reimport=options["reimport"],
             log=log)

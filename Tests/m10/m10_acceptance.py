@@ -208,6 +208,30 @@ def main():
           "preserving one entity disturbed another (%r)" % MOVED_ENTITY)
 
     log("")
+    log("=== 3c. the edit survives a SECOND re-import ===")
+    # Preservation that works once and then loses the edit is worse than none,
+    # because the user has learned to trust it. This failed until the ledger
+    # was written from what the import AUTHORED rather than from the patched
+    # file: run 3 then saw file == ledger, reported no conflict, and the
+    # rebuild replaced the edit without a word.
+    report5, _saved = do_import(PASS2)
+    still = reimport.read_prefab(prefab_path)
+    codes5 = [r for r in report5.records() if r["code"] == "REIMPORT_ENTITY_CONFLICT"]
+    log("  conflicts on the second re-import: %r" % ([r["subject"] for r in codes5],))
+    log("  %s translate: %r" % (HAND_EDITED_ENTITY,
+                                still[HAND_EDITED_ENTITY]["translate"]))
+    check(len(codes5) == 1 and codes5[0]["subject"] == HAND_EDITED_ENTITY,
+          "the second re-import stopped reporting the hand edit, so it is "
+          "about to be overwritten silently: %r"
+          % ([r["subject"] for r in codes5],))
+    check(still[HAND_EDITED_ENTITY]["translate"] == edited_value,
+          "the hand edit was lost on the SECOND re-import: %r, expected %r"
+          % (still[HAND_EDITED_ENTITY]["translate"], edited_value))
+    check(not report5.has_errors(),
+          "the re-import reported errors (a conflict that could not be "
+          "preserved is one)")
+
+    log("")
     log("=== 3b. CONTROL: reimport=False must overwrite the same edit ===")
     # Without this, "the value survived" is also what an importer that never
     # writes transforms at all would produce.

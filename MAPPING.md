@@ -183,6 +183,22 @@ on codes, never on English strings.
 | `PHYS_NO_SIMPLE_COLLISION` | info | Mesh has no simple collision; M3 needs a mesh collider. |
 | `PHYS_DEGENERATE_SHAPE` | warn | Collision primitive with a zero/near-zero dimension. |
 | `PHYS_SHAPE_UNSUPPORTED` | warn | Collision primitive kind with no v1 mapping. |
+| `MAT_EXPR_UNSUPPORTED` | warn | Material property driven by an expression outside the v1 subset. Base colour → whole material falls back; otherwise only that property drops. |
+| `MAT_BLEND_UNSUPPORTED` | warn | UE blend mode outside Opaque/Masked/Translucent; imported as translucent. |
+| `MAT_FUNCTION_PASSTHROUGH` | info | Channel driven by unsupported math (function call, contrast, blend chain); approximated by the nearest texture beneath it. |
+| `ENV_POSTPROCESS_UNMAPPED` | info | A post-process setting the artist overrode has no M6 mapping; carried in the manifest, not authored. |
+| `ENV_VOLUME_BOUNDS_UNKNOWN` | warn | A bounded post-process volume's extents could not be read, so the importer cannot size the equivalent volume. |
+| `TERRAIN_BAKED_TO_MESH` | info | Landscape baked to a world-space grid mesh sampled from its heightfield collision (the M7 v1 path). |
+| `TERRAIN_LAYERS_FLATTENED` | info | Landscape layer blending has no O3DE equivalent; the terrain renders with one converted material. |
+| `ANIM_ROOT_MOTION_DROPPED` | warn | AnimSequence has root motion; Simple Motion does not extract it to entity movement, so the character animates in place. |
+| `ANIM_BLUEPRINT_UNMAPPED` | warn | Skeletal component driven by an Animation Blueprint; graph logic has no mapping, so it imports in bind pose with no motion. |
+| `SKEL_PHYSICS_DROPPED` | info | Skeletal collision comes from UE's per-bone PhysicsAsset; per-bone bodies have no v1 mapping, so the entity imports without physics. |
+| `ACTOR_INSTANCES_EXPANDED` | info | ISM/HISM instances expanded into individual child entities sharing one mesh asset; Atom re-instances identical models at render time. |
+| `INSTANCES_TRUNCATED` | warn | More instances than the export ceiling (`UEO3DE_MAX_INSTANCES`); the excess was dropped. 100k instances as entities will not open. |
+| `SPLINE_BAKED` | warn | A SplineMeshComponent's deformed geometry was baked to a static mesh; the live spline is lost. |
+| `LOD_FLATTENED` | warn | Source mesh has multiple LODs; only LOD0 is exported, so it renders at full detail at every distance. |
+| `DECAL_MATERIAL_APPROX` | warn | Decal material converts through StandardPBR, not an Atom decal material type; projection blending will not match UE's deferred decal. |
+| `CAMERA_UNSUPPORTED_MODE` | warn | Projection mode with no v1 mapping (orthographic); the entity keeps its transform and gets no camera component. |
 
 The importer has its own catalogue for the other direction — things the manifest
 carried faithfully that O3DE cannot represent the same way
@@ -204,6 +220,28 @@ separate because they are fixed in different places.
 | `LIGHT_SOURCE_RADIUS_DROPPED` | info | UE area-light source radius lost; imported as punctual. |
 | `LIGHT_TEMPERATURE_DROPPED` | info | UE colour temperature has no Atom equivalent. |
 | `LIGHT_TYPE_UNSUPPORTED` | warn | UE light class (rect/area) has no v1 mapping. |
+| `MAT_SLOT_UNUSED` | info | A slot matched nothing and every model slot is already assigned — the asset lists a slot no render triangle uses. Nothing was lost. |
+| `MAT_SLOT_BY_ELIMINATION` | info | A material matched no slot label (the asset's slot carries no default material, so the FBX has no name for it) but exactly one model slot was unclaimed. |
+| `DECAL_MATERIAL_UNCONVERTED` | warn | A decal's material did not convert; the decal imports with its volume and sort key but no material. |
+| `ENV_SKYLIGHT_APPROX` | warn | UE's image-based skylight has no exportable irradiance images, so a Physical Sky stands in. Lighting is approximate. |
+| `ENV_SKY_ATMOSPHERE_APPROX` | warn | SkyAtmosphere scattering has no Atom equivalent; a default-turbidity Physical Sky stands in. |
+| `ENV_SKY_DUPLICATE` | info | More than one actor maps to the sky; only the first is authored, because two Physical Sky components fight. |
+| `ENV_FOG_APPROX` | warn | UE fog is exponential in height, Atom's is a distance ramp with a height band; density and range are approximated. |
+| `ENV_POSTPROCESS_UNBOUNDED` | warn | A bounded UE post-process volume becomes a level-wide PostFX layer. |
+| `ENV_POSTPROCESS_DISABLED` | info | The UE post-process volume is disabled; no layer authored. |
+| `ENV_BLOOM_THRESHOLD_APPROX` | info | UE's negative bloom threshold is a "no threshold" sentinel with no Atom equivalent; 0.0 is used. |
+| `ENV_TYPE_UNSUPPORTED` | warn | Environment actor type has no v1 mapping; the entity keeps its transform only. |
+| `PHYS_SHAPE_APPROXIMATED` | warn | A shape could not be authored exactly **on this backend** and was substituted. The same UE level legitimately differs per backend; this makes it visible. |
+| `PHYS_PROFILE_FALLBACK` | warn | UE collision profile absent from `collision_profiles.json`; the named fallback layer was used. Channel semantics are lossy by design. |
+| `PHYS_MESH_FROM_RENDER` | info | No simple primitives; a mesh collider was baked from the render geometry (triangle mesh static, convex hull dynamic). |
+| `MASS_FROM_DENSITY` | info | No explicit UE mass override; the backend derives mass from volume × its default density, which will not match UE's figure. |
+| `REIMPORT_ENTITY_ADDED` | info | The actor is new since the previous import of this prefab. |
+| `REIMPORT_ENTITY_REMOVED` | info | The actor was in the previous import and is gone from this manifest; its entity is not recreated. |
+| `REIMPORT_ENTITY_CONFLICT` | warn | The entity was edited by hand in O3DE since the last import. **The edit is kept** and the manifest's transform is not applied. |
+| `REIMPORT_LEDGER_MISSING` | info | A re-import was asked for but the prefab has no ledger; treated as a first import, so hand edits cannot be detected. |
+| `REIMPORT_NAME_COLLISION` | warn | Two manifest entities share a name. Entities match back to the prefab by name, so these two cannot be told apart for conflict detection. |
+| `REIMPORT_ENTITY_UNMATCHED` | warn | The previous import authored this entity and the prefab no longer has one of that name — renamed or deleted in O3DE. Its hand edits cannot be matched and are replaced. Rename the actor in UE, not the entity in O3DE. |
+| `REIMPORT_CONFLICT_NOT_PRESERVED` | error | An edit was reported as kept but could not be written back (no entity of the expected name in the rebuilt prefab). Being told an edit survived when it did not is worse than either outcome alone. |
 
 ## Lights (M5)
 
