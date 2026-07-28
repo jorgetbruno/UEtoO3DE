@@ -30,6 +30,17 @@ exists, is a design change recorded here rather than a patch.
 | Negative scale (flat actors) | legal, mirrors geometry | **faithful since M4.5.** Even negative-axis counts are exactly a 180° rotation and fold into the quaternion (lossless); odd counts fold all but one canonical mirror, and the entity references a baked mirror-X mesh variant (`#mx` asset, mirrored collision) → `XFORM_MIRRORED_MESH_VARIANT` (info). Cost: one extra mesh asset per (mesh, mirror) pair — L_Showcase's 381 mirrored actors share 36 variants |
 | Negative scale (in attach hierarchies) | children inherit the mirror | not representable: folding rewrites the parent frame out from under its children. Absolute value imported + `XFORM_NEGATIVE_SCALE` (both measured levels have zero such actors) |
 | Blueprint actors | class + components + scripts | the class and scripts have no mapping; StaticMeshComponents are extracted as child entities (`ACTOR_COMPONENTS_EXTRACTED`), child-actor components dedup against their own actor entries, and sky-sphere Blueprints are skipped in favour of M6's Physical Sky. Anything scripted (interaction, animation, spawning) is gone |
+
+## Terrain (M7)
+
+| Behaviour | UE | → O3DE |
+|---|---|---|
+| Representation | live heightfield (sculptable, LOD-morphing, per-component streaming) | a baked static grid mesh sampled at 2 m spacing (`UEO3DE_TERRAIN_SPACING`), triangle-mesh collider. Detail between grid nodes is quantized away; cliff faces are as steep as one cell allows → `TERRAIN_BAKED_TO_MESH` |
+| Layer painting | weight-blended material layers per component | the single converted material over the whole terrain; the classifier's nearest-texture rule picks one layer per channel → `TERRAIN_LAYERS_FLATTENED` |
+| Pivot/transform | landscape actor transform (scale 100 etc.) | the terrain entity sits at IDENTITY and the mesh carries world-space geometry — moving the terrain entity moves the world, but the UE pivot is not preserved |
+| Landscape holes | hole material carves visibility + collision | holes are sampled as their neighbours (C0 fill); neither the visual nor the collision hole survives |
+| Streaming proxies | `LandscapeStreamingProxy` per region | not supported (`ACTOR_DEFERRED`); single-Landscape levels only |
+| Heightfield physics | native heightfield collider | triangle mesh from the render bake (the plan's v1 path). The Jolt gem's heightfield collider needs O3DE's Terrain gem as provider — that integration is the plan's stretch goal, prepared for by the exported heightmap TGA |
 | World orientation | +X forward | the negate-Y basis map lands UE's forward on O3DE's +X (O3DE's right): faithful shape, mirror-free, yawed 90° versus O3DE's forward convention. Nothing in v1 scope depends on it (MAPPING.md, Lane A) |
 
 ## Lights (M5)

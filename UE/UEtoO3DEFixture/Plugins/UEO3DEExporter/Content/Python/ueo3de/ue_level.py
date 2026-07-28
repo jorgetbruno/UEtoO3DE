@@ -352,6 +352,10 @@ _EXTENSIONS = {"static_mesh": "fbx", "material": "material"}
 # maps '#' to '_' for the O3DE path, and mesh_export strips it to load the
 # real asset and to choose the variant bake.
 MIRROR_SUFFIX = "#mx"
+# The terrain fragment works the same way, except the part before '#' is the
+# Landscape ACTOR's path (a landscape has no asset), which mesh_export
+# resolves to the live actor in the open level.
+TERRAIN_SUFFIX = "#terrain"
 
 
 class AssetTable:
@@ -473,6 +477,62 @@ class AssetTable:
             entry["name"] = mesh.get_name() + "_MX"
             entry["fbx_node_name"] = mesh.get_name() + "_MX"
         self._entries[guid] = entry
+        return guid
+
+    def add_terrain(self, actor, warnings):
+        """Register a Landscape actor's baked-terrain asset entry (M7).
+
+        The entry's ue_path is the ACTOR path plus '#terrain' -- landscapes
+        have no asset to reference. mesh_export resolves the actor in the
+        open level, samples heights by per-component line traces (needs a
+        full-editor session; every commandlet route is measured dead, see
+        Tests/ue/probe_m7_*.py) and bakes the grid through the normal Lane B
+        pipeline. Returns the guid, or None if the landscape has no
+        collision components to sample.
+        """
+        components = actor.get_components_by_class(
+            getattr(unreal, "LandscapeHeightfieldCollisionComponent",
+                    unreal.SceneComponent)) or []
+        if not components:
+            return None
+
+        actor_path = actor.get_path_name()
+        key = actor_path + TERRAIN_SUFFIX
+        guid = naming.asset_guid(key)
+        if guid in self._entries:
+            return guid
+
+        label = actor.get_actor_label()
+        node_name = "".join(c if c.isalnum() else "_" for c in label) + "_Terrain"
+        origin, extent = actor.get_actor_bounds(False)
+        aabb_min, aabb_max = _converted_aabb(
+            [origin.x - extent.x, origin.y - extent.y, origin.z - extent.z],
+            [origin.x + extent.x, origin.y + extent.y, origin.z + extent.z])
+
+        material = None
+        try:
+            material = actor.get_editor_property("landscape_material")
+        except Exception:
+            pass
+        material_name = material.get_name() if material is not None else ""
+
+        warnings.add("TERRAIN_BAKED_TO_MESH", label,
+                     "landscape baked to a world-space grid mesh (%d collision "
+                     "components); physics is the importer's render-mesh "
+                     "triangle collider" % len(components))
+
+        self._entries[guid] = {
+            "guid": guid,
+            "kind": "static_mesh",
+            "ue_path": key,
+            "name": node_name,
+            "o3de_relative_path": self._claim(key, "static_mesh"),
+            "fbx_node_name": node_name,
+            "bounds_local": {"min": aabb_min, "max": aabb_max},
+            "collision": {"source": "none", "shapes": []},
+            "material_slot_names": ["Terrain"],
+            "material_slot_material_names": [material_name],
+        }
         return guid
 
     def entries(self):
@@ -814,8 +874,8 @@ def _mesh_block(actor, assets, subject, warnings, mirrored=False):
 # extracting it would wrap the imported level in an unconvertible shell while
 # M6's Physical Sky already stands in for the UE sky.
 _DEFERRED_UNKNOWN_CLASSES = {
-    "Landscape": "Landscape is imported in M7",
-    "LandscapeStreamingProxy": "Landscape is imported in M7",
+    "LandscapeStreamingProxy": "streaming-proxy landscapes are not supported "
+                               "(M7 handles a single Landscape actor)",
     "BP_Sky_Sphere_C": "sky sphere is replaced by M6's Physical Sky",
     "SphereReflectionCapture": "reflection captures are a documented v1 drop (M6)",
     "BoxReflectionCapture": "reflection captures are a documented v1 drop (M6)",
@@ -914,6 +974,53 @@ def _extract_mesh_components(actor, actor_entity, assets, warnings):
     return children
 
 
+def _terrain_entity(actor, entity, assets, warnings):
+    """A Landscape actor -> a static-mesh entity over a '#terrain' asset (M7).
+
+    The terrain mesh is BAKED IN WORLD SPACE (mesh_export samples heights by
+    per-component line traces and builds a grid), so the entity's transform
+    is forced to identity -- decomposing a scale-100 landscape transform buys
+    nothing and multiplies the ways the bake can disagree with the placement.
+    Physics: collision source "none" sends the importer down its existing
+    render-mesh triangle-collider path, which is exactly the plan's v1
+    terrain physics. Returns the mesh guid (for the physics block).
+    """
+    guid = assets.add_terrain(actor, warnings)
+    if guid is None:
+        warnings.add("ACTOR_DEFERRED", entity["name"],
+                     "Landscape could not be baked (no collision components)")
+        return None
+    entity["kind"] = "static_mesh"
+    identity = {"translation": [0.0, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+                "scale": [1.0, 1.0, 1.0]}
+    entity["transform"] = {"world": dict(identity), "local": dict(identity)}
+
+    material = None
+    try:
+        material = actor.get_editor_property("landscape_material")
+    except Exception:
+        pass
+    material_guid = assets.add_material(material) if material is not None else None
+    if material is not None:
+        warnings.add("TERRAIN_LAYERS_FLATTENED", entity["name"],
+                     "landscape layer blending is approximated by the single "
+                     "converted material %r (the classifier's nearest-texture "
+                     "rule picks one layer per channel)" % material.get_name())
+    entity["mesh"] = {"asset_guid": guid,
+                      "material_slots": [{"index": 0, "slot_name": "Terrain",
+                                          "material_guid": material_guid}]}
+
+    component = (actor.get_components_by_class(
+        getattr(unreal, "LandscapeHeightfieldCollisionComponent", unreal.SceneComponent))
+        or [None])[0]
+    if component is not None:
+        physics = _physics_block(component, guid, entity["name"], warnings)
+        if physics["has_collision"]:
+            entity["physics"] = physics
+    return guid
+
+
 def _build_entity(actor, assets, warnings):
     """One actor -> its entity, plus any component-extracted child entities."""
     actor_path = actor.get_path_name()
@@ -962,7 +1069,9 @@ def _build_entity(actor, assets, warnings):
                          actor.get_class().get_name() + " is imported in M6")
     elif kind == "unknown":
         class_name = actor.get_class().get_name()
-        if class_name in _DEFERRED_UNKNOWN_CLASSES:
+        if class_name == "Landscape":
+            mesh_guid = _terrain_entity(actor, entity, assets, warnings)
+        elif class_name in _DEFERRED_UNKNOWN_CLASSES:
             warnings.add("ACTOR_DEFERRED", label,
                          _DEFERRED_UNKNOWN_CLASSES[class_name])
         else:

@@ -35,16 +35,19 @@ def read(path):
     id_length = data[0]
     color_map_type = data[1]
     image_type = data[2]
-    if image_type != 2 or color_map_type != 0:
+    if image_type not in (2, 3) or color_map_type != 0:
         raise TgaError(
             "%s: TGA type %d/colormap %d unsupported (expected uncompressed "
-            "true-colour, which is what UE's exporter writes)"
+            "true-colour or grayscale)"
             % (path, image_type, color_map_type))
     width = data[12] | data[13] << 8
     height = data[14] | data[15] << 8
     bpp = data[16]
     descriptor = data[17]
-    if bpp not in (24, 32):
+    if image_type == 3:
+        if bpp != 8:
+            raise TgaError("%s: grayscale TGA must be 8 bpp, got %d" % (path, bpp))
+    elif bpp not in (24, 32):
         raise TgaError("%s: %d bpp unsupported" % (path, bpp))
     offset = 18 + id_length
     stride = bpp // 8
@@ -100,6 +103,25 @@ def write_grayscale_from_channel(source_path, output_path, channel):
         handle.write(_header(image["width"], image["height"], 24,
                              image["descriptor"] & 0x2F))
         handle.write(bytes(out))
+    return output_path
+
+
+def write_grayscale(output_path, width, height, rows):
+    """Write an 8-bit grayscale TGA from `rows` (bottom-up, values 0..255).
+
+    Used by the M7 terrain bake for the plan's heightmap side artifact. 8-bit
+    is a VISUALIZATION, not the source of truth -- the mesh carries the exact
+    traced heights; this file exists for the stretch heightfield path and for
+    a human eyeballing the terrain."""
+    if len(rows) != height or any(len(row) != width for row in rows):
+        raise TgaError("rows do not match %dx%d" % (width, height))
+    # _header hard-codes image type 2 (truecolor); type 3 is grayscale.
+    header = struct.pack("<BBBHHBHHHHBB",
+                         0, 0, 3, 0, 0, 0, 0, 0, width, height, 8, 0x00)
+    with open(output_path, "wb") as handle:
+        handle.write(header)
+        for row in rows:
+            handle.write(bytes(int(max(0, min(255, value))) for value in row))
     return output_path
 
 

@@ -89,6 +89,16 @@ CODES = {
         WARN, "A bounded post-process volume's extents could not be read; the "
               "importer cannot size the equivalent volume."),
 
+    # --- terrain (M7) ---
+    "TERRAIN_BAKED_TO_MESH": (
+        INFO, "Landscape baked to a world-space grid mesh sampled from its "
+              "heightfield collision; O3DE physics is a triangle-mesh "
+              "collider from the render mesh (plan M7 v1 path)."),
+    "TERRAIN_LAYERS_FLATTENED": (
+        INFO, "Landscape layer blending has no O3DE equivalent; the whole "
+              "terrain renders with the single converted material (the "
+              "classifier picks one layer's texture per channel)."),
+
     # --- physics source data (M1 records, M3 consumes) ---
     "PHYS_NO_SIMPLE_COLLISION": (
         INFO, "Static mesh has no simple collision primitives; M3 must fall "

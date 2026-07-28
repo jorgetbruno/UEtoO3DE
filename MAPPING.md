@@ -268,6 +268,29 @@ is therefore written even though it is already the component default. This is
 the same family as M5's directional light, one step nastier — there the value
 was converted, here it is discarded.
 
+## Terrain (M7)
+
+| UE | O3DE | Note |
+|---|---|---|
+| `Landscape` | one static-mesh entity at **identity transform** over a `#terrain` asset | the mesh is baked in world space: heights are line-traced per heightfield collision component (`K2_LineTraceComponent` — no filtering problem with 2900 props on the terrain) on a grid (`UEO3DE_TERRAIN_SPACING`, default 2 m), built with GeometryScript and fed through the normal Lane B bake → `TERRAIN_BAKED_TO_MESH` |
+| landscape physics | the importer's existing render-mesh **triangle collider on a static body** | the asset entry says `collision.source = "none"`, which is already the trigger for that path — zero importer changes |
+| landscape material + layers | the single converted material | the M4 classifier's nearest-texture rule already flattens `LandscapeLayerBlend` per channel → `TERRAIN_LAYERS_FLATTENED` |
+| heightmap | `<name>_heightmap.tga` next to the manifest (8-bit visualization) + `terrain_samples.json` (five grid-node surface points, O3DE metres) | the samples are the sphere-drop acceptance's drop points and the exporter's own self-check (each is re-traced independently; a mismatch aborts the export) |
+| `LandscapeStreamingProxy` | — | not supported → `ACTOR_DEFERRED` |
+
+**Terrain export needs a FULL editor session.** Every commandlet route is
+measured dead: `CopyMeshFromComponent` and `copy_collision_meshes_from_object`
+return 0 triangles for landscape components, the heightmap→render-target path
+asserts (no viewport), line traces hit nothing (no physics scene), and the
+component heightmap textures are not exposed to Python
+(`Tests/ue/probe_m7_*.py`). `export_level.bat` therefore runs
+`UnrealEditor.exe -ExecutePythonScript` — full editor, auto-quits — and
+asserts on the result file, since the process exit code is meaningless under
+`quit_editor`. **The fixture cannot contain a Landscape at all**: spawning one
+in a scripted session trips the engine's `!IsRunningCommandlet()` assertion,
+so M7's suite takes a real landscape level's export directory as its input and
+fails hard when it is missing.
+
 ## World Partition detection
 
 UE 5.8 exposes no direct route from Python: `UWorld` has neither `persistent_level` nor

@@ -155,5 +155,14 @@ with open(RESULT_PATH, "w") as handle:
     handle.write("\n".join(lines) + "\n")
 
 print("RESULT: " + status)
+
+# Under -ExecutePythonScript (a FULL editor session -- required since M7:
+# terrain sampling needs the physics scene and commandlets have none) the
+# editor must be told to exit, and its process exit code is not meaningful.
+# The .bat asserts on the RESULT line in the result file instead.
+try:
+    unreal.SystemLibrary.quit_editor()
+except Exception:
+    pass
 if status != "PASS":
     raise SystemExit(1)

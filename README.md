@@ -45,11 +45,19 @@ Tests\m3\run_m3.bat          M3: detection tests -> seam guard -> simulated smok
 Tests\m4\run_m4.bat          M4: material/texture artifacts -> assignments in the saved prefab
 Tests\m5\run_m5.bat          M5: light conversion + write order -> lights in the saved prefab
 Tests\m6\run_m6.bat          M6: sky/fog/post-process mapping -> environment in the saved prefab
+Tests\m7\run_m7.bat [dir]    M7: terrain contract -> sphere drop on the imported terrain
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
 
 `run_m4.bat`, `run_m5.bat` and `run_m6.bat` assert against the prefab
-`run_m2.bat` produced, so run M2 first.
+`run_m2.bat` produced, so run M2 first. `run_m7.bat` needs an EXPORTED LEVEL
+THAT CONTAINS A LANDSCAPE (default `Exports\L_Showcase`, staged and
+AP-processed) — the fixture cannot host one: spawning a Landscape in a
+scripted session trips the engine's `!IsRunningCommandlet()` assertion, so
+terrain coverage lives against real content and the suite fails hard when
+that content is missing. Since M7, `export_level.bat` runs a FULL editor
+session (`-ExecutePythonScript`) because terrain sampling needs the physics
+scene commandlets don't have; it asserts on the export result file.
 
 Each `.bat` propagates a real exit code and CI must assert on that, never on console
 text (plan constraint 10). `run_m2.bat --cold` deletes the staged sources and their
