@@ -75,6 +75,14 @@ def main():
         log=log)
 
     log('')
+    log('=== phase timings ===')
+    for name, seconds, share in report.timing_rows():
+        log('  %-46s %8.1f s  %5.1f%%' % (name, seconds, share))
+    if report.subtimings:
+        log('  -- within a phase (already counted above) --')
+        for name, seconds in sorted(report.subtimings.items(), key=lambda kv: -kv[1]):
+            log('    %-44s %8.1f s' % (name, seconds))
+    log('')
     log('=== counters ===')
     for key in sorted(report.counters):
         log('  %-28s %d' % (key, report.counters[key]))

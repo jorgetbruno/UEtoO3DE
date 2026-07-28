@@ -234,6 +234,7 @@ separate because they are fixed in different places.
 | `PHYS_SHAPE_APPROXIMATED` | warn | A shape could not be authored exactly **on this backend** and was substituted. The same UE level legitimately differs per backend; this makes it visible. |
 | `PHYS_PROFILE_FALLBACK` | warn | UE collision profile absent from `collision_profiles.json`; the named fallback layer was used. Channel semantics are lossy by design. |
 | `PHYS_MESH_FROM_RENDER` | info | No simple primitives; a mesh collider was baked from the render geometry (triangle mesh static, convex hull dynamic). |
+| `PHYS_COLLIDER_NOT_BAKED` | error | A mesh collider reached the saved prefab with no baked geometry, so it collides with nothing. The bake runs on the component's tick and had not finished when the prefab was serialized. Re-import with a larger `UEO3DE_SETTLE_FRAMES`; it cannot be recovered afterwards. |
 | `MASS_FROM_DENSITY` | info | No explicit UE mass override; the backend derives mass from volume × its default density, which will not match UE's figure. |
 | `REIMPORT_ENTITY_ADDED` | info | The actor is new since the previous import of this prefab. |
 | `REIMPORT_ENTITY_REMOVED` | info | The actor was in the previous import and is gone from this manifest; its entity is not recreated. |

@@ -89,6 +89,7 @@ Tests\m8\run_m8.bat          M8: skeletal frame math -> .actor/.motion products 
 Tests\m9\run_m9.bat          M9: Fixture_02 export -> instance/spline/LOD/decal/camera assertions -> import readbacks
 Tests\m10\run_m10.bat        M10: menus both sides -> import dialog -> re-import diff -> full headless pipeline
 Tests\m11\run_m11.bat        M11: doc contract enforced -> a real level ported end to end with figures
+Tests\perf\run_perf.bat      the settle guard: every authored collider bake reached the prefab
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
 

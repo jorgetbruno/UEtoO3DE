@@ -129,6 +129,14 @@ CODES = {
         INFO, "No simple collision primitives; a mesh collider was baked from "
               "the entity's render geometry (triangle mesh on static bodies, "
               "convex hull on dynamic ones)."),
+    "PHYS_COLLIDER_NOT_BAKED": (
+        ERROR, "A mesh collider reached the saved prefab with no baked geometry "
+               "(no CookedData), so it collides with nothing. The bake runs on "
+               "the component's tick and had not finished when the prefab was "
+               "serialized. Re-import with a larger UEO3DE_SETTLE_FRAMES; the "
+               "bake cannot be recovered afterwards, because the in-memory "
+               "template is a snapshot and O3DE refuses to re-create a prefab "
+               "in the same session (both measured -- see PERFORMANCE.md)."),
 
     # --- incremental re-import (M10) ---
     "REIMPORT_ENTITY_ADDED": (

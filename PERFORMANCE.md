@@ -31,11 +31,12 @@ preserve, but the measurement was not entitled to be trusted.)
 
 | Measure | Figure |
 |---|---|
-| Wall clock | **520 s** (8 min 40 s) |
-| Per entity | **178.9 ms** |
+| Wall clock | **147 s** (2 min 27 s) |
+| Per entity | **50.5 ms** |
 | Entities created | 2905 / 2905 |
 | Physics bodies | 2787 |
 | Mesh colliders baked | 2501 |
+| …of which reached the prefab with geometry | **2501** — checked, not assumed |
 | Materials assigned | 2791 (2904 slots) |
 | Product assets waited for | 224 |
 | Saved prefab on disk | **62.04 MB** |
@@ -44,80 +45,148 @@ preserve, but the measurement was not entitled to be trusted.)
 
 `import_level` carries a phase stopwatch, and `m11_realworld.py` fails the run
 if the phases account for less than 95% of the wall clock — so this table
-cannot quietly omit anything. It accounted for 519.6 s of 519.6 s.
+cannot quietly omit anything. It accounted for 146.8 s of 146.8 s.
 
 | Phase | Seconds | Share |
 |---|---:|---:|
-| **settle: collider bakes + asset streaming** | **398.7** | **76.7%** |
-| materials | 72.6 | 14.0% |
-| save prefab | 13.5 | 2.6% |
-| stage + resolve product paths | 11.9 | 2.3% |
-| create entities | 10.2 | 2.0% |
-| physics authoring | 10.1 | 1.9% |
-| open level | 1.9 | 0.4% |
-| everything else (ledger, re-import diff, lights, environment, skeletal, decals, cameras, backend detect, asset wait) | <1 | ~0.1% |
+| materials | 73.2 | 49.9% |
+| settle: collider bakes | 31.0 | 21.1% |
+| save prefab | 12.8 | 8.7% |
+| create entities | 10.3 | 7.0% |
+| physics authoring | 10.0 | 6.8% |
+| stage + resolve product paths | 6.3 | 4.3% |
+| open level | 2.1 | 1.4% |
+| everything else (ledger, bake verification, re-import diff, lights, environment, skeletal, decals, cameras, backend detect, asset wait) | 1.1 | 0.7% |
 
-#### What the stopwatch has already corrected
+## Three attributions, all of them wrong until something measured them
 
-Two attributions in this document were wrong before anything measured them.
+This document twice stated a cause that turned out to be false, and the second
+correction found a third. They are kept here because the pattern is the point:
+every one was reached by reading the code carefully, and every one was wrong.
 
-**"Dominated by the collider bakes."** Physics authoring is **1.9%**. That
-sentence was a guess in a document that otherwise contains only measurements.
+| Believed | Measured |
+|---|---|
+| "Dominated by the collider bakes" | physics authoring is **6.8%** |
+| then: materials — probably the uncached component-type lookup | that lookup: **3%** of the materials phase |
+| then: the settle needs 41,040 frames | it needs **under 30** |
 
-**Then: materials, at 50.7% of an 806 s import.** Sub-timings inside that phase
-put **95% of it in one place** — not the per-entity assignment work, and not
-the uncached component-type lookup (3%), but a *poll granularity*.
-`MODEL_READY_POLL_FRAMES` was 30, and it is a quantum rather than a budget:
-every multi-material entity's model was unready on the first check and ready
-well inside one quantum, so each was charged all 30 frames. The counters make
-it exact — 1217 multi-material entities, 1217 that waited, 1217 × 30 = 36,510
-frames burned.
+### 1. The poll quantum (−36%)
 
-Dropping the quantum to 2 (the 600-frame **cap is unchanged**, so a genuinely
-slow model still gets it) gives, at full scale:
+Sub-timings inside the materials phase put **95% of it in one place** — not the
+per-entity assignment work, but a *poll granularity*. `MODEL_READY_POLL_FRAMES`
+was 30, and it is a quantum rather than a budget: every multi-material entity's
+model was unready on the first check and ready well inside one quantum, so each
+was charged all 30 frames. The counters make it exact — 1217 multi-material
+entities, 1217 that waited, 1217 × 30 = 36,510 frames burned.
 
-| | before | after |
-|---|---:|---:|
-| total import | 806.2 s | **519.6 s** (−36%) |
-| per entity | 277.5 ms | **178.9 ms** |
-| materials phase | 408.8 s | **72.6 s** (−82%) |
-| frames spent polling | 36,510 | **2,434** |
-| slots / materials assigned | 2904 / 2791 | 2904 / 2791 (identical) |
+Dropping the quantum to 2 (the 600-frame **cap is unchanged**) took the import
+from 806.2 s to 519.6 s with the assignment counts identical.
 
-Note the settle row *rose* (347.8 → 398.7 s) while the total fell by 286 s. The
-two phases are coupled: the frames formerly burned polling in the materials
-phase were also ticking the editor, so some asset streaming that used to finish
-"for free" during those 36,510 frames now happens in the settle. Only the total
-is meaningful.
+### 2. The settle (−70% again), and a silent defect underneath it
 
-#### The next target, with its arithmetic exposed
+The settle before serialization was then 76.7% of the import, and it was a
+blind formula — `60 + 5·bakes + 5·assigned + 5·slots + 10·skeletal`, 41,040
+frames on this level — that had grown across three rounds of tuning a
+`CreatePrefabInMemory` failure which turned out not to be a streaming race at
+all, but a stale prefab instance in the scratch level. Its terms were never
+re-measured once that cause was found.
 
-Settle is now 76.7%, and it is a **blind fixed wait**, not a measurement:
+**The first experiment found a bug, not a saving.** Importing with
+`UEO3DE_SETTLE_FRAMES=0` produced a prefab with **2486 of 2501** collider
+bakes. The import reported PASS, raised no error, and `mesh_colliders` read
+2501 in *both* runs.
 
-    frames = 60 + 5·bakes + 5·assigned + 5·slots + 10·skeletal
-           = 60 + 5(2501) + 5(2791) + 5(2904) + 0  =  41,040 frames
+A Jolt mesh collider bakes on its component's tick and the result is serialized
+into the prefab as `ShapeConfiguration.CookedData`. Serialize before the bake
+finishes and the component is written out fully configured with **no geometry**:
+a collider that collides with nothing, in a file that saved cleanly. The 15
+lost were the heaviest meshes in the level — Landscape, whose cooked data is
+3 MB, and SM_Mountain_3 at 262 KB. Nothing in the importer could see it, and
+nothing in this repo's twelve suites went red.
 
-At ~9.7 ms/frame that is ~398 s, which is the measured figure to within noise.
-Nothing in it asks whether anything is *actually* still pending — it is the
-same class of mistake as the 30-frame quantum, one size larger. Replacing it
-with a real readiness check is the obvious next win, and needs care: the wait
-exists because serializing mid-bake made `CreatePrefabInMemory` throw, and the
-threshold was measured as cumulative rather than per-entity. A readiness signal
-has to cover both the collider bakes and material/texture streaming before the
-formula can go.
+**So the settle should become a readiness poll.** Four probes went looking for
+something to poll, and all four came back negative:
+
+| Probe | Result |
+|---|---|
+| every reflected property on a Jolt Mesh Collider | 17 paths, none mentions cooking, baking or shape readiness |
+| baked vs unbaked entities, side by side in one session | **every readable property identical** |
+| the physics request buses | `SimulatedBodyComponentRequestsBus`, `ColliderComponentRequestBus` do not answer for editor entities |
+| re-flush the in-memory template after the bakes land | 12 flushes over 3600 further frames: 2486/2501, unchanged at every step |
+| re-create the prefab after settling more | O3DE refuses: *"Creating prefab as an override edit is currently not supported"* |
+
+The bake is invisible from Python, the template is a snapshot that does not
+track late bakes, and the one snapshot a session gets cannot be retaken. There
+is nothing to wait on and nothing to repair afterwards.
+
+**What was done instead.** Two things, and the first matters more than the
+speed:
+
+1. **The saved file is now read back and checked.** Any mesh collider that
+   arrived without geometry is reported as `PHYS_COLLIDER_NOT_BAKED` (error),
+   one per collider, naming each entity. A constant that is one day too small
+   now fails loudly instead of silently. `Tests\perf\run_perf.bat` guards this
+   on real content, with a planted blanked bake as the control that proves the
+   detector is still detecting.
+2. **The constant was measured rather than grown.** `UEO3DE_SETTLE_FRAMES`
+   overrides it, which is how this table exists:
+
+| settle | bakes in the file | import |
+|---:|---|---:|
+| 0 | 2486 / 2501 — **15 lost, silently** | 139.6 s |
+| 30 | 2501 / 2501 | 111.6 s |
+| 120 | 2501 / 2501 | 112.9 s |
+| 200 | 2501 / 2501 | 113.4 s |
+| 1500 | 2501 / 2501 | 124.7 s |
+| 41,040 (the old formula) | 2501 / 2501 | 519.6 s |
+
+The two material terms were **measured to guard nothing**: at settle=0 every
+material asset id in the prefab was identical to the control, and only cooked
+collider data differed. They existed against a serialization throw, which has
+its own retry and which did not occur at settle=0 either. They are gone.
+
+The formula is now `300 + bakes/2 + 10·skeletal` — 1550 frames here, some fifty
+times the measured need. That margin is deliberate: the failure cannot be
+repaired once the prefab is written, one level on one machine is a thin basis
+for a threshold, and 31 s of a 147 s import is a cheap premium. Collider count
+is a **proxy** for bake work, which is really geometry volume; the proxy is
+acceptable only because being wrong is now loud. The skeletal term is unchanged
+and remains **unmeasured** — L_Showcase has no skeletal entities.
+
+### The two changes together
+
+| | before | after quantum | after settle |
+|---|---:|---:|---:|
+| total import | 806.2 s | 519.6 s | **146.8 s** |
+| per entity | 277.5 ms | 178.9 ms | **50.5 ms** |
+| materials phase | 408.8 s | 72.6 s | 73.2 s |
+| settle phase | 347.8 s | 398.7 s | **31.0 s** |
+| slots / materials assigned | 2904 / 2791 | 2904 / 2791 | 2904 / 2791 |
+| collider bakes in the file | 2501 | 2501 | 2501 |
+
+**5.5× faster, and the content is identical.** Not "the counters match" —
+`Tests\perf\prefab_diff.py` compares the two saved prefabs entity by entity on
+component types, every asset id, every transform and the length of every baked
+collider, keyed by name because entity ids are minted per run and comparing
+duplicated names as a multiset because a saved prefab legitimately contains
+them. Verdict: **EQUIVALENT**, 0 differences across 2906 entities.
+
+(That comparator is mutation-tested: blank one `CookedData` or alter one asset
+guid in a copy and it must report the difference, because a comparator that
+cannot fail proves nothing about the run where it passed.)
 
 ## Memory (editor process working set)
 
 | Point | Working set | Δ |
 |---|---|---|
-| Before import | 847 MB | — |
-| Peak, immediately after import | **5304 MB** | +4458 MB |
-| Level open, prefab instantiated | **3312 MB** | +2465 MB |
+| Before import | 849 MB | — |
+| Peak, immediately after import | **5418 MB** | +4569 MB |
+| Level open, prefab instantiated | **3251 MB** | +2402 MB |
 
-The two deltas measure different things and both matter. **+4458 MB is the peak
+The two deltas measure different things and both matter. **+4569 MB is the peak
 cost of running the import** — the scratch level, 2905 live entities, every
 streamed model and material, and the prefab template all resident at once. That
-is the figure that decides whether the import fits in a machine's RAM. **+2465 MB
+is the figure that decides whether the import fits in a machine's RAM. **+2402 MB
 is what the finished level costs** once the editor has reopened a level and
 instantiated the prefab; the difference is the import's working state being
 released.
@@ -129,13 +198,20 @@ before pointing it at something four times larger.
 
 | Measure | Figure |
 |---|---|
-| Instantiate the saved prefab | 7.3 s |
-| 300 frames in game mode | 2.5 s (**8.3 ms/frame**) |
+| Instantiate the saved prefab | 7.5 s |
+| 300 frames in game mode | 5.0 s (**16.7 ms/frame**) |
 
 **This is a headless batch editor** (`-BatchMode -autotest_mode`), not a shipping
-runtime. 8.3 ms/frame says the level simulates at a plausible rate and nothing
-pathological happens with 2787 physics bodies present. It is **not** a frame rate
-and must not be quoted as one.
+runtime, and the figure is a **cap, not a cost**. 16.68 ms is 59.95 Hz, and two
+consecutive runs reported 16.68 to the hundredth — a work measurement does not
+reproduce to four significant figures, a tick cap does. An earlier run of this
+same test, on prefab content since verified **identical**, recorded 8.3 ms,
+which is 120 Hz: the same level pinned to whatever cap that session was under.
+
+So it bounds nothing and must never be quoted as a frame rate. What it is good
+for is what it is used for: 300 frames complete, and nothing pathological
+happens with 2787 physics bodies present. Measuring the real cost would need a
+profile-mode runtime with the cap off, which this repo does not build.
 
 ## Fidelity: what a real level actually loses
 
@@ -150,6 +226,7 @@ The honest scorecard, and the reason the warning catalogue exists:
 | `ENV_SKYLIGHT_APPROX`, `ENV_FOG_APPROX`, `ENV_SKY_DUPLICATE`, `ENV_BLOOM_THRESHOLD_APPROX` | 1 each | The environment approximations described in DIVERGENCES.md. |
 | `LIGHT_RADIUS_EXPLICIT` | 3 | UE's explicit attenuation radius pinned rather than derived. |
 | `LIGHT_TEMPERATURE_DROPPED` | 1 | Colour temperature has no Atom equivalent. |
+| `PHYS_COLLIDER_NOT_BAKED` | **0** | Every authored bake reached the file. This row reading 0 is now an assertion, not an assumption. |
 
 286 approximated collision shapes on one level is the single largest fidelity
 cost, and it is *reported* rather than silent — which is the whole design. A
@@ -164,8 +241,14 @@ python Tests\m2\m2_stage.py --project <p> --manifest Exports\<L>\manifest.json ^
                             --source-assets Exports\<L>\Assets
 AssetProcessorBatch.exe --project-path=<p> --platforms=pc
 set UEO3DE_EXPORT=D:\Gamedev\UEtoO3DE\Exports\<L>
-Tests\m11\run_m11.bat
+Tests\m11\run_m11.bat                         figures
+Tests\perf\run_perf.bat                       every authored bake reached the file
 ```
 
 Figures land in `Tests\m11\results\figures.md` (JSON, gitignored — this file is
-the committed record).
+the committed record). To re-measure the settle rather than trust it:
+
+```
+set UEO3DE_SETTLE_FRAMES=0
+Tests\o3de\run_o3de_python.bat Tests\perf\settle_sweep_point.py
+```

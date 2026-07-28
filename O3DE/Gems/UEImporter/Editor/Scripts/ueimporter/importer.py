@@ -26,6 +26,68 @@ from . import staging
 from .report import Report
 
 
+def settle_frames(bake_count, skeletal_authored):
+    """Frames to idle after authoring, before serializing the prefab.
+
+    It stays a blind constant, and that is a conclusion rather than a
+    concession. Mesh colliders bake on their component's tick and the result is
+    serialized into the prefab; serialize too early and the collider is written
+    out with no geometry at all. Four probes looked for something to wait ON
+    instead:
+
+      * the bake appears in none of the collider's 17 reflected properties
+      * a baked collider and an unbaked one read IDENTICALLY through every
+        Python-visible call, compared side by side in one session
+      * the in-memory template is a snapshot -- re-flushing it 12 times over
+        3600 further frames recovered nothing
+      * the prefab cannot be re-created in the same session ("Creating prefab
+        as an override edit is currently not supported")
+
+    So there is nothing to poll and nothing to repair. What makes a constant
+    acceptable is the check that now follows the save: a bake that does not
+    reach the file is reported as PHYS_COLLIDER_NOT_BAKED (error) instead of
+    passing silently, which is what it did until it was measured.
+
+    The numbers, on L_Showcase (2905 entities, 2501 mesh colliders, a Landscape
+    whose baked data is 3 MB):
+
+        settle    bakes in the file
+             0    2486 / 2501   <- 15 lost, silently, import reported PASS
+            30    2501 / 2501
+           120    2501 / 2501
+           200    2501 / 2501
+          1500    2501 / 2501
+
+    The old formula asked for 41,040 frames -- `60 + 5*bakes + 5*assigned +
+    5*slots + 10*skeletal` -- against a real need somewhere under 30. It had
+    grown across three rounds of tuning a `CreatePrefabInMemory` failure that
+    turned out not to be a streaming race at all but a stale prefab instance in
+    the scratch level (`prefab_build.detach_conflicting_instances`), and its
+    terms were never re-measured once that cause was found.
+
+    The two material terms are gone because they were measured to guard
+    nothing: at settle=0 every material asset id in the prefab was identical to
+    the control, and only cooked collider data differed. They were there
+    against a serialization throw, which has its own retry below and which did
+    not happen at settle=0 either.
+
+    What remains is deliberately generous -- ~1550 frames on L_Showcase, some
+    fifty times the measured need -- because the failure is unrecoverable
+    within a session, one level on one machine is a thin basis for a threshold,
+    and 20 s of a 125 s import is a cheap insurance premium. Collider count is
+    a PROXY for bake work, which is really geometry volume; the proxy is
+    acceptable only because being wrong is now loud. `UEO3DE_SETTLE_FRAMES`
+    overrides it, which is how the table above was measured.
+
+    The 10-per-skeletal term is unchanged and remains UNMEASURED: L_Showcase
+    has no skeletal entities.
+    """
+    override = os.environ.get("UEO3DE_SETTLE_FRAMES", "").strip()
+    if override:
+        return int(override)
+    return 300 + bake_count // 2 + 10 * skeletal_authored
+
+
 def stage_only(manifest_path, source_assets_root, project_assets_root, log=None):
     """Copy FBX + write `.assetinfo`. Returns (document, staged records)."""
     def emit(message):
@@ -459,20 +521,19 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             emit("  %-22s %s" % (item["name"], summary))
     report.count("physics_bodies", bodies)
     mark("physics authoring")
-    # Let mesh-collider bakes tick with models loaded before serialization.
-    # Each bake runs on the component's TickBus once its model streams in;
-    # serializing mid-bake made CreatePrefabInMemory throw on a 135-collider
-    # level, so the wait scales with the bake count.
+    # Let the mesh-collider bakes finish before serialization. Each runs on the
+    # component's own tick, and its result is written INTO the prefab, so a
+    # bake still in flight produces a collider with no geometry. See
+    # `settle_frames` for why this is a constant and what it costs to get wrong.
     bake_count = report.counters.get("mesh_colliders", 0)
-    # Material components stream their textures in asynchronously as well;
-    # serializing while either is mid-flight makes CreatePrefabInMemory throw
-    # (measured: cumulative threshold, not tied to any specific entity).
-    # Per-slot assignments load one material instance each on top of the
-    # per-entity ones, so they scale the wait too.
-    # Actor + motion assets stream in asynchronously like materials do.
-    general.idle_wait_frames(60 + 5 * bake_count + 5 * assigned + 5 * slots_assigned
-                             + 10 * skeletal_authored)
-    mark("settle: collider bakes + asset streaming")
+    settle = settle_frames(bake_count, skeletal_authored)
+    report.count("settle_frames", settle)
+    general.idle_wait_frames(settle)
+    # Named for the collider bakes alone: it used to say "+ asset streaming"
+    # too, and that half was measured to be false -- at settle=0 every material
+    # asset id in the prefab matched the control exactly, and only cooked
+    # collider data was lost.
+    mark("settle: collider bakes")
     report.count("manifest_roots", sum(1 for item in document["entities"]
                                        if item["parent_id"] is None))
     if not created:
@@ -498,6 +559,33 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         prefab_build.create_prefab_in_memory([level_root], prefab_path)
     prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit)
     mark("save prefab")
+
+    # --- did the collider bakes actually reach the file? ---
+    #
+    # `mesh_colliders` counts what was AUTHORED, and a collider whose bake had
+    # not finished is written out fully configured with no geometry at all: it
+    # collides with nothing, the save reports success, and the counter reads
+    # the same either way. Measured on L_Showcase: settling zero frames lost 15
+    # of 2501 bakes and every suite in this repo stayed green.
+    #
+    # This is a check rather than a wait because a wait is not available. Four
+    # probes went looking for something to poll and found nothing (the bake is
+    # in none of the collider's 17 reflected properties; a baked collider and
+    # an unbaked one read identically through every Python-visible call). Nor
+    # can it be repaired: the in-memory template is a snapshot that does not
+    # track late bakes, and O3DE refuses a second CreatePrefabInMemory in the
+    # same session. So the settle stays a constant, and this is what stops a
+    # constant that is one day too small from failing in silence.
+    unbaked = prefab_build.unbaked_colliders(prefab_path)
+    report.count("colliders_cooked", bake_count - len(unbaked))
+    for name in unbaked:
+        report.warn("PHYS_COLLIDER_NOT_BAKED", name,
+                    "settled %d frames before serializing; re-import with a "
+                    "larger UEO3DE_SETTLE_FRAMES" % settle)
+    if unbaked:
+        emit("  %d of %d mesh collider bakes did NOT reach the prefab"
+             % (len(unbaked), bake_count))
+    mark("verify collider bakes")
 
     # --- record what this import AUTHORED, then put hand edits back (M10) ---
     #
