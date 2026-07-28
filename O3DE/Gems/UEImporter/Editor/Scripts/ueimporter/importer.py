@@ -262,6 +262,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # label-matching technique in assign_material_slots.
     assets_by_guid = manifest_io.assets_by_guid(document)
     emit("assigning materials (%d converted)" % len(material_asset_ids))
+    prefab_build.reset_material_stats()
     assigned = 0
     slots_assigned = 0
     for item in document["entities"]:
@@ -316,6 +317,15 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     report.count("materials_assigned", assigned)
     report.count("material_slots_assigned", slots_assigned)
     mark("materials")
+    # Sub-phases of the phase that turned out to BE half the import. Recorded
+    # as timings so they appear beside the top-level rows, and as counters for
+    # the frame budget, which is the actionable number: frames burned polling
+    # for models to stream in are frames nobody chose to spend.
+    for key, value in prefab_build.MATERIAL_STATS.items():
+        if key.endswith("_s"):
+            report.subtimings[key[:-2].replace("material_", "materials: ")] = value
+        else:
+            report.count(key, value)
 
     # --- skeletal entities (M8): Actor + Simple Motion ---
     from . import skel_build
@@ -561,8 +571,14 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     mark("ledger + hand edits")
 
     emit("")
-    emit("where the time went (%.1f s total):" % sum(report.timings.values()))
+    _total = sum(report.timings.values())
+    emit("where the time went (%.1f s total):" % _total)
     for name, seconds, percent in report.timing_rows():
         emit("  %-42s %8.1f s  %5.1f%%" % (name, seconds, percent))
+    if report.subtimings:
+        emit("  within a phase (already counted above):")
+        for name, seconds in sorted(report.subtimings.items(), key=lambda kv: -kv[1]):
+            emit("    %-40s %8.1f s  %5.1f%%"
+                 % (name, seconds, (100.0 * seconds / _total) if _total else 0.0))
 
     return report, prefab_path

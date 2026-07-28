@@ -44,7 +44,34 @@ NO_LOD = 0xFFFFFFFF
 # The Model Materials rows exist only once the entity's model asset has
 # streamed in; how long assign_material_slots waits for that, total frames.
 MODEL_READY_WAIT_FRAMES = 600
-MODEL_READY_POLL_FRAMES = 30
+# Poll GRANULARITY, not the budget. Measured on L_Showcase: every
+# multi-material entity's model was unready on the first check and then ready
+# well inside one quantum, so a coarse quantum charged each of them the whole
+# thing -- 1217 entities x 30 frames, which was ~95% of the materials phase and
+# the single largest cost in the entire import. The cap below is unchanged, so
+# a model that genuinely takes 600 frames still gets them; only the rounding-up
+# of the common case goes away. Overridable to re-measure without editing code.
+MODEL_READY_POLL_FRAMES = int(os.environ.get("UEO3DE_MODEL_POLL_FRAMES", "2"))
+
+# Sub-phase accounting for material assignment, which the M11 phase timings
+# showed to be HALF the wall clock of a real import (408.8 s of 806 s on a
+# 2905-entity level) -- against a committed document that had attributed the
+# cost to the collider bakes, which turned out to be 1.3%. These figures exist
+# so the next attribution is measured too, rather than being the next guess.
+# Reset per import by `reset_material_stats()`.
+MATERIAL_STATS = {
+    "material_add_component_s": 0.0,   # resolve type + AddComponentsOfType
+    "material_model_wait_s": 0.0,      # polling for the model's slot rows
+    "material_slot_set_s": 0.0,        # FindMaterialAssignmentId + SetProperty
+    "material_default_set_s": 0.0,     # the single-material fast path
+    "material_wait_frames": 0,         # frames burned polling
+    "material_entities_that_waited": 0,
+}
+
+
+def reset_material_stats():
+    for key in MATERIAL_STATS:
+        MATERIAL_STATS[key] = 0 if key.endswith(("frames", "waited")) else 0.0
 
 # Below this, a scale is treated as uniform and goes in the transform.
 UNIFORM_SCALE_EPSILON = 1e-6
@@ -275,17 +302,22 @@ def create_level_root(name):
 
 def _add_material_component(entity_id, entity_name):
     """Add (or fetch) the Material component; returns its component pair."""
+    import time
+
     import azlmbr.bus as bus
     import azlmbr.editor as editor
 
+    started = time.perf_counter()
     material_type = resolve_component_type(MATERIAL_COMPONENT_NAME)
     outcome = editor.EditorComponentAPIBus(
         bus.Broadcast, 'AddComponentsOfType', entity_id, [material_type])
     if not outcome or not outcome.IsSuccess():
         raise PrefabBuildError("%s: AddComponentsOfType(Material) failed: %s"
                                % (entity_name, outcome.GetError() if outcome else "?"))
-    return editor.EditorComponentAPIBus(
+    pair = editor.EditorComponentAPIBus(
         bus.Broadcast, 'GetComponentOfType', entity_id, material_type).GetValue()
+    MATERIAL_STATS["material_add_component_s"] += time.perf_counter() - started
+    return pair
 
 
 def _get_property(pair, path):
@@ -309,16 +341,20 @@ def assign_material(entity_id, material_asset_id, entity_name):
     dependent) Model Materials rows. Multi-material models go through
     `assign_material_slots` instead.
     """
+    import time
+
     import azlmbr.bus as bus
     import azlmbr.editor as editor
 
     pair = _add_material_component(entity_id, entity_name)
+    started = time.perf_counter()
     set_outcome = editor.EditorComponentAPIBus(
         bus.Broadcast, 'SetComponentProperty', pair,
         MATERIAL_ASSET_PROPERTY, material_asset_id)
     if not set_outcome or not set_outcome.IsSuccess():
         raise PrefabBuildError("%s: setting %s failed"
                                % (entity_name, MATERIAL_ASSET_PROPERTY))
+    MATERIAL_STATS["material_default_set_s"] += time.perf_counter() - started
 
 
 def assign_material_slots(entity_id, assignments, entity_name, report):
@@ -337,14 +373,19 @@ def assign_material_slots(entity_id, assignments, entity_name, report):
     import azlmbr.legacy.general as general
     import azlmbr.render as render
 
+    import time
+
     pair = _add_material_component(entity_id, entity_name)
 
+    wait_started = time.perf_counter()
     waited = 0
     while True:
         found, _value = _get_property(pair, MODEL_SLOT_STABLE_ID % 0)
         if found:
             break
         if waited >= MODEL_READY_WAIT_FRAMES:
+            MATERIAL_STATS["material_model_wait_s"] += time.perf_counter() - wait_started
+            MATERIAL_STATS["material_wait_frames"] += waited
             report.warn("MAT_MODEL_NOT_READY", entity_name,
                         "Model Materials rows never appeared within %d frames; "
                         "assigned %r on the default slot instead"
@@ -356,6 +397,12 @@ def assign_material_slots(entity_id, assignments, entity_name, report):
         general.idle_wait_frames(MODEL_READY_POLL_FRAMES)
         waited += MODEL_READY_POLL_FRAMES
 
+    MATERIAL_STATS["material_model_wait_s"] += time.perf_counter() - wait_started
+    MATERIAL_STATS["material_wait_frames"] += waited
+    if waited:
+        MATERIAL_STATS["material_entities_that_waited"] += 1
+
+    slot_started = time.perf_counter()
     # Stable id per row, once; rows are as many as the model has unique slots.
     row_stable_ids = []
     for row in range(len(assignments) + 8):
@@ -426,6 +473,7 @@ def assign_material_slots(entity_id, assignments, entity_name, report):
             report.warn("MAT_SLOT_UNMATCHED", entity_name,
                         "model has no slot labelled %r (rows: %d)"
                         % (label, len(row_stable_ids)))
+    MATERIAL_STATS["material_slot_set_s"] += time.perf_counter() - slot_started
     return assigned
 
 

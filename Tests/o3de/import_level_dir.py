@@ -53,12 +53,25 @@ def main():
     project_root = general.get_game_folder().rstrip('/\\')
     prefab_path = "%s/Prefabs/%s.prefab" % (project_root, LEVEL_NAME)
 
+    # The bisect knob importer.py documents but nothing exposed: import only
+    # the first N entities. A 2905-entity level is a 13-minute measurement,
+    # which is a poor loop to debug a performance question in; a few hundred
+    # entities of the SAME level answers "which sub-phase dominates" in a
+    # fraction of the time. Full-scale confirmation still comes from
+    # Tests/m11/run_m11.bat.
+    max_entities = os.environ.get("UEO3DE_MAX_ENTITIES", "").strip()
+    max_entities = int(max_entities) if max_entities else None
+    if max_entities:
+        log("UEO3DE_MAX_ENTITIES=%d -- a SAMPLE, not the whole level"
+            % max_entities)
+
     log("importing %s -> %s" % (EXPORT_DIR, prefab_path))
     report, _saved = importer.import_level(
         manifest_path=os.path.join(EXPORT_DIR, "manifest.json"),
         source_assets_root=os.path.join(EXPORT_DIR, "Assets"),
         project_assets_root=os.path.join(project_root, "Assets"),
         prefab_path=prefab_path,
+        max_entities=max_entities,
         log=log)
 
     log('')

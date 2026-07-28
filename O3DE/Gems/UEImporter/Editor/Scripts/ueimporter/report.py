@@ -199,6 +199,11 @@ class Report:
         # attribution checkable, and give anyone optimising this a target
         # instead of an intuition.
         self.timings = {}
+        # Breakdowns NESTED inside a phase, kept separate on purpose: they are
+        # already counted by their parent, so folding them into `timings` would
+        # double-count and break the "phases account for the whole import"
+        # assertion that makes the top-level table trustworthy.
+        self.subtimings = {}
 
     def warn(self, code, subject, detail, severity=None):
         if code not in CODES:
@@ -246,6 +251,8 @@ class Report:
             "counters": dict(sorted(self.counters.items())),
             "timings_seconds": {name: round(seconds, 3)
                                 for name, seconds in sorted(self.timings.items())},
+            "subtimings_seconds": {name: round(seconds, 3)
+                                   for name, seconds in sorted(self.subtimings.items())},
             "warnings": self.records(),
         }
 
@@ -287,6 +294,15 @@ class Report:
             width = max(len(name) for name in self.timings)
             for name, seconds, percent in rows:
                 out.append("  %-*s  %8.1f s  %5.1f%%" % (width, name, seconds, percent))
+            if self.subtimings:
+                out.append("")
+                out.append("  within a phase (already counted above):")
+                sub_width = max(len(name) for name in self.subtimings)
+                for name, seconds in sorted(self.subtimings.items(),
+                                            key=lambda kv: -kv[1]):
+                    share = (100.0 * seconds / total) if total else 0.0
+                    out.append("    %-*s  %8.1f s  %5.1f%%"
+                               % (sub_width, name, seconds, share))
             out.append("")
 
         records = self.records()

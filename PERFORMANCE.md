@@ -31,8 +31,8 @@ preserve, but the measurement was not entitled to be trusted.)
 
 | Measure | Figure |
 |---|---|
-| Wall clock | **806 s** (13 min 26 s) |
-| Per entity | **277.5 ms** |
+| Wall clock | **520 s** (8 min 40 s) |
+| Per entity | **178.9 ms** |
 | Entities created | 2905 / 2905 |
 | Physics bodies | 2787 |
 | Mesh colliders baked | 2501 |
@@ -44,49 +44,80 @@ preserve, but the measurement was not entitled to be trusted.)
 
 `import_level` carries a phase stopwatch, and `m11_realworld.py` fails the run
 if the phases account for less than 95% of the wall clock — so this table
-cannot quietly omit anything. It accounted for 806.2 s of 806.2 s.
+cannot quietly omit anything. It accounted for 519.6 s of 519.6 s.
 
 | Phase | Seconds | Share |
 |---|---:|---:|
-| **materials** | **408.8** | **50.7%** |
-| settle: collider bakes + asset streaming | 347.8 | 43.1% |
-| save prefab | 15.0 | 1.9% |
-| create entities | 11.9 | 1.5% |
-| physics authoring | 10.4 | 1.3% |
-| stage + resolve product paths | 9.5 | 1.2% |
-| open level | 2.0 | 0.3% |
+| **settle: collider bakes + asset streaming** | **398.7** | **76.7%** |
+| materials | 72.6 | 14.0% |
+| save prefab | 13.5 | 2.6% |
+| stage + resolve product paths | 11.9 | 2.3% |
+| create entities | 10.2 | 2.0% |
+| physics authoring | 10.1 | 1.9% |
+| open level | 1.9 | 0.4% |
 | everything else (ledger, re-import diff, lights, environment, skeletal, decals, cameras, backend detect, asset wait) | <1 | ~0.1% |
 
-**An earlier version of this document attributed the cost to the collider
-bakes. That was wrong, and it was a guess.** Physics authoring is 1.3%.
-**Material assignment is half the import** — 408.8 s across 2791 entities and
-2904 slots, about 146 ms per entity — and it was not previously mentioned at
-all. This is why the stopwatch exists.
+#### What the stopwatch has already corrected
 
-The settle phase is a *combined* wait and not purely collider bakes either: its
-budget is `60 + 5·bakes + 5·assigned + 5·slots + 10·skeletal` frames, so on this
-level the material terms (5×2791 + 5×2904 = 28,475 frames) outweigh the collider
-term (5×2501 = 12,505). Between the two rows, **materials account for a clear
-majority of the wall clock.**
+Two attributions in this document were wrong before anything measured them.
 
-So the optimisation target is material assignment, in two places: the per-entity
-assignment work itself, and the material-driven share of the settle budget.
-Neither is the collider bake. A finer breakdown *inside* the materials phase is
-the next measurement anyone optimising this should take, rather than repeating
-the mistake above and reasoning about which part is slow.
+**"Dominated by the collider bakes."** Physics authoring is **1.9%**. That
+sentence was a guess in a document that otherwise contains only measurements.
+
+**Then: materials, at 50.7% of an 806 s import.** Sub-timings inside that phase
+put **95% of it in one place** — not the per-entity assignment work, and not
+the uncached component-type lookup (3%), but a *poll granularity*.
+`MODEL_READY_POLL_FRAMES` was 30, and it is a quantum rather than a budget:
+every multi-material entity's model was unready on the first check and ready
+well inside one quantum, so each was charged all 30 frames. The counters make
+it exact — 1217 multi-material entities, 1217 that waited, 1217 × 30 = 36,510
+frames burned.
+
+Dropping the quantum to 2 (the 600-frame **cap is unchanged**, so a genuinely
+slow model still gets it) gives, at full scale:
+
+| | before | after |
+|---|---:|---:|
+| total import | 806.2 s | **519.6 s** (−36%) |
+| per entity | 277.5 ms | **178.9 ms** |
+| materials phase | 408.8 s | **72.6 s** (−82%) |
+| frames spent polling | 36,510 | **2,434** |
+| slots / materials assigned | 2904 / 2791 | 2904 / 2791 (identical) |
+
+Note the settle row *rose* (347.8 → 398.7 s) while the total fell by 286 s. The
+two phases are coupled: the frames formerly burned polling in the materials
+phase were also ticking the editor, so some asset streaming that used to finish
+"for free" during those 36,510 frames now happens in the settle. Only the total
+is meaningful.
+
+#### The next target, with its arithmetic exposed
+
+Settle is now 76.7%, and it is a **blind fixed wait**, not a measurement:
+
+    frames = 60 + 5·bakes + 5·assigned + 5·slots + 10·skeletal
+           = 60 + 5(2501) + 5(2791) + 5(2904) + 0  =  41,040 frames
+
+At ~9.7 ms/frame that is ~398 s, which is the measured figure to within noise.
+Nothing in it asks whether anything is *actually* still pending — it is the
+same class of mistake as the 30-frame quantum, one size larger. Replacing it
+with a real readiness check is the obvious next win, and needs care: the wait
+exists because serializing mid-bake made `CreatePrefabInMemory` throw, and the
+threshold was measured as cumulative rather than per-entity. A readiness signal
+has to cover both the collider bakes and material/texture streaming before the
+formula can go.
 
 ## Memory (editor process working set)
 
 | Point | Working set | Δ |
 |---|---|---|
-| Before import | 846 MB | — |
-| Peak, immediately after import | **5215 MB** | +4368 MB |
-| Level open, prefab instantiated | **3163 MB** | +2316 MB |
+| Before import | 847 MB | — |
+| Peak, immediately after import | **5304 MB** | +4458 MB |
+| Level open, prefab instantiated | **3312 MB** | +2465 MB |
 
-The two deltas measure different things and both matter. **+4368 MB is the peak
+The two deltas measure different things and both matter. **+4458 MB is the peak
 cost of running the import** — the scratch level, 2905 live entities, every
 streamed model and material, and the prefab template all resident at once. That
-is the figure that decides whether the import fits in a machine's RAM. **+2316 MB
+is the figure that decides whether the import fits in a machine's RAM. **+2465 MB
 is what the finished level costs** once the editor has reopened a level and
 instantiated the prefab; the difference is the import's working state being
 released.
@@ -98,7 +129,7 @@ before pointing it at something four times larger.
 
 | Measure | Figure |
 |---|---|
-| Instantiate the saved prefab | 7.8 s |
+| Instantiate the saved prefab | 7.3 s |
 | 300 frames in game mode | 2.5 s (**8.3 ms/frame**) |
 
 **This is a headless batch editor** (`-BatchMode -autotest_mode`), not a shipping
