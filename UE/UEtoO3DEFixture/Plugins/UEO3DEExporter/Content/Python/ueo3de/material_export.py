@@ -44,6 +44,7 @@ import os
 import unreal
 
 from . import naming
+from . import param_roles
 
 # Property -> (UE enum name, manifest key, role suffix)
 _PROPERTIES = (
@@ -514,17 +515,60 @@ _ATTRIBUTE_INPUTS = {
 }
 
 
+# Function-call input pins that pass MaterialAttributes through: taking this
+# branch keeps the BASE surface and drops the function's blend/overlay math.
+_ATTRIBUTES_PASSTHROUGH_PINS = ("basematerial", "material", "base", "input", "in", "a")
+
+
 def _classify_material_attributes(master, instance, bank, warnings, subject):
     """Properties of a use_material_attributes master.
 
-    Follows the attributes pin through wrappers; a MakeMaterialAttributes node
-    yields per-attribute classification, anything else is reported and the
-    material falls back to default (base colour unresolvable).
+    Follows the attributes pin through wrappers. Three shapes convert, tried
+    in order (each measured on real content):
+
+      1. MakeMaterialAttributes -> per-attribute classification (MM_Master);
+      2. a material-function CALL with an attributes pass-through pin
+         (MM_Building: MF_MaterialBlend's `BaseMaterial`) -> unwrap it,
+         report the dropped blend, repeat;
+      3. a call with NO classifiable pins (MF_BaseMaterial_Simple: its
+         textures are parameter nodes INSIDE the function, unreachable from
+         Python) -> classify from the master's flat texture PARAMETER LIST
+         by role-shaped names (param_roles.py), values from the instance.
+
+    Anything else is reported and the material falls back to default.
     """
     mel = unreal.MaterialEditingLibrary
     prop = getattr(unreal.MaterialProperty, "MP_MATERIAL_ATTRIBUTES", None)
     node = mel.get_material_property_input_node(master, prop) if prop else None
     node, _hint = _follow(master, node, instance)
+
+    for _bound in range(8):
+        if node is None or _expression_kind(node) != "MaterialExpressionMaterialFunctionCall":
+            break
+        function_asset = node.get_editor_property("material_function")
+        function_name = function_asset.get_name() if function_asset else "function"
+        try:
+            names = [str(n) for n in (mel.get_material_expression_input_names(node) or [])]
+            inputs = list(mel.get_inputs_for_material_expression(master, node) or [])
+        except Exception:
+            names, inputs = [], []
+        passthrough = None
+        for name, expression in zip(names, inputs):
+            if expression is None:
+                continue
+            if name.lower().replace(" ", "") in _ATTRIBUTES_PASSTHROUGH_PINS:
+                passthrough = (name, expression)
+                break
+        if passthrough is None:
+            # Dead end at a bare call: the parameter-name fallback.
+            return _classify_by_parameter_names(master, instance, bank,
+                                                warnings, subject, function_name)
+        warnings.add("MAT_FUNCTION_PASSTHROUGH", subject,
+                     "attributes: %s approximated by its %r input (its "
+                     "blend/overlay math is dropped)"
+                     % (function_name, passthrough[0]))
+        node, _hint = _follow(master, passthrough[1], instance)
+
     if node is None or _expression_kind(node) != "MaterialExpressionMakeMaterialAttributes":
         warnings.add("MAT_EXPR_UNSUPPORTED", subject,
                      "material attributes pin driven by %s"
@@ -543,6 +587,92 @@ def _classify_material_attributes(master, instance, bank, warnings, subject):
                                    warnings, subject)
         if spec is not None:
             properties[key] = spec
+    return properties
+
+
+def _resolve_texture_parameter(master, instance, name):
+    """The texture bound to parameter `name`, instance value first."""
+    mel = unreal.MaterialEditingLibrary
+    if instance is not None:
+        try:
+            value = mel.get_material_instance_texture_parameter_value(instance, name)
+            if value is not None:
+                return value
+        except Exception:
+            pass
+    for api in ("get_material_default_texture_parameter_value",
+                "get_texture_parameter_default_value"):
+        try:
+            value = getattr(mel, api)(master, name)
+            if value is not None:
+                return value
+        except Exception:
+            continue
+    return None
+
+
+def _classify_by_parameter_names(master, instance, bank, warnings, subject,
+                                 function_name):
+    """Last-resort classification from the master's texture parameter names.
+
+    See param_roles.py for the (pure, tested) name->role rules. An ORM-named
+    parameter expands to the packed-texture channel split M4 already does for
+    explicit ORM graphs (R -> occlusion, G -> roughness, B -> metallic).
+    """
+    mel = unreal.MaterialEditingLibrary
+    try:
+        names = [str(n) for n in (mel.get_texture_parameter_names(master) or [])]
+    except Exception as exc:
+        warnings.add("MAT_EXPR_UNSUPPORTED", subject,
+                     "attributes end in %s and texture parameters are not "
+                     "enumerable (%s)" % (function_name, type(exc).__name__))
+        return {}
+
+    roles = param_roles.pick_parameter_roles(names)
+    if not roles:
+        warnings.add("MAT_EXPR_UNSUPPORTED", subject,
+                     "attributes end in %s (no classifiable pins) and no "
+                     "texture parameter name matches a role; parameters: %s"
+                     % (function_name, ", ".join(sorted(names)) or "none"))
+        return {}
+
+    properties = {}
+
+    def request(parameter_name, role, channel, key):
+        texture = _resolve_texture_parameter(master, instance, parameter_name)
+        if texture is None:
+            return
+        entry = bank.request(texture, role, channel)
+        properties[key] = {"source": "texture", "texture_guid": entry["guid"],
+                           "channel": channel, "factor": None}
+
+    if "basecolor" in roles:
+        request(roles["basecolor"], "basecolor", None, "base_color")
+    if "normal" in roles:
+        request(roles["normal"], "normal", None, "normal")
+    if "orm" in roles:
+        request(roles["orm"], "ao", "R", "occlusion")
+        request(roles["orm"], "roughness", "G", "roughness")
+        request(roles["orm"], "metallic", "B", "metallic")
+    else:
+        if "roughness" in roles:
+            request(roles["roughness"], "roughness", None, "roughness")
+        if "metallic" in roles:
+            request(roles["metallic"], "metallic", None, "metallic")
+        if "ao" in roles:
+            request(roles["ao"], "ao", None, "occlusion")
+
+    if properties:
+        warnings.add("MAT_PARAMS_BY_NAME", subject,
+                     "%s exposes no walkable graph; classified from parameter "
+                     "names %s -- role assignment is heuristic"
+                     % (function_name,
+                        ", ".join("%s=%r" % (r, n) for r, n in sorted(roles.items()))))
+    else:
+        warnings.add("MAT_EXPR_UNSUPPORTED", subject,
+                     "attributes end in %s; role-named parameters exist (%s) "
+                     "but none resolved to a texture"
+                     % (function_name, ", ".join(sorted(roles.values()))))
     return properties
 
 

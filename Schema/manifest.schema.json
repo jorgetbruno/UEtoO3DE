@@ -91,9 +91,9 @@
           "const": "negate_y"
         },
         "lane_b_rule": {
-          "description": "How the referenced geometry ends up reflected in the O3DE product. Three stages each negate Y (exporter bake, UE FBX writer, SceneAPI axis conversion), netting the one reflection Lane A requires; SceneAPI also converts cm to m from the FBX UnitScaleFactor. Measured at the product-buffer level.",
+          "description": "How the referenced geometry ends up reflected in the O3DE product. The exporter bakes diag(-1,-1,1), UE's FBX writer negates Y, and SceneAPI applies a 180-degree yaw diag(-1,-1,1) (a proper rotation -- importers rotate into a declared frame, they never mirror), netting Lane A's diag(1,-1,1); SceneAPI also converts cm to m from the FBX UnitScaleFactor. Measured at the product-buffer level on BOTH asymmetric axes (Lane B correction #3).",
           "type": "string",
-          "const": "negate_y_net_of_three"
+          "const": "negate_y_scene_rz180"
         }
       }
     },

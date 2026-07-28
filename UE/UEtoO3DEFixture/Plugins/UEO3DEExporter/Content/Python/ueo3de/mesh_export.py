@@ -2,37 +2,41 @@
 mesh_export.py — FBX export of the static meshes a manifest references (plan M2).
 
 --------------------------------------------------------------------------
-Lane B: THREE Y-negations, net one (measured; the third was found by a human)
+Lane B, third correction (2026-07-27): SceneAPI ROTATES, it does not mirror
 --------------------------------------------------------------------------
 UE is left-handed and O3DE is right-handed, so the product geometry must end
-up carrying Lane A's basis map: negate Y, /100. Three stages each negate Y:
+up carrying Lane A's basis map: negate Y, /100. The measured stages:
 
-    1. this module bakes `scale_mesh(1, -1, 1)` into a temp asset      (ours)
+    1. this module bakes `scale_mesh(-1, -1, 1)` into a temp asset     (ours)
     2. UE's FBX exporter negates Y (LH -> RH conversion)               (always)
-    3. O3DE SceneAPI negates Y again -- it honours the FBX's declared
-       `FrontAxis = Y, sign -1` and converts into O3DE's frame         (always)
+    3. O3DE SceneAPI applies a 180-degree yaw, diag(-1,-1,1) -- a
+       PROPER rotation. Honouring a declared coordinate frame means
+       rotating into it; an importer never mirrors.                    (always)
 
-Net: one negation. Units: SceneAPI honours `UnitScaleFactor` (cm -> m), so no
-scale rule is needed anywhere.
+Net: diag(-1,-1,1) * diag(1,-1,1) * diag(-1,-1,1) = diag(1,-1,1) = Lane A.
+Units: SceneAPI honours `UnitScaleFactor` (cm -> m), so no scale rule.
 
-Stage 3 is the one everybody missed, twice:
+Three corrections, each found where the last one's evidence stopped:
 
   * M0's spike S0.2 concluded SceneAPI applies "no unit conversion, no axis
-    conversion". Its evidence was product *metadata* and buffer *ratios*,
-    never absolute product floats. Both claims were wrong: byte-level reads of
-    the product position buffers show the engine cube at exactly +/-0.5 m with
-    no rule at all, and the F mesh's Y-asymmetric nub flipped back to +Y.
-  * During M2 this module's bake was removed because an FBX-level check showed
-    stages 1 and 2 cancelling. True -- and irrelevant, because stage 3 then
-    re-mirrored the geometry. Every automated check passed; the first human
-    look at an imported level (a bench 100x too small next to the shader
-    ball) is what exposed the scale half, and the product-float reads that
-    followed exposed the mirror half.
+    conversion" from product metadata and ratios; absolute floats refuted
+    both (the 100x-too-small bench, the Y-mirrored nub).
+  * M2 briefly removed the bake because stages 1+2 cancel at the FBX level;
+    true and irrelevant, because stage 3 changes the geometry again.
+  * M4.5 (this correction): the byte tests asserted Y only, and stage 3's
+    map was recorded as "negates Y" when it is actually diag(-1,-1,1) --
+    the two are indistinguishable on the Y axis. With the old (1,-1,1)
+    bake the product came out diag(-1,-1,1)(source): every mesh locally
+    X-mirrored, self-consistently (colliders bake from the same geometry),
+    invisible on symmetric meshes. The letterF product had its vertex mass
+    at +0.5 m where the source has it at -0.5 m. Found by an adversarial
+    review agent refusing to trust the Y-only evidence.
 
-The permanent assertion therefore lives at the PRODUCT level
-(`Tests/m2/test_m2_artifacts.py` reads the cache's position buffers by float
-byte-pattern), and the FBX-level check asserts the intermediate is verbatim UE
-(stages 1+2 cancelled), which is what this pipeline actually produces.
+The permanent assertions live at the PRODUCT level on BOTH asymmetric axes
+(`Tests/m2/test_m2_artifacts.py`, float byte-pattern counts for X and Y).
+The FBX-level check asserts the intermediate is mirror-X(source) for normal
+entries and verbatim source for mirrored variants (stages 1+2 net
+diag(-1,1,1) and identity respectively).
 
 --------------------------------------------------------------------------
 Requirements and options
@@ -61,6 +65,8 @@ is. Per-triangle material IDs survive copy -> scale_mesh -> bake unchanged
 import os
 
 import unreal
+
+from . import naming
 
 TEMP_PACKAGE_DIR = "/Game/__UEO3DEExportTemp"
 
@@ -96,12 +102,33 @@ def _make_export_options():
     return options
 
 
-def _mirrored_dynamic_mesh(source_mesh):
-    """LOD0 render geometry with the bake-stage Y-negation applied.
+def _baked_dynamic_mesh(source_mesh, mirrored=False):
+    """LOD0 render geometry with the bake-stage negations applied.
 
-    `scale_mesh` with a negative-determinant scale fixes triangle winding by
-    itself -- measured in `Tests/ue/probe_m2_mirror2.py`: all 48 face normals
-    of the F mesh mapped to B*n, none to -B*n. Do NOT add a manual flip.
+    Normal bake: `scale_mesh(-1,-1,1)`. THIS IS LANE B'S THIRD CORRECTION
+    (2026-07-27; LANE_B.md carries the full story). The old bake was
+    (1,-1,1) on the belief that SceneAPI's axis conversion negates Y. Byte
+    reads of the product position buffers refuted that: SceneAPI applies a
+    180-degree yaw, diag(-1,-1,1) -- a PROPER rotation, which is what
+    honouring a declared coordinate frame actually means; importers rotate,
+    they never mirror. Under the old bake the product came out as
+    diag(-1,-1,1)(source) instead of the diag(1,-1,1)(source) that Lane A's
+    entity rotations require -- every imported mesh was locally X-mirrored,
+    perfectly self-consistently (colliders bake from the same geometry), so
+    only an asymmetric mesh could reveal it and only on the X axis nobody's
+    test asserted. The letterF product had 45 vertices at +0.5 m where the
+    source has its mass at -0.5 m.
+
+    Chain check with the corrected bake: SceneAPI * Export * bake =
+    diag(-1,-1,1) * diag(1,-1,1) * diag(-1,-1,1) = diag(1,-1,1) = Lane A's
+    basis map. Determinant of the bake is +1, so winding is untouched
+    (verified by signed volume in `Tests/ue/probe_mirror_bake.py`).
+
+    `mirrored=True` is the negative-scale VARIANT bake: the canonical
+    mirror-about-X on top, i.e. `scale_mesh(1,-1,1)` (Mx * (-1,-1,1) =
+    (1,-1,1)). Its determinant is -1 and `scale_mesh` fixes winding itself
+    (measured in `Tests/ue/probe_m2_mirror2.py`) -- no manual flip in either
+    path.
     """
     dyn = unreal.DynamicMesh()
     copy_options = unreal.GeometryScriptCopyMeshFromAssetOptions()
@@ -113,8 +140,9 @@ def _mirrored_dynamic_mesh(source_mesh):
     if dyn is None:
         raise MeshExportError("copy_mesh_from_static_mesh returned no mesh")
 
+    bake_x = 1.0 if mirrored else -1.0
     dyn = _unwrap(unreal.GeometryScript_MeshTransforms.scale_mesh(
-        dyn, unreal.Vector(1.0, -1.0, 1.0), unreal.Vector(0.0, 0.0, 0.0)))
+        dyn, unreal.Vector(bake_x, -1.0, 1.0), unreal.Vector(0.0, 0.0, 0.0)))
     if dyn is None:
         raise MeshExportError("scale_mesh returned no mesh")
     return dyn
@@ -153,12 +181,64 @@ def _compact_slots(dyn, source):
     slots = []
     for old_id in used:
         if old_id < len(source_slots):
-            slots.append(source_slots[old_id])
+            entry = source_slots[old_id]
+            if _field_material(entry) is None:
+                # UE's FBX exporter DROPS a null-material slot -- the model
+                # would have fewer slots than the manifest, and an actor
+                # override of this slot could never be assigned. Substitute a
+                # placeholder whose NAME both sides derive from the original
+                # slot index (naming.empty_slot_label).
+                entry = _placeholder_slot(entry, old_id)
+            slots.append(entry)
         else:
             # A material ID beyond the source slot list: keep the index space
-            # aligned with an empty entry; the importer skips unmapped slots.
-            slots.append(unreal.StaticMaterial())
+            # aligned; same placeholder treatment so the slot survives.
+            entry = unreal.StaticMaterial()
+            entry.set_editor_property("material_interface",
+                                      _placeholder_material(old_id))
+            slots.append(entry)
     return slots
+
+
+def _field_material(static_material):
+    try:
+        return static_material.get_editor_property("material_interface")
+    except Exception:
+        return None
+
+
+_placeholder_cache = {}
+
+
+def _placeholder_material(slot_index):
+    """A transient material named for the slot; lives in the temp package."""
+    label = naming.empty_slot_label(slot_index)
+    cached = _placeholder_cache.get(label)
+    if cached is not None:
+        return cached
+    path = TEMP_PACKAGE_DIR + "/" + label
+    material = unreal.EditorAssetLibrary.load_asset(path)
+    if material is None:
+        tools = unreal.AssetToolsHelpers.get_asset_tools()
+        material = tools.create_asset(label, TEMP_PACKAGE_DIR, unreal.Material,
+                                      unreal.MaterialFactoryNew())
+    if material is None:
+        raise MeshExportError("could not create placeholder material " + label)
+    _placeholder_cache[label] = material
+    return material
+
+
+def _placeholder_slot(source_slot, slot_index):
+    entry = unreal.StaticMaterial()
+    try:
+        entry.set_editor_property(
+            "material_slot_name",
+            source_slot.get_editor_property("material_slot_name"))
+    except Exception:
+        pass
+    entry.set_editor_property("material_interface",
+                              _placeholder_material(slot_index))
+    return entry
 
 
 def _bake_temp_asset(dyn, asset_name):
@@ -230,14 +310,22 @@ def export_meshes(assets, output_root, log=None):
             raise MeshExportError("duplicate static mesh GUID in manifest: " + guid)
         seen_guids.add(guid)
 
-        source = unreal.EditorAssetLibrary.load_asset(asset["ue_path"])
+        # A mirrored VARIANT entry (negative-scale fidelity) is marked by a
+        # literal `#mx` fragment on its ue_path; strip it to load the real
+        # asset, keep it to choose the variant bake.
+        mirrored = "#" in asset["ue_path"]
+        source_path = asset["ue_path"].split("#", 1)[0]
+        source = unreal.EditorAssetLibrary.load_asset(source_path)
         if source is None:
-            raise MeshExportError("could not load source mesh " + asset["ue_path"])
+            raise MeshExportError("could not load source mesh " + source_path)
 
-        node_name = source.get_name()
+        # The node name comes from the manifest, not the asset: the variant's
+        # node is <name>_MX and the `.assetinfo` selection references it
+        # exactly (a mismatch fails the AP job outright, per LANE_B.md).
+        node_name = asset.get("fbx_node_name") or source.get_name()
         output_path = os.path.join(output_root, asset["o3de_relative_path"]).replace("\\", "/")
 
-        dyn = _mirrored_dynamic_mesh(source)
+        dyn = _baked_dynamic_mesh(source, mirrored=mirrored)
         slots = _compact_slots(dyn, source)
         temp_path, baked = _bake_temp_asset(dyn, node_name)
         try:
@@ -251,6 +339,15 @@ def export_meshes(assets, output_root, log=None):
             unreal.EditorAssetLibrary.delete_asset(temp_path)
 
         bounds_min, bounds_max = source_bounds(source)
+        if not mirrored:
+            # With the corrected bake the NORMAL FBX intermediate is
+            # mirror-X(source) (bake (-1,-1,1) then UE's export Y-negation
+            # leaves net diag(-1,1,1)); the VARIANT's is verbatim source.
+            # The export verifiers (export_fixture / export_level) compare
+            # the written FBX against these bounds, so mirror the normal
+            # entries' expectation and leave the variant's alone.
+            bounds_min, bounds_max = ([-bounds_max[0], bounds_min[1], bounds_min[2]],
+                                      [-bounds_min[0], bounds_max[1], bounds_max[2]])
         exported.append({
             "guid": guid,
             "ue_path": asset["ue_path"],
@@ -266,5 +363,8 @@ def export_meshes(assets, output_root, log=None):
 
     if unreal.EditorAssetLibrary.does_directory_exist(TEMP_PACKAGE_DIR):
         unreal.EditorAssetLibrary.delete_directory(TEMP_PACKAGE_DIR)
+    # The placeholders lived in the temp dir just deleted; a second export in
+    # the same editor session must recreate them, not reuse dead pointers.
+    _placeholder_cache.clear()
 
     return exported

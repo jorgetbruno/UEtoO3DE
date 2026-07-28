@@ -35,9 +35,11 @@ CODES = {
 
     # --- transforms (M1, Lane A) ---
     "XFORM_NEGATIVE_SCALE": (
-        WARN, "UE actor carries a negative scale component. Negative scale "
-              "inverts winding and is invalid on colliders; absolute value "
-              "exported instead."),
+        WARN, "UE actor carries a mirror (odd negative scale axes) inside an "
+              "attach hierarchy, where folding it into a mesh variant would "
+              "break the children's frames; absolute value exported and the "
+              "mirror is lost. Flat actors take the mirrored-variant path "
+              "(XFORM_MIRRORED_MESH_VARIANT) instead."),
 
     # --- actor coverage (M1) ---
     "ACTOR_CLASS_UNMAPPED": (
@@ -46,6 +48,17 @@ CODES = {
     "ACTOR_DEFERRED": (
         INFO, "Actor class is recognized but is owned by a later milestone; "
               "exported as a placeholder with its transform preserved."),
+    "ACTOR_COMPONENTS_EXTRACTED": (
+        INFO, "Unmapped actor class (a Blueprint) whose StaticMeshComponents "
+              "were exported as child entities; scripted behaviour and any "
+              "non-mesh components do not carry over."),
+
+    # --- negative scale fidelity (M4.5) ---
+    "XFORM_MIRRORED_MESH_VARIANT": (
+        INFO, "Odd number of negative scale axes: the signs were folded into "
+              "the rotation and the entity references a mirror-X mesh "
+              "variant baked for it. Geometry is faithful; the mesh asset is "
+              "doubled."),
 
     # --- meshes and materials (M1 records, M2/M4 consume) ---
     "MESH_SLOT_EMPTY": (
@@ -62,6 +75,11 @@ CODES = {
     "MAT_BLEND_UNSUPPORTED": (
         WARN, "UE blend mode outside Opaque/Masked/Translucent; imported as "
               "translucent."),
+    "MAT_PARAMS_BY_NAME": (
+        WARN, "The master's graph dead-ends in a material function whose "
+              "internals Python cannot walk; the material was classified "
+              "from its texture parameter NAMES instead. Role assignment is "
+              "heuristic -- check the named parameters."),
 
     # --- environment (M6) ---
     "ENV_POSTPROCESS_UNMAPPED": (

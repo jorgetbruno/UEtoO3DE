@@ -72,7 +72,14 @@ def clear_manifest_files(project, document):
                 if not os.path.isdir(folder):
                     continue
                 for name in os.listdir(folder):
-                    if name.startswith(stem) or name.startswith("default_" + stem):
+                    # Boundary-aware: products are <stem>.<ext> or
+                    # <stem>_lod<N>_<semantic>. A bare startswith(stem) would
+                    # also wipe sm_letterf_mx products when clearing
+                    # sm_letterf -- the cross-manifest deletion class this
+                    # function's docstring exists to prevent.
+                    if any(name.startswith(prefix + boundary)
+                           for prefix in (stem, "default_" + stem)
+                           for boundary in (".", "_lod")):
                         os.remove(os.path.join(folder, name))
                         removed.append(os.path.join(folder, name))
     return removed

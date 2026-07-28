@@ -42,7 +42,7 @@ LANE_A_RULE = "negate_y"
 # (UnitScaleFactor cm->m); no .assetinfo scale rule exists. All measured at the
 # product-buffer byte level (Tests/m2/test_m2_artifacts.py). Recorded so the
 # importer can refuse a manifest from a pipeline with a different net map.
-LANE_B_RULE = "negate_y_net_of_three"
+LANE_B_RULE = "negate_y_scene_rz180"
 
 FLOAT_DIGITS = 6
 

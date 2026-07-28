@@ -27,7 +27,9 @@ exists, is a design change recorded here rather than a patch.
 | Behaviour | UE | → O3DE (both backends) |
 |---|---|---|
 | Non-uniform scale inheritance | scales propagate through the attachment hierarchy | `EditorNonUniformScaleComponent` applies at its own entity only; children do not inherit it. Reported as `XFORM_NONUNIFORM_SCALE_NOT_INHERITED` when a non-uniformly scaled entity has children |
-| Negative scale | legal, mirrors geometry | not representable (invalid on colliders); absolute value imported + `XFORM_NEGATIVE_SCALE` |
+| Negative scale (flat actors) | legal, mirrors geometry | **faithful since M4.5.** Even negative-axis counts are exactly a 180° rotation and fold into the quaternion (lossless); odd counts fold all but one canonical mirror, and the entity references a baked mirror-X mesh variant (`#mx` asset, mirrored collision) → `XFORM_MIRRORED_MESH_VARIANT` (info). Cost: one extra mesh asset per (mesh, mirror) pair — L_Showcase's 381 mirrored actors share 36 variants |
+| Negative scale (in attach hierarchies) | children inherit the mirror | not representable: folding rewrites the parent frame out from under its children. Absolute value imported + `XFORM_NEGATIVE_SCALE` (both measured levels have zero such actors) |
+| Blueprint actors | class + components + scripts | the class and scripts have no mapping; StaticMeshComponents are extracted as child entities (`ACTOR_COMPONENTS_EXTRACTED`), child-actor components dedup against their own actor entries, and sky-sphere Blueprints are skipped in favour of M6's Physical Sky. Anything scripted (interaction, animation, spawning) is gone |
 | World orientation | +X forward | the negate-Y basis map lands UE's forward on O3DE's +X (O3DE's right): faithful shape, mirror-free, yawed 90° versus O3DE's forward convention. Nothing in v1 scope depends on it (MAPPING.md, Lane A) |
 
 ## Lights (M5)

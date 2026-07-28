@@ -87,6 +87,46 @@ def test_tga_split_synthetic(scratch):
           "alpha of a 24-bpp image must split as opaque white")
 
 
+def test_parameter_role_matching():
+    """The name->role rules behind MAT_PARAMS_BY_NAME (pure, param_roles.py).
+
+    Shaped after the real failure they exist for: MM_Building's textures are
+    parameters inside an unwalkable material function, and the only usable
+    signal is artist-chosen names among a soup of blend-layer parameters.
+    """
+    from ueo3de import param_roles
+
+    # The MM_Building shape: plain base names among blend-layer noise.
+    roles = param_roles.pick_parameter_roles([
+        "Plaster BaseColor", "Plaster Normal", "Plaster ORM",
+        "GroundBlend BaseColor", "GroundBlend Normal", "GroundBlend ORM",
+        "Grunge Mask", "Macro Variation", "Dirt Overlay",
+    ])
+    check(roles.get("basecolor") == "Plaster BaseColor",
+          "base colour should pick the plain name, got %r" % roles.get("basecolor"))
+    check(roles.get("normal") == "Plaster Normal", "normal pick: %r" % roles.get("normal"))
+    check(roles.get("orm") == "Plaster ORM", "orm pick: %r" % roles.get("orm"))
+    check("GroundBlend BaseColor" not in roles.values(),
+          "a blend-layer parameter must never be chosen")
+
+    # Short tokens need word boundaries: armour is not ORM, chaos is not AO.
+    roles = param_roles.pick_parameter_roles(["Armor Color", "Chaos Texture"])
+    check("orm" not in roles, "'Armor' must not match the ORM role: %r" % roles)
+    check("ao" not in roles, "'Chaos' must not match the AO role: %r" % roles)
+    check(roles.get("basecolor") == "Armor Color",
+          "'Armor Color' is a legitimate colour name, got %r" % roles)
+
+    # Separate roughness/metallic when no packed map exists; one parameter
+    # is claimed by at most one role.
+    roles = param_roles.pick_parameter_roles(["T_Roughness", "T_Metallic", "T_AO"])
+    check(roles.get("roughness") == "T_Roughness" and roles.get("metallic") == "T_Metallic"
+          and roles.get("ao") == "T_AO", "separate maps should each match: %r" % roles)
+
+    # Nothing role-shaped -> nothing chosen (the material stays grey, loudly).
+    check(param_roles.pick_parameter_roles(["Foo", "Bar", "Wind Intensity"]) == {},
+          "unrecognizable names must yield no roles")
+
+
 def test_manifest_material_data(document):
     for name in ("M_Fixture_PBR", "M_Fixture_ORM", "M_Fixture_Masked",
                  "M_Fixture_Translucent"):
@@ -217,6 +257,7 @@ def main():
 
     for name, test in (
             ("tga split (synthetic, known channels)", lambda: test_tga_split_synthetic(scratch)),
+            ("parameter role matching (pure)", test_parameter_role_matching),
             ("manifest material_data", lambda: test_manifest_material_data(document)),
             ("exported texture files", lambda: test_exported_textures(document)),
             ("staged .material JSON", lambda: test_staged_materials(document, project)),

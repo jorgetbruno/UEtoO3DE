@@ -38,6 +38,15 @@ CODES = {
         WARN, "A converted material had no matching slot label on the entity's "
               "model; that slot keeps the model's own default material. The "
               "label is the UE material asset name via the FBX."),
+    "MAT_SLOT_UNUSED": (
+        INFO, "A slot's material matched nothing and every model slot is "
+              "already assigned: the mesh asset lists a slot that no render "
+              "triangle uses, so the bake dropped it. Nothing was lost."),
+    "MAT_SLOT_BY_ELIMINATION": (
+        INFO, "A material matched no slot label (the mesh asset's slot has "
+              "no default material, so the FBX carries no name for it), but "
+              "exactly one model slot was unclaimed -- assigned by "
+              "elimination."),
     "MAT_SLOT_LABEL_AMBIGUOUS": (
         WARN, "Two material slots on one mesh resolve to the same label but "
               "different materials; only the first can be assigned, because "

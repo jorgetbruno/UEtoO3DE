@@ -119,6 +119,72 @@ def convert_scale(scale):
 
 
 # ---------------------------------------------------------------------------
+# negative scale -> rotation (+ optional canonical mirror)   (M4.5 fidelity)
+# ---------------------------------------------------------------------------
+# A diagonal sign matrix commutes with any diagonal scale, so R*S factors as
+#
+#     R * S  =  (R * SIGMA_rot) * |S| * M
+#
+# where SIGMA = diag(sign(S)) = SIGMA_rot * M, SIGMA_rot is a 180-degree
+# rotation (or identity) and M is either identity (det SIGMA = +1: the signs
+# ARE a rotation, nothing is lost) or the canonical mirror about X,
+# diag(-1,1,1) (det SIGMA = -1: a true reflection). The mirror cannot live in
+# the transform -- O3DE has no negative scale -- so it is BAKED into a mirrored
+# mesh variant and the entity keeps positive scale. Verified numerically for
+# all eight sign patterns in test_lane_a.py, and at the FBX level by
+# Tests/ue/probe_mirror_bake.py (centroid X flips exactly, signed volume keeps
+# sign and magnitude, so winding needs no manual flip).
+#
+# sign pattern -> (quaternion of SIGMA_rot or None, needs mirrored mesh)
+_SIGN_FOLDS = {
+    (1, 1, 1):    (None, False),
+    (1, -1, -1):  ((1.0, 0.0, 0.0, 0.0), False),   # Rx(180)
+    (-1, 1, -1):  ((0.0, 1.0, 0.0, 0.0), False),   # Ry(180)
+    (-1, -1, 1):  ((0.0, 0.0, 1.0, 0.0), False),   # Rz(180)
+    (-1, 1, 1):   (None, True),                    # M alone
+    (1, -1, 1):   ((0.0, 0.0, 1.0, 0.0), True),    # Rz(180) * M
+    (1, 1, -1):   ((0.0, 1.0, 0.0, 0.0), True),    # Ry(180) * M
+    (-1, -1, -1): ((1.0, 0.0, 0.0, 0.0), True),    # Rx(180) * M
+}
+
+
+def fold_scale_signs(quat_xyzw, scale):
+    """Rewrite a UE-space (rotation, signed scale) with the signs folded out.
+
+    Returns (quat', |scale|, mirrored). `mirrored` means the entity must
+    reference the mirror-about-X mesh variant. Runs BEFORE Lane A conversion;
+    the adjusted quaternion then converts like any other rotation.
+    """
+    signs = tuple(1 if float(value) >= 0.0 else -1 for value in scale)
+    q_rot, mirrored = _SIGN_FOLDS[signs]
+    if q_rot is None:
+        quat = [float(component) for component in quat_xyzw]
+    else:
+        quat = quat_multiply(quat_xyzw, q_rot)
+    return quat, [abs(float(value)) for value in scale], mirrored
+
+
+def mirror_x_position(vec):
+    """A converted-space position under the canonical mirror: negate x."""
+    x, y, z = vec
+    return [_clean(-float(x)), _clean(float(y)), _clean(float(z))]
+
+
+def mirror_x_quat(quat_xyzw):
+    """Conjugate a converted-space rotation by diag(-1,1,1).
+
+    A reflection maps a rotation about axis `a` by theta to one about
+    `M a` by -theta, which for M = diag(-1,1,1) is exactly "keep x, negate
+    y and z". Canonicalized to w >= 0 like convert_quat.
+    """
+    x, y, z, w = quat_xyzw
+    out = [float(x), -float(y), -float(z), float(w)]
+    if out[3] < 0.0:
+        out = [-c for c in out]
+    return [_clean(c) for c in out]
+
+
+# ---------------------------------------------------------------------------
 # quaternion helpers (used by the exporter's self-check and by the tests)
 # ---------------------------------------------------------------------------
 

@@ -69,14 +69,21 @@ def _float_hits(data, value):
 
 
 def _position_buffer(project, relative_fbx_path, stem):
-    """Path of the LOD0 position .azbuffer for a staged FBX, or None."""
+    """Path of the LOD0 position .azbuffer for a staged FBX, or None.
+
+    Boundary-aware on purpose: buffers are named `<stem>_lod<N>_...`, and a
+    bare startswith would let a lookup for `sm_letterf` return the
+    `sm_letterf_mx` variant's buffer depending on listdir order -- whose Y
+    signature is IDENTICAL (mirror-X does not touch Y), so the wrong buffer
+    would pass the old assertions silently.
+    """
     folder = os.path.join(project, "Cache", "pc", "assets",
                           os.path.dirname(relative_fbx_path)).replace("\\", "/")
     if not os.path.isdir(folder):
         return None
     for name in os.listdir(folder):
-        if name.startswith(stem) and "position" in name and name.endswith(".azbuffer") \
-                and not name.startswith("default_"):
+        if name.startswith(stem + "_lod") and "position" in name \
+                and name.endswith(".azbuffer") and not name.startswith("default_"):
             return os.path.join(folder, name)
     return None
 
@@ -91,8 +98,14 @@ def test_manifest_declares_both_lanes(document):
           "units.lane_b_rule is %r" % units.get("lane_b_rule"))
 
 
-def test_fbx_is_verbatim_intermediate(document):
-    """The FBX equals the UE source: bake and export negations cancelled.
+def test_fbx_is_mirror_x_intermediate(document):
+    """The FBX equals mirror-X(UE source): bake (-1,-1,1) + export's Y flip.
+
+    Lane B correction #3: SceneAPI's conversion is a 180-degree yaw
+    diag(-1,-1,1), so the bake that lands the PRODUCT on Lane A's basis map
+    leaves the FBX intermediate at diag(-1,1,1)(source). The centroid is the
+    load-bearing check -- the F's X bounds are symmetric, and it was exactly
+    that blindness that let the old X-mirrored products ship.
 
     If this fails while the product test passes, a stage moved -- find out
     which before trusting either.
@@ -109,17 +122,33 @@ def test_fbx_is_verbatim_intermediate(document):
         return
 
     stats = fbx_reader.vertex_stats(fbx_path)
+    expected_min = [-reference["bounds_max"][0], reference["bounds_min"][1],
+                    reference["bounds_min"][2]]
+    expected_max = [-reference["bounds_min"][0], reference["bounds_max"][1],
+                    reference["bounds_max"][2]]
     print("  UE reference bounds (cm): %s .. %s"
           % (reference["bounds_min"], reference["bounds_max"]))
-    print("  exported FBX bounds (cm): %s .. %s"
+    print("  exported FBX bounds (cm): %s .. %s (expected mirror-X)"
           % ([round(v, 3) for v in stats["min"]], [round(v, 3) for v in stats["max"]]))
     for index, axis in enumerate("xyz"):
-        check(abs(stats["min"][index] - reference["bounds_min"][index]) <= POSITION_TOLERANCE_CM,
-              "FBX bounds min.%s is %.4f, UE source has %.4f"
-              % (axis, stats["min"][index], reference["bounds_min"][index]))
-        check(abs(stats["max"][index] - reference["bounds_max"][index]) <= POSITION_TOLERANCE_CM,
-              "FBX bounds max.%s is %.4f, UE source has %.4f"
-              % (axis, stats["max"][index], reference["bounds_max"][index]))
+        check(abs(stats["min"][index] - expected_min[index]) <= POSITION_TOLERANCE_CM,
+              "FBX bounds min.%s is %.4f, mirror-X of source gives %.4f"
+              % (axis, stats["min"][index], expected_min[index]))
+        check(abs(stats["max"][index] - expected_max[index]) <= POSITION_TOLERANCE_CM,
+              "FBX bounds max.%s is %.4f, mirror-X of source gives %.4f"
+              % (axis, stats["max"][index], expected_max[index]))
+
+    # Centroid SIGN, not value: the source F's centroid X is negative (the
+    # stem and nub live on -X), so the mirror-X intermediate's must be
+    # POSITIVE. The reference JSON's centroid averages unique vertices while
+    # the FBX duplicates them per face, so the two magnitudes are not
+    # comparable -- the sign is, and it is exactly what the symmetric bounds
+    # cannot see.
+    centroid = stats["centroid"]
+    check(centroid[0] > 10.0,
+          "FBX centroid.x is %.4f; mirror-X of the source (centroid.x %.4f) "
+          "must be well onto +X -- the bake vector is wrong"
+          % (centroid[0], reference["centroid"][0]))
 
 
 def test_product_scale_and_mirror(document, project):
@@ -151,7 +180,12 @@ def test_product_scale_and_mirror(document, project):
           "cube product contains +/-0.005: a scale rule is stacked on the unit "
           "conversion (the 100x-too-small bug)")
 
-    # --- F mesh mirror ---
+    # --- F mesh, BOTH asymmetric axes ---
+    # Y: the nub exists only on one side (+Y source -> -Y product).
+    # X: Lane B correction #3's axis. The product must keep the SOURCE X
+    # distribution (stem+nub mass at -0.5/-0.25, middle-arm end at +0.25):
+    # diag(1,-1,1) and diag(-1,-1,1) agree on every Y value, so Y alone let
+    # X-mirrored products ship for four milestones.
     buffer_path = _position_buffer(project, "uetoo3de/game/meshes/sm_letterf.fbx", "sm_letterf")
     if not check(buffer_path is not None, "no product position buffer for SM_LetterF"):
         return
@@ -164,7 +198,84 @@ def test_product_scale_and_mirror(document, project):
           "the geometry is not negate-Y")
     check(mirrored == 0,
           "F mesh product has vertices at Y = +0.375 m: the geometry is MIRRORED "
-          "(net-zero Y negation; a bake or conversion stage is missing/doubled)")
+          "in Y (net-zero Y negation; a stage is missing/doubled)")
+
+    x_neg_half, x_pos_half = _float_hits(data, -0.5), _float_hits(data, 0.5)
+    x_neg_q, x_pos_q = _float_hits(data, -0.25), _float_hits(data, 0.25)
+    print("  letterf product X: -0.5 x%d +0.5 x%d   -0.25 x%d +0.25 x%d"
+          % (x_neg_half, x_pos_half, x_neg_q, x_pos_q))
+    check(x_neg_half >= 2 * x_pos_half,
+          "F mesh product X mass is not on the -0.5 side (-0.5 x%d vs +0.5 "
+          "x%d): the product is X-MIRRORED -- the bake vector regressed to "
+          "the pre-correction (1,-1,1)" % (x_neg_half, x_pos_half))
+    check(x_neg_q >= 2 * x_pos_q,
+          "F mesh product quarter-plane mass is not on -0.25 (-0.25 x%d vs "
+          "+0.25 x%d): X is mirrored" % (x_neg_q, x_pos_q))
+
+
+def test_mirrored_variant_product(document, project):
+    """The MirroredF canary's `#mx` variant, at every artifact level.
+
+    Manifest: the entity references a variant asset (`ue_path` ends in #mx).
+    FBX: the variant intermediate is VERBATIM source (bake (1,-1,1) and UE's
+    export negation cancel) -- its centroid X is the source's -18.75, which
+    also proves it is not the normal FBX (whose centroid is +18.75).
+    Product: X counts are the exact swap of the base product's (mirror-X),
+    while the Y signature is identical -- which is precisely why the X counts
+    are the only discriminator and the buffer lookup must be boundary-exact.
+    """
+    entity = next((e for e in document["entities"] if e["name"] == "MirroredF"), None)
+    if not check(entity is not None, "fixture has no MirroredF canary"):
+        return
+    assets = {a["guid"]: a for a in document["assets"]}
+    asset = assets.get(entity.get("mesh", {}).get("asset_guid"))
+    if not check(asset is not None and asset["ue_path"].endswith("#mx"),
+                 "MirroredF does not reference a #mx variant asset (got %r)"
+                 % (asset and asset["ue_path"])):
+        return
+    check(all(component > 0.0 for component in entity["transform"]["world"]["scale"]),
+          "MirroredF world scale must be positive after folding")
+
+    fbx_path = os.path.join(EXPORT_ASSETS, asset["o3de_relative_path"])
+    if not check(os.path.exists(fbx_path), "variant FBX missing: " + fbx_path):
+        return
+    # Apples to apples: the two FBX files must be exact X-negations of each
+    # other (base = mirror-X of source, variant = verbatim source), with Y
+    # untouched. Same reader, same duplication, so the comparison is exact.
+    base = next((a for a in document["assets"]
+                 if a["ue_path"] == "/Game/Meshes/SM_LetterF"), None)
+    stats = fbx_reader.vertex_stats(fbx_path)
+    if check(base is not None, "no base SM_LetterF asset in the manifest"):
+        base_stats = fbx_reader.vertex_stats(
+            os.path.join(EXPORT_ASSETS, base["o3de_relative_path"]))
+        check(abs(stats["centroid"][0] + base_stats["centroid"][0]) <= POSITION_TOLERANCE_CM,
+              "variant/base FBX centroids are not X-negations (%.4f vs %.4f); "
+              "the two bakes are inconsistent"
+              % (stats["centroid"][0], base_stats["centroid"][0]))
+        check(stats["centroid"][0] < -10.0,
+              "variant FBX centroid.x is %.4f; the VERBATIM source is well "
+              "onto -X (+ here means the normal and variant bakes are swapped)"
+              % stats["centroid"][0])
+        check(abs(stats["centroid"][1] - base_stats["centroid"][1]) <= POSITION_TOLERANCE_CM,
+              "variant/base FBX centroid.y differ; the mirror touched Y")
+
+    buffer_path = _position_buffer(project, asset["o3de_relative_path"], "sm_letterf_mx")
+    if not check(buffer_path is not None, "no product position buffer for the variant"):
+        return
+    data = open(buffer_path, "rb").read()
+    x_neg_half, x_pos_half = _float_hits(data, -0.5), _float_hits(data, 0.5)
+    x_neg_q, x_pos_q = _float_hits(data, -0.25), _float_hits(data, 0.25)
+    print("  variant product X: -0.5 x%d +0.5 x%d   -0.25 x%d +0.25 x%d"
+          % (x_neg_half, x_pos_half, x_neg_q, x_pos_q))
+    check(x_pos_half >= 2 * x_neg_half,
+          "variant product X mass is not on the +0.5 side (+%d vs -%d): the "
+          "variant is not mirrored relative to the base"
+          % (x_pos_half, x_neg_half))
+    check(x_pos_q >= 2 * x_neg_q,
+          "variant quarter-plane mass is not on +0.25 (+%d vs -%d)"
+          % (x_pos_q, x_neg_q))
+    check(_float_hits(data, -0.375) > 0 and _float_hits(data, 0.375) == 0,
+          "variant Y signature changed; mirror-X must not touch Y")
 
 
 def test_one_fbx_per_unique_mesh_guid(document):
@@ -357,12 +468,13 @@ def test_import_report(document):
     check(counters.get("entities_created") == len(document["entities"]),
           "import created %r entities, manifest has %d"
           % (counters.get("entities_created"), len(document["entities"])))
-    # 6 mesh products + 5 converted materials (the 4 fixture PBR set plus
-    # WorldGridMaterial, whose Multiply graph resolves through the texture-DFS
-    # approximation); image products are dependencies of the material jobs and
-    # are not waited on directly.
-    check(counters.get("assets_waited_for") == 11,
-          "import waited for %r assets, expected 11" % counters.get("assets_waited_for"))
+    # 7 mesh products (6 meshes + the sm_letterf_mx mirrored variant) + 5
+    # converted materials (the 4 fixture PBR set plus WorldGridMaterial,
+    # whose Multiply graph resolves through the texture-DFS approximation);
+    # image products are dependencies of the material jobs and are not
+    # waited on directly.
+    check(counters.get("assets_waited_for") == 12,
+          "import waited for %r assets, expected 12" % counters.get("assets_waited_for"))
     # SM_TwoTone is the only multi-material mesh: exactly its 2 slots go
     # through per-slot assignment, and both labels must match model slots.
     check(counters.get("material_slots_assigned") == 2,
@@ -395,8 +507,9 @@ def main():
 
     for name, test in (
             ("manifest declares both lanes", lambda: test_manifest_declares_both_lanes(document)),
-            ("FBX is the verbatim-UE intermediate", lambda: test_fbx_is_verbatim_intermediate(document)),
+            ("FBX is the mirror-X intermediate", lambda: test_fbx_is_mirror_x_intermediate(document)),
             ("PRODUCT scale + mirror (byte-level)", lambda: test_product_scale_and_mirror(document, project)),
+            ("mirrored variant product (byte-level)", lambda: test_mirrored_variant_product(document, project)),
             ("one FBX per unique mesh GUID", lambda: test_one_fbx_per_unique_mesh_guid(document)),
             ("assetinfo sidecars", lambda: test_assetinfo_sidecars(document, project)),
             ("stale prefab instance removal", test_stale_instance_removal),

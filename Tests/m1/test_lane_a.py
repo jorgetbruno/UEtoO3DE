@@ -191,6 +191,69 @@ def test_scale_never_goes_negative():
 
 # ---------------------------------------------------------------------------
 
+def test_scale_sign_folding_reproduces_the_matrix():
+    """R*S == (R*SIGMA_rot)*|S|*(M?) for ALL eight sign patterns, exactly.
+
+    This is the identity the negative-scale fidelity path rests on. It is
+    checked as full 3x3 matrices (columns via quat_rotate on scaled basis
+    vectors), not as an argument: a wrong pattern->rotation entry produces a
+    level whose mirrored fences are rotated instead, which no per-component
+    assertion on the quaternion would catch.
+    """
+    magnitudes = (2.0, 1.0, 0.5)   # deliberately non-uniform
+    patterns = [(sx, sy, sz) for sx in (1, -1) for sy in (1, -1) for sz in (1, -1)]
+    for pattern in patterns:
+        scale = [m * s for m, s in zip(magnitudes, pattern)]
+        for quat in TEST_ROTATIONS:
+            folded_quat, folded_scale, mirrored = lane_a.fold_scale_signs(quat, scale)
+
+            check(all(component > 0.0 for component in folded_scale),
+                  "pattern %r: folded scale %r has a non-positive component"
+                  % (pattern, folded_scale))
+            expected_mirror = (pattern[0] * pattern[1] * pattern[2]) < 0
+            check(mirrored == expected_mirror,
+                  "pattern %r: mirrored is %r, but det(SIGMA) says %r"
+                  % (pattern, mirrored, expected_mirror))
+
+            for axis in range(3):
+                basis = [0.0, 0.0, 0.0]
+                basis[axis] = scale[axis]
+                original_column = lane_a.quat_rotate(quat, basis)
+
+                basis = [0.0, 0.0, 0.0]
+                basis[axis] = folded_scale[axis]
+                if mirrored and axis == 0:
+                    basis[0] = -basis[0]    # the canonical mirror M = diag(-1,1,1)
+                folded_column = lane_a.quat_rotate(folded_quat, basis)
+
+                check_close(folded_column, original_column,
+                            "pattern %r rotation %r column %d"
+                            % (pattern, [round(c, 3) for c in quat], axis),
+                            tolerance=1e-9)
+
+
+def test_mirror_x_conjugation():
+    """mirror_x_quat is conjugation by diag(-1,1,1): M R M == R'.
+
+    Checked as an action on vectors: R'(v) == M(R(M(v))) for every test
+    rotation and vector. A wrong sign here puts every mirrored fence's
+    COLLIDER at a subtly wrong angle while the render mesh looks right.
+    """
+    def mirror(vec):
+        return [-vec[0], vec[1], vec[2]]
+
+    for quat in TEST_ROTATIONS:
+        conjugated = lane_a.mirror_x_quat(quat)
+        for vec in TEST_VECTORS:
+            check_close(lane_a.quat_rotate(conjugated, vec),
+                        mirror(lane_a.quat_rotate(quat, mirror(vec))),
+                        "conjugation acts wrongly for %r on %r" % (quat, vec),
+                        tolerance=1e-6)
+
+    check_close(lane_a.mirror_x_position([1.5, -2.0, 3.0]), [-1.5, -2.0, 3.0],
+                "mirror_x_position must negate x only")
+
+
 def test_path_sanitization():
     cases = [
         ("/Game/Meshes/SM_LetterF.SM_LetterF", "uetoo3de/game/meshes/sm_letterf"),
@@ -272,6 +335,8 @@ TESTS = [
     test_conversion_is_a_homomorphism,
     test_quaternion_canonicalization,
     test_scale_never_goes_negative,
+    test_scale_sign_folding_reproduces_the_matrix,
+    test_mirror_x_conjugation,
     test_path_sanitization,
     test_path_collisions_are_detected,
     test_guids_are_stable,

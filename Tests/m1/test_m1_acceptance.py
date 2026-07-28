@@ -328,6 +328,8 @@ def assert_coverage(document):
         "Light_Directional", "Light_Point_Lumens", "Light_Spot_Lumens",
         "Light_Point_EV", "Light_Point_Unitless",
         "Atmo_SkyLight", "Atmo_HeightFog", "Atmo_SkyAtmosphere", "PPV_01",
+        "MirroredF", "RotationFold_Box", "BP_Like_Props",
+        "BP_Like_Props.StaticMesh", "BP_Like_Props.StaticMesh1",
     }
     missing = sorted(expected_names - set(entities))
     check(not missing, "fixture actors missing from the manifest: %r" % missing)
@@ -390,6 +392,72 @@ def assert_two_tone_slots(document):
           "SM_TwoTone's effective materials %r match its asset's slot materials "
           "%r; the actor's material override is gone and the label-vs-override "
           "distinction is untested" % (effective, asset_slot_names))
+
+
+def assert_negative_scale_canaries(document):
+    """The negative-scale fidelity paths, at the manifest level (M4.5).
+
+    MirroredF (UE scale (-1,1,1), odd negatives): positive exported scale, a
+    mesh reference to the `#mx` mirrored variant, and a variant asset whose
+    bounds/shapes are the mirror of the base's.
+    RotationFold_Box (UE scale (1,-2,-0.5), even negatives): positive scale
+    (1,2,0.5), the 180 folded into the rotation, and the BASE mesh -- a
+    rotation needs no variant.
+    BP_Like_Props: an unmapped-class actor whose two StaticMeshComponents
+    export as child entities (the component-extraction path).
+    """
+    entities = by_name(document)
+    assets = {asset["guid"]: asset for asset in document["assets"]}
+
+    mirrored = entities.get("MirroredF")
+    if check(mirrored is not None, "fixture is missing MirroredF"):
+        asset = assets.get(mirrored.get("mesh", {}).get("asset_guid"))
+        check(asset is not None and asset["ue_path"].endswith("#mx"),
+              "MirroredF must reference the #mx variant, got %r"
+              % (asset and asset["ue_path"]))
+        check(asset is not None and asset["fbx_node_name"].endswith("_MX"),
+              "the variant's FBX node must be <name>_MX")
+        base = next((a for a in document["assets"]
+                     if a["ue_path"] == "/Game/Meshes/SM_LetterF"), None)
+        if asset is not None and base is not None:
+            check(abs(asset["bounds_local"]["min"][0]
+                      + base["bounds_local"]["max"][0]) < 1e-6,
+                  "variant bounds are not the X-mirror of the base's")
+            check(asset["material_slot_material_names"]
+                  == base["material_slot_material_names"],
+                  "the variant must carry the base's slot material names")
+        rotation = mirrored["transform"]["world"]["rotation"]
+        check(abs(rotation[3]) > 0.999,
+              "(-1,1,1) folds with SIGMA_rot = identity; rotation should be "
+              "identity, got %r" % (rotation,))
+
+    fold = entities.get("RotationFold_Box")
+    if check(fold is not None, "fixture is missing RotationFold_Box"):
+        asset = assets.get(fold.get("mesh", {}).get("asset_guid"))
+        check(asset is not None and "#" not in asset["ue_path"],
+              "an even-negative scale is a rotation and must use the BASE mesh")
+        scale = fold["transform"]["world"]["scale"]
+        check(all(abs(component - expected) < 1e-5
+                  for component, expected in zip(scale, (1.0, 2.0, 0.5))),
+              "RotationFold_Box scale should be (1,2,0.5), got %r" % (scale,))
+        rotation = fold["transform"]["world"]["rotation"]
+        check(abs(abs(rotation[0]) - 1.0) < 1e-5,
+              "(1,-2,-0.5) folds to Rx(180); |rotation.x| should be 1, got %r"
+              % (rotation,))
+
+    props = entities.get("BP_Like_Props")
+    if check(props is not None, "fixture is missing BP_Like_Props"):
+        for child_name in ("BP_Like_Props.StaticMesh", "BP_Like_Props.StaticMesh1"):
+            child = entities.get(child_name)
+            if not check(child is not None, "missing extracted entity " + child_name):
+                continue
+            check(child["parent_id"] == props["id"],
+                  "%s must parent to the BP actor's entity" % child_name)
+            check(child["kind"] == "static_mesh" and "mesh" in child,
+                  "%s must be a mesh entity" % child_name)
+        codes = {(record["subject"], record["code"]) for record in document["warnings"]}
+        check(("BP_Like_Props", "ACTOR_COMPONENTS_EXTRACTED") in codes,
+              "component extraction must be reported")
 
 
 def assert_light_units_covered(document):
@@ -517,6 +585,7 @@ def main(argv=None):
             ("physics flags", assert_physics_flags),
             ("coverage + dedup", assert_coverage),
             ("two-tone slot canary", assert_two_tone_slots),
+            ("negative-scale canaries", assert_negative_scale_canaries),
             ("light unit coverage", assert_light_units_covered),
             ("environment coverage", assert_environment_covered),
             ("generator pins", assert_generator),

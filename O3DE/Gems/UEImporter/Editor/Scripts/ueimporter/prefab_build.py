@@ -365,6 +365,8 @@ def assign_material_slots(entity_id, assignments, entity_name, report):
         row_stable_ids.append(value)
 
     assigned = 0
+    used_rows = set()
+    unmatched = []
     for label, asset_id in assignments:
         assignment_id = render.MaterialComponentRequestBus(
             bus.Event, 'FindMaterialAssignmentId', entity_id, NO_LOD, label)
@@ -376,9 +378,7 @@ def assign_material_slots(entity_id, assignments, entity_name, report):
                     row = index
                     break
         if row is None:
-            report.warn("MAT_SLOT_UNMATCHED", entity_name,
-                        "model has no slot labelled %r (rows: %d)"
-                        % (label, len(row_stable_ids)))
+            unmatched.append((label, asset_id))
             continue
         set_outcome = editor.EditorComponentAPIBus(
             bus.Broadcast, 'SetComponentProperty', pair,
@@ -386,7 +386,46 @@ def assign_material_slots(entity_id, assignments, entity_name, report):
         if not set_outcome or not set_outcome.IsSuccess():
             raise PrefabBuildError("%s: setting %s failed"
                                    % (entity_name, MODEL_SLOT_ASSET % row))
+        used_rows.add(row)
         assigned += 1
+
+    # A mesh asset slot with NO default material exports with no material
+    # name, so its azmodel slot label is unknowable from the manifest. When
+    # exactly one assignment failed to match and exactly one row is
+    # unclaimed, the pairing is forced -- assign by elimination rather than
+    # leaving the section on the model default (measured: temple-roof
+    # undersides whose asset slot is empty and the actor overrides it).
+    free_rows = [index for index in range(len(row_stable_ids))
+                 if index not in used_rows]
+    if len(unmatched) == 1 and len(free_rows) == 1:
+        label, asset_id = unmatched.pop()
+        row = free_rows[0]
+        set_outcome = editor.EditorComponentAPIBus(
+            bus.Broadcast, 'SetComponentProperty', pair,
+            MODEL_SLOT_ASSET % row, asset_id)
+        if not set_outcome or not set_outcome.IsSuccess():
+            raise PrefabBuildError("%s: setting %s failed"
+                                   % (entity_name, MODEL_SLOT_ASSET % row))
+        report.warn("MAT_SLOT_BY_ELIMINATION", entity_name,
+                    "material %r matched no slot label; assigned to the only "
+                    "unclaimed model slot (row %d)" % (label, row))
+        assigned += 1
+
+    for label, _asset_id in unmatched:
+        if not free_rows:
+            # Every model slot is claimed and this material still matched
+            # nothing: the mesh asset lists the slot, but no LOD0 triangle
+            # uses it, so the bake dropped it (measured: temple roofs whose
+            # 'Wall' slot owns no visible geometry). Nothing to assign; the
+            # level looks exactly as it should.
+            report.warn("MAT_SLOT_UNUSED", entity_name,
+                        "material %r maps to a slot no render triangle uses; "
+                        "the model's %d slots are all assigned"
+                        % (label, len(row_stable_ids)))
+        else:
+            report.warn("MAT_SLOT_UNMATCHED", entity_name,
+                        "model has no slot labelled %r (rows: %d)"
+                        % (label, len(row_stable_ids)))
     return assigned
 
 

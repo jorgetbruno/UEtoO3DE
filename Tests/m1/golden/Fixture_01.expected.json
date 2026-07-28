@@ -416,6 +416,36 @@
       "bounds_local": {
         "max": [
           0.5,
+          0.125,
+          2.0
+        ],
+        "min": [
+          -0.5,
+          -0.375,
+          0.0
+        ]
+      },
+      "collision": {
+        "shapes": [],
+        "source": "none"
+      },
+      "fbx_node_name": "SM_LetterF_MX",
+      "guid": "974eaf2d-197a-58cd-9fdb-6bd849c4b3ad",
+      "kind": "static_mesh",
+      "material_slot_material_names": [
+        "WorldGridMaterial"
+      ],
+      "material_slot_names": [
+        "Material_0"
+      ],
+      "name": "SM_LetterF_MX",
+      "o3de_relative_path": "uetoo3de/game/meshes/sm_letterf_mx.fbx",
+      "ue_path": "/Game/Meshes/SM_LetterF#mx"
+    },
+    {
+      "bounds_local": {
+        "max": [
+          0.5,
           0.25,
           2.0
         ],
@@ -536,6 +566,218 @@
     }
   ],
   "entities": [
+    {
+      "id": "d93f8080-8296-56c1-a18b-a8f2221364f0",
+      "kind": "unknown",
+      "mobility": "movable",
+      "name": "BP_Like_Props",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAllDynamic",
+        "enable_gravity": true,
+        "generate_overlap_events": true,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": true,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": null,
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            21.0,
+            -8.0,
+            0.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            21.0,
+            -8.0,
+            0.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.Actor_0",
+      "ue_class": "Actor"
+    },
+    {
+      "id": "a846536e-d743-5961-b0d1-b8a9f7349b92",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "ac600dba-cba5-588e-9298-8024d45e8143",
+            "slot_name": "WorldGridMaterial"
+          }
+        ]
+      },
+      "mobility": "movable",
+      "name": "BP_Like_Props.StaticMesh",
+      "parent_id": "d93f8080-8296-56c1-a18b-a8f2221364f0",
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAllDynamic",
+        "enable_gravity": true,
+        "generate_overlap_events": true,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": true,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            0.0,
+            0.5
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            21.0,
+            -8.0,
+            0.5
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.Actor_0:StaticMesh",
+      "ue_class": "StaticMeshComponent"
+    },
+    {
+      "id": "829437ce-886d-5035-8a0d-9d533715dd9e",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "5f55ab12-5954-51f0-8ef5-f1509568a6fd",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "ac600dba-cba5-588e-9298-8024d45e8143",
+            "slot_name": "Material_0"
+          }
+        ]
+      },
+      "mobility": "movable",
+      "name": "BP_Like_Props.StaticMesh1",
+      "parent_id": "d93f8080-8296-56c1-a18b-a8f2221364f0",
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAllDynamic",
+        "enable_gravity": true,
+        "generate_overlap_events": true,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": true,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "5f55ab12-5954-51f0-8ef5-f1509568a6fd",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            2.0,
+            0.0,
+            0.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            23.0,
+            -8.0,
+            0.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.Actor_0:StaticMesh1",
+      "ue_class": "StaticMeshComponent"
+    },
     {
       "id": "9f0b18e1-e651-5b4e-8ba9-d2b4c1d3695a",
       "kind": "light",
@@ -1474,6 +1716,80 @@
       "ue_class": "StaticMeshActor"
     },
     {
+      "id": "a1df0e14-b211-5cf8-9159-5a1b27cb7094",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "ac600dba-cba5-588e-9298-8024d45e8143",
+            "slot_name": "WorldGridMaterial"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "RotationFold_Box",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "34b75cb0-9e38-5955-a258-4ee811136fdb",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            -1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            2.0,
+            0.5
+          ],
+          "translation": [
+            21.0,
+            0.0,
+            1.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            -1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            2.0,
+            0.5
+          ],
+          "translation": [
+            21.0,
+            0.0,
+            1.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_11",
+      "ue_class": "StaticMeshActor"
+    },
+    {
       "id": "b7fa0e2e-6228-51c9-9684-09a3370f7558",
       "kind": "static_mesh",
       "mesh": {
@@ -1992,6 +2308,80 @@
       "ue_class": "StaticMeshActor"
     },
     {
+      "id": "f640da44-7e73-52b6-b7b1-3feb32d1b467",
+      "kind": "static_mesh",
+      "mesh": {
+        "asset_guid": "974eaf2d-197a-58cd-9fdb-6bd849c4b3ad",
+        "material_slots": [
+          {
+            "index": 0,
+            "material_guid": "ac600dba-cba5-588e-9298-8024d45e8143",
+            "slot_name": "Material_0"
+          }
+        ]
+      },
+      "mobility": "static",
+      "name": "MirroredF",
+      "parent_id": null,
+      "physics": {
+        "angular_damping": 0.0,
+        "ccd": false,
+        "collision_enabled": "query_and_physics",
+        "collision_profile": "BlockAll",
+        "enable_gravity": true,
+        "generate_overlap_events": false,
+        "has_collision": true,
+        "is_trigger": false,
+        "kinematic": false,
+        "linear_damping": 0.01,
+        "mass_kg": null,
+        "mass_override": false,
+        "shapes": [],
+        "shapes_from_asset": "974eaf2d-197a-58cd-9fdb-6bd849c4b3ad",
+        "simulates_physics": false
+      },
+      "transform": {
+        "local": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            15.0,
+            -8.0,
+            0.0
+          ]
+        },
+        "world": {
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            15.0,
+            -8.0,
+            0.0
+          ]
+        }
+      },
+      "ue_actor_path": "/Game/Maps/Fixture_01.Fixture_01:PersistentLevel.StaticMeshActor_9",
+      "ue_class": "StaticMeshActor"
+    },
+    {
       "id": "f0df9421-9360-589e-a7b1-42bb3ab4d2ce",
       "kind": "trigger",
       "mobility": "movable",
@@ -2085,10 +2475,16 @@
     "angle": "degrees",
     "coordinate_system": "o3de_right_handed_z_up",
     "lane_a_rule": "negate_y",
-    "lane_b_rule": "negate_y_net_of_three",
+    "lane_b_rule": "negate_y_scene_rz180",
     "length": "meters"
   },
   "warnings": [
+    {
+      "code": "ACTOR_COMPONENTS_EXTRACTED",
+      "detail": "Actor: 2 static mesh component(s) extracted",
+      "severity": "info",
+      "subject": "BP_Like_Props"
+    },
     {
       "code": "ENV_POSTPROCESS_UNMAPPED",
       "detail": "vignette_intensity is overridden in UE but has no M6 mapping",
@@ -2136,6 +2532,12 @@
       "detail": "BodySetup carries no simple collision primitives",
       "severity": "info",
       "subject": "/Game/Meshes/SM_TwoTone"
+    },
+    {
+      "code": "XFORM_MIRRORED_MESH_VARIANT",
+      "detail": "odd negative-scale axes folded into the rotation; the entity references the mirror-X mesh variant",
+      "severity": "info",
+      "subject": "MirroredF"
     }
   ]
 }

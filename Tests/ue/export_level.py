@@ -63,7 +63,11 @@ def log(message):
 
 
 def verify_fbx_intermediate(record):
-    """The written FBX must equal the source asset's bounds verbatim (cm).
+    """The written FBX must match the RECORD's expected bounds (cm).
+
+    mesh_export mirrors the expectation for normal entries (the bake nets
+    diag(-1,1,1) at the FBX level, Lane B rev 4) and leaves #mx variants
+    verbatim.
 
     Bake and UE-export negations cancel at the file level; SceneAPI applies
     the net reflection and the cm->m conversion in the product (LANE_B.md).
@@ -77,7 +81,7 @@ def verify_fbx_intermediate(record):
                   abs(stats["max"][i] - expected_max[i])) for i in range(3)]
     if max(deltas) > BOUNDS_TOLERANCE_CM:
         raise RuntimeError(
-            "%s: FBX is not verbatim UE geometry.\n"
+            "%s: FBX does not match its expected intermediate bounds.\n"
             "  FBX bounds %s .. %s\n"
             "  UE source  %s .. %s\n"
             "The bake stage and UE's export negation should cancel here; one "
@@ -138,7 +142,7 @@ try:
     log("== FBX intermediate check: bake and export negations cancel ==")
     for record in exported:
         verify_fbx_intermediate(record)
-    log("  ok: all %d FBX files are verbatim UE" % len(exported))
+    log("  ok: all %d FBX files match their expected intermediate bounds (mirror-X for normal entries, verbatim for #mx variants)" % len(exported))
 except Exception:
     log("EXPORT FAILED")
     log(traceback.format_exc())

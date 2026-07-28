@@ -98,36 +98,86 @@ def _srgb_to_linear(channel):
 # transforms
 # ---------------------------------------------------------------------------
 
-def _transform_from_parts(location_cm, quat_xyzw, scale, subject, warnings):
-    converted_scale, negative_axes = lane_a.convert_scale(scale)
-    if negative_axes:
-        warnings.add("XFORM_NEGATIVE_SCALE", subject,
-                     "negative on axis " + ",".join(negative_axes))
+def _transform_from_parts(location_cm, quat_xyzw, scale, subject, warnings,
+                          fold=True):
+    """One TRS, converted. Returns (transform, needs_mirrored_mesh).
+
+    With `fold=True` (the default) negative scale components are folded into
+    the rotation first (`lane_a.fold_scale_signs`): an even count of negative
+    axes IS a 180-degree rotation and converts exactly; an odd count leaves
+    one canonical mirror that must be baked into a mirrored mesh variant,
+    which is what the returned flag requests. `fold=False` is the legacy
+    abs()+warning path, kept for mirrored actors in attach hierarchies where
+    the folded frame would break the children's local transforms.
+    """
+    if fold:
+        quat_xyzw, scale, mirrored = lane_a.fold_scale_signs(quat_xyzw, scale)
+        converted_scale, _negative = lane_a.convert_scale(scale)
+    else:
+        mirrored = False
+        converted_scale, negative_axes = lane_a.convert_scale(scale)
+        if negative_axes:
+            warnings.add("XFORM_NEGATIVE_SCALE", subject,
+                         "negative on axis %s in an attach hierarchy; the "
+                         "mirror is NOT represented (mirrored-variant folding "
+                         "only applies to flat actors)"
+                         % ",".join(negative_axes))
     return {
         "translation": lane_a.convert_position(location_cm),
         "rotation": lane_a.convert_quat(quat_xyzw),
         "scale": converted_scale,
-    }
+    }, mirrored
 
 
 def _actor_transforms(actor, subject, warnings):
-    """World transform, plus the transform relative to the attach parent."""
-    world = _transform_from_parts(
+    """World + parent-relative transforms. Returns (transforms, mirrored).
+
+    `mirrored` means the actor's geometry must reference the mirror-X mesh
+    variant (odd number of negative scale axes). Folding is only applied to
+    FLAT actors: a mirrored actor inside an attach hierarchy falls back to
+    the legacy abs() path, because folding rewrites the actor's frame and
+    every child's local transform would need re-deriving against it (and the
+    children would inherit the mirror in turn). Both real levels measured so
+    far have zero such actors; the fallback keeps them placed, unmirrored,
+    and reported rather than wrong.
+    """
+    in_hierarchy = (actor.get_attach_parent_actor() is not None
+                    or bool(actor.get_attached_actors()))
+    world_scale = _vec3(actor.get_actor_scale3d())
+    wants_mirror = (world_scale[0] < 0.0) ^ (world_scale[1] < 0.0) ^ (world_scale[2] < 0.0)
+    fold = not (wants_mirror and in_hierarchy)
+
+    world, mirrored_world = _transform_from_parts(
         _vec3(actor.get_actor_location()),
         _quat_xyzw(actor.get_actor_rotation().quaternion()),
-        _vec3(actor.get_actor_scale3d()),
-        subject, warnings)
+        world_scale,
+        subject, warnings, fold=fold)
 
     root = actor.root_component
     if root is None:
-        local = dict(world)
+        local, mirrored_local = dict(world), mirrored_world
     else:
-        local = _transform_from_parts(
+        local, mirrored_local = _transform_from_parts(
             _vec3(_field(root, "relative_location")),
             _rotator_xyzw(_field(root, "relative_rotation")),
             _vec3(_field(root, "relative_scale3d")),
-            subject, warnings)
-    return {"world": world, "local": local}
+            subject, warnings, fold=fold)
+
+    if mirrored_world != mirrored_local:
+        # A mirror that exists in only one of the two spaces means an
+        # ancestor contributes it; that is the hierarchy case again.
+        warnings.add("XFORM_NEGATIVE_SCALE", subject,
+                     "world/local mirror parity disagrees (an ancestor "
+                     "carries the mirror); not represented")
+        world["scale"] = [abs(v) for v in world["scale"]]
+        local["scale"] = [abs(v) for v in local["scale"]]
+        return {"world": world, "local": local}, False
+
+    if mirrored_world:
+        warnings.add("XFORM_MIRRORED_MESH_VARIANT", subject,
+                     "odd negative-scale axes folded into the rotation; the "
+                     "entity references the mirror-X mesh variant")
+    return {"world": world, "local": local}, mirrored_world
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +239,27 @@ def _converted_aabb(min_cm, max_cm):
     b = lane_a.convert_position(max_cm)
     return ([min(a[i], b[i]) for i in range(3)],
             [max(a[i], b[i]) for i in range(3)])
+
+
+def _mirror_shape(shape):
+    """A collision shape under the canonical mirror-X, in converted space.
+
+    Offsets negate x; rotations conjugate by diag(-1,1,1) (keep x, negate y
+    and z -- `lane_a.mirror_x_quat`); scalar dimensions (half-extents, radius,
+    heights) are isometry-invariant and stay. Convex hulls carry only their
+    AABB in the manifest (the collider itself bakes from render geometry,
+    which mirrors with the variant mesh), so the AABB mirrors like bounds.
+    """
+    mirrored = dict(shape)
+    if "offset" in mirrored:
+        mirrored["offset"] = lane_a.mirror_x_position(mirrored["offset"])
+    if "rotation" in mirrored:
+        mirrored["rotation"] = lane_a.mirror_x_quat(mirrored["rotation"])
+    if mirrored.get("type") == "convex":
+        low, high = mirrored["aabb_min"], mirrored["aabb_max"]
+        mirrored["aabb_min"] = [-high[0], low[1], low[2]]
+        mirrored["aabb_max"] = [-low[0], high[1], high[2]]
+    return mirrored
 
 
 def _collision_shapes(mesh, subject, warnings):
@@ -276,6 +347,12 @@ def _collision_shapes(mesh, subject, warnings):
 
 _EXTENSIONS = {"static_mesh": "fbx", "material": "material"}
 
+# The mirrored-variant ue_path fragment (negative-scale fidelity). Stored
+# literally in the asset entry's ue_path: the GUID derives from it, sanitize
+# maps '#' to '_' for the O3DE path, and mesh_export strips it to load the
+# real asset and to choose the variant bake.
+MIRROR_SUFFIX = "#mx"
+
 
 class AssetTable:
     """Deduplicates referenced assets by GUID and claims their O3DE paths."""
@@ -318,9 +395,25 @@ class AssetTable:
             }
         return guid
 
-    def add_static_mesh(self, mesh):
+    def add_static_mesh(self, mesh, mirrored=False):
+        """Register `mesh`; with `mirrored=True`, register its mirror-X VARIANT.
+
+        The variant is a separate asset entry whose `ue_path` is the real
+        package path plus a literal `#mx` fragment. That single encoding does
+        all the work: the GUID derives from the stored path (so the
+        validator's re-derivation holds with no special case), sanitization
+        maps `#` to `_` giving a distinct `..._mx.fbx` O3DE path through the
+        PathRegistry's normal collision protection, `mesh_export` recognises
+        the fragment (strip for loading, bake the mirror variant), and the
+        schema, validator and importer need no changes at all -- downstream,
+        a variant is just one more mesh asset. Collision shapes and bounds
+        are mirrored here; the FBX node is `<name>_MX`.
+        """
         ue_path = unreal.SystemLibrary.get_path_name(mesh)
-        guid = naming.asset_guid(ue_path)
+        if mirrored:
+            guid = naming.asset_guid(naming.package_path(ue_path) + MIRROR_SUFFIX)
+        else:
+            guid = naming.asset_guid(ue_path)
         if guid in self._entries:
             return guid
 
@@ -330,6 +423,10 @@ class AssetTable:
         box = mesh.get_bounding_box()
         aabb_min, aabb_max = _converted_aabb(_vec3(_field(box, "min")),
                                              _vec3(_field(box, "max")))
+        if mirrored:
+            shapes = [_mirror_shape(shape) for shape in shapes]
+            aabb_min, aabb_max = ([-aabb_max[0], aabb_min[1], aabb_min[2]],
+                                  [-aabb_min[0], aabb_max[1], aabb_max[2]])
 
         slot_names = []
         # The material NAMES the baked FBX will carry, per slot. These are the
@@ -339,17 +436,27 @@ class AssetTable:
         # (UE slot names like "Bark" do not survive the FBX; material asset
         # names do -- measured in Tests/ue/probe_slots.py.)
         slot_material_names = []
-        for slot in _field(mesh, "static_materials", []) or []:
+        for index, slot in enumerate(_field(mesh, "static_materials", []) or []):
             slot_names.append(_name_str(_field(slot, "material_slot_name")))
             material = _field(slot, "material_interface")
-            slot_material_names.append(material.get_name() if material else "")
+            # A null slot gets the bake's placeholder label (see
+            # naming.empty_slot_label): UE's FBX export would otherwise DROP
+            # the slot and an actor's override of it could never match.
+            slot_material_names.append(material.get_name() if material
+                                       else naming.empty_slot_label(index))
 
-        self._entries[guid] = {
+        # One claim only, keyed by the stored ue_path: the validator asserts
+        # o3de_relative_path starts with sanitize(stored ue_path), and the
+        # PathRegistry must see the SAME key or a base+variant pair would
+        # silently share one stem (claim() returns the existing stem for a
+        # repeat claim of the same path).
+        claim_key = (naming.package_path(ue_path) + MIRROR_SUFFIX) if mirrored else ue_path
+        entry = {
             "guid": guid,
             "kind": "static_mesh",
             "ue_path": subject,
             "name": mesh.get_name(),
-            "o3de_relative_path": self._claim(ue_path, "static_mesh"),
+            "o3de_relative_path": self._claim(claim_key, "static_mesh"),
             # The mesh node name inside the exported FBX. UE names it after the
             # asset, and mesh_export gives its temporary asset the same name for
             # exactly this reason. The importer builds the `.assetinfo` node
@@ -361,6 +468,11 @@ class AssetTable:
             "material_slot_names": slot_names,
             "material_slot_material_names": slot_material_names,
         }
+        if mirrored:
+            entry["ue_path"] = subject + MIRROR_SUFFIX
+            entry["name"] = mesh.get_name() + "_MX"
+            entry["fbx_node_name"] = mesh.get_name() + "_MX"
+        self._entries[guid] = entry
         return guid
 
     def entries(self):
@@ -663,13 +775,14 @@ def _environment_block(actor, subject, warnings):
     return None
 
 
-def _mesh_block(actor, assets, subject, warnings):
-    component = actor.static_mesh_component
+def _mesh_block_from_component(component, assets, subject, warnings,
+                               mirrored=False):
+    """The manifest `mesh` block for one StaticMeshComponent."""
     mesh = _field(component, "static_mesh")
     if mesh is None:
         return None, None
 
-    mesh_guid = assets.add_static_mesh(mesh)
+    mesh_guid = assets.add_static_mesh(mesh, mirrored=mirrored)
     slot_names = []
     for slot in _field(mesh, "static_materials", []) or []:
         slot_names.append(_name_str(_field(slot, "material_slot_name")))
@@ -691,11 +804,123 @@ def _mesh_block(actor, assets, subject, warnings):
     return {"asset_guid": mesh_guid, "material_slots": slots}, mesh_guid
 
 
+def _mesh_block(actor, assets, subject, warnings, mirrored=False):
+    return _mesh_block_from_component(actor.static_mesh_component, assets,
+                                      subject, warnings, mirrored=mirrored)
+
+
+# Actor classes deliberately NOT component-extracted, with the deferral they
+# belong to. BP_Sky_Sphere is a giant textured sphere enclosing the level --
+# extracting it would wrap the imported level in an unconvertible shell while
+# M6's Physical Sky already stands in for the UE sky.
+_DEFERRED_UNKNOWN_CLASSES = {
+    "Landscape": "Landscape is imported in M7",
+    "LandscapeStreamingProxy": "Landscape is imported in M7",
+    "BP_Sky_Sphere_C": "sky sphere is replaced by M6's Physical Sky",
+    "SphereReflectionCapture": "reflection captures are a documented v1 drop (M6)",
+    "BoxReflectionCapture": "reflection captures are a documented v1 drop (M6)",
+    "PlanarReflectionCapture": "reflection captures are a documented v1 drop (M6)",
+}
+
+# Component classes that are editor-side decoration, never geometry.
+_EXTRACT_SKIP_COMPONENTS = ("BillboardComponent", "ArrowComponent",
+                            "DrawSphereComponent", "TextRenderComponent")
+
+
+def _extract_mesh_components(actor, actor_entity, assets, warnings):
+    """Child entities for an unmapped actor's StaticMeshComponents.
+
+    Blueprint actors (vases, market stands, box piles...) are ordinary
+    actors whose geometry lives in components; the CLASS has no mapping but
+    the components are exactly the meshes M2 already handles. Each becomes a
+    child entity under the actor's placeholder entity, world-transformed from
+    the component and locally re-derived against the actor.
+
+    ChildActorComponents are skipped on purpose: the child ACTOR they spawn
+    enumerates in the level's actor list in its own right (measured on
+    L_Showcase -- the box piles' vases appear both as components and as
+    actors), so extracting the component too would duplicate the geometry.
+    """
+    actor_path = actor.get_path_name()
+    label = actor_entity["name"]
+    children = []
+    skipped = []
+    for component in actor.get_components_by_class(unreal.StaticMeshComponent) or []:
+        subject = "%s.%s" % (label, component.get_name())
+        if isinstance(component, getattr(unreal, "InstancedStaticMeshComponent", ())):
+            # No ISMC in the measured levels; refuse loudly-but-softly if one
+            # appears rather than exporting only the component origin.
+            warnings.add("ACTOR_CLASS_UNMAPPED", subject,
+                         "instanced static mesh components are not extracted")
+            skipped.append(component.get_name())
+            continue
+
+        world_ue = component.get_world_transform()
+        world, mirrored = _transform_from_parts(
+            _vec3(world_ue.translation),
+            _quat_xyzw(world_ue.rotation),
+            _vec3(world_ue.scale3d),
+            subject, warnings)
+        relative_ue = unreal.MathLibrary.make_relative_transform(
+            world_ue, actor.get_actor_transform())
+        local, mirrored_local = _transform_from_parts(
+            _vec3(relative_ue.translation),
+            _quat_xyzw(relative_ue.rotation),
+            _vec3(relative_ue.scale3d),
+            subject, warnings)
+        if mirrored != mirrored_local:
+            # The actor itself carries the mirror; same hierarchy rule as
+            # actors -- keep it placed, unmirrored, and reported.
+            warnings.add("XFORM_NEGATIVE_SCALE", subject,
+                         "component/actor mirror parity disagrees; not represented")
+            mirrored = False
+
+        mesh_block, mesh_guid = _mesh_block_from_component(
+            component, assets, subject, warnings, mirrored=mirrored)
+        if mesh_block is None:
+            continue
+
+        entity = {
+            "id": naming.entity_id(actor_path + ":" + component.get_name()),
+            "name": subject,
+            "ue_class": component.get_class().get_name(),
+            "ue_actor_path": actor_path + ":" + component.get_name(),
+            "kind": "static_mesh",
+            "parent_id": actor_entity["id"],
+            "mobility": _enum_name(_field(component, "mobility"), "static"),
+            "transform": {"world": world, "local": local},
+            "mesh": mesh_block,
+        }
+        physics = _physics_block(component, mesh_guid, subject, warnings)
+        if physics["has_collision"]:
+            entity["physics"] = physics
+        children.append(entity)
+
+    for component in actor.get_components_by_class(unreal.SceneComponent) or []:
+        kind_name = component.get_class().get_name()
+        if isinstance(component, unreal.StaticMeshComponent):
+            continue
+        if kind_name in _EXTRACT_SKIP_COMPONENTS or kind_name == "SceneComponent" \
+                or kind_name == "ChildActorComponent":
+            continue
+        skipped.append("%s (%s)" % (component.get_name(), kind_name))
+
+    if children:
+        warnings.add("ACTOR_COMPONENTS_EXTRACTED", label,
+                     "%s: %d static mesh component(s) extracted%s"
+                     % (actor.get_class().get_name(), len(children),
+                        ("; not extracted: " + ", ".join(sorted(set(skipped))))
+                        if skipped else ""))
+    return children
+
+
 def _build_entity(actor, assets, warnings):
+    """One actor -> its entity, plus any component-extracted child entities."""
     actor_path = actor.get_path_name()
     label = actor.get_actor_label()
     kind = _classify(actor)
 
+    transforms, mirrored = _actor_transforms(actor, label, warnings)
     entity = {
         "id": naming.entity_id(actor_path),
         "name": label,
@@ -704,8 +929,9 @@ def _build_entity(actor, assets, warnings):
         "kind": kind,
         "parent_id": None,
         "mobility": "static",
-        "transform": _actor_transforms(actor, label, warnings),
+        "transform": transforms,
     }
+    extracted = []
 
     parent = actor.get_attach_parent_actor()
     if parent is not None:
@@ -717,7 +943,8 @@ def _build_entity(actor, assets, warnings):
 
     mesh_guid = None
     if kind == "static_mesh":
-        mesh_block, mesh_guid = _mesh_block(actor, assets, label, warnings)
+        mesh_block, mesh_guid = _mesh_block(actor, assets, label, warnings,
+                                            mirrored=mirrored)
         if mesh_block is not None:
             entity["mesh"] = mesh_block
 
@@ -734,8 +961,15 @@ def _build_entity(actor, assets, warnings):
             warnings.add("ACTOR_DEFERRED", label,
                          actor.get_class().get_name() + " is imported in M6")
     elif kind == "unknown":
-        warnings.add("ACTOR_CLASS_UNMAPPED", label,
-                     "no v1 mapping for " + actor.get_class().get_name())
+        class_name = actor.get_class().get_name()
+        if class_name in _DEFERRED_UNKNOWN_CLASSES:
+            warnings.add("ACTOR_DEFERRED", label,
+                         _DEFERRED_UNKNOWN_CLASSES[class_name])
+        else:
+            extracted = _extract_mesh_components(actor, entity, assets, warnings)
+            if not extracted:
+                warnings.add("ACTOR_CLASS_UNMAPPED", label,
+                             "no v1 mapping for " + class_name)
 
     component = _primitive_component(actor)
     if component is not None:
@@ -749,7 +983,7 @@ def _build_entity(actor, assets, warnings):
             if physics["is_trigger"]:
                 entity["kind"] = "trigger"
 
-    return entity
+    return [entity] + extracted
 
 
 # ---------------------------------------------------------------------------
@@ -823,7 +1057,7 @@ def export_level(map_path, output_path):
     try:
         _guard_world_partition(world, level, map_path, warnings)
         for actor in sorted(actors, key=lambda a: a.get_path_name()):
-            entities.append(_build_entity(actor, assets, warnings))
+            entities.extend(_build_entity(actor, assets, warnings))
     except ExportAborted as exc:
         abort_reason = str(exc)
         entities = []

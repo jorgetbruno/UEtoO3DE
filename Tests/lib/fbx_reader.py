@@ -106,6 +106,8 @@ def read(path):
     settings = {}
     vertices = []
 
+    polygons = []
+
     def visit(node):
         name, properties, _children = node
         if name == "P" and properties and isinstance(properties[0], bytes):
@@ -114,11 +116,14 @@ def read(path):
                 settings[key] = properties[4:]
         elif name == "Vertices" and properties and isinstance(properties[0], list):
             vertices.extend(properties[0])
+        elif name == "PolygonVertexIndex" and properties and isinstance(properties[0], list):
+            polygons.extend(properties[0])
 
     for node in _top_level_nodes(data):
         _walk(node, visit)
 
-    return {"global_settings": settings, "vertices": vertices}
+    return {"global_settings": settings, "vertices": vertices,
+            "polygon_vertex_index": polygons}
 
 
 def vertex_stats(path):
@@ -141,3 +146,40 @@ def vertex_stats(path):
         "centroid": [sum(xs) / count, sum(ys) / count, sum(zs) / count],
         "global_settings": parsed["global_settings"],
     }
+
+
+def signed_volume(path):
+    """Signed volume of the mesh via the divergence theorem.
+
+    Sum over triangles of dot(v0, cross(v1, v2)) / 6, with FBX polygons
+    fan-triangulated (`PolygonVertexIndex` marks each polygon's last index as
+    `~index`). For a closed mesh the MAGNITUDE is the enclosed volume and the
+    SIGN encodes the winding: mirror a mesh without correcting winding and the
+    sign flips. That makes it the one-number check for "is the mirrored bake
+    inside-out", which per-vertex byte tests cannot see.
+    """
+    parsed = read(path)
+    values = parsed["vertices"]
+    indices = parsed["polygon_vertex_index"]
+    if not values or not indices:
+        raise FbxError("no polygon data in " + path)
+
+    def vertex(index):
+        base = index * 3
+        return values[base], values[base + 1], values[base + 2]
+
+    total = 0.0
+    polygon = []
+    for raw in indices:
+        index = ~raw if raw < 0 else raw
+        polygon.append(index)
+        if raw < 0:
+            for corner in range(1, len(polygon) - 1):
+                ax, ay, az = vertex(polygon[0])
+                bx, by, bz = vertex(polygon[corner])
+                cx, cy, cz = vertex(polygon[corner + 1])
+                total += (ax * (by * cz - bz * cy)
+                          + ay * (bz * cx - bx * cz)
+                          + az * (bx * cy - by * cx))
+            polygon = []
+    return total / 6.0

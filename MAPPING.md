@@ -19,7 +19,7 @@ The basis map is **negate Y, scale 1/100**:
 |---|---|---|
 | position | `(x, y, z)` cm → `(x/100, −y/100, z/100)` m | |
 | rotation | `(x, y, z, w)` → `(−x, y, −z, w)` | conjugation by the same map; canonicalized to `w ≥ 0` |
-| scale | `(sx, sy, sz)` unchanged | always positive; a negative UE scale is reported as `XFORM_NEGATIVE_SCALE` and exported as its absolute value |
+| scale | `(sx, sy, sz)` unchanged | always positive. Negative UE scales are FOLDED (M4.5): an even count of negative axes is exactly a 180° rotation composed into the quaternion; an odd count additionally swaps the mesh reference to a baked mirror-X `#mx` variant (`lane_a.fold_scale_signs`, verified as a matrix identity for all eight sign patterns). Only mirrors inside attach hierarchies fall back to `XFORM_NEGATIVE_SCALE` + absolute value |
 | length (radius, extent, attenuation) | `÷100` | |
 
 The rotation rule follows from `R' = B R B⁻¹` with `B = diag(1, −1, 1)`: because `B` is
@@ -40,23 +40,25 @@ terrain) depends on that convention. The alternative with determinant −1 that 
 forward on forward is swapping X and Y; it is a strictly larger change (it permutes the
 scale components too) and is not what the plan specifies.
 
-### Lane B — geometry (settled in M2, corrected twice — read LANE_B.md)
+### Lane B — geometry (corrected THREE times — read LANE_B.md before touching)
 
-Geometry reaches the product carrying the same basis map as the transforms through
-**three Y-negations that net to one**, plus a unit conversion SceneAPI performs itself:
+Geometry reaches the product carrying the same basis map as the transforms. The
+measured stages (revision 4):
 
-| # | Stage | Y | Units |
+| # | Stage | Map | Units |
 |---|---|---|---|
-| 1 | exporter bakes `scale_mesh(1,−1,1)` | negate | — |
-| 2 | UE FBX export | negate | writes cm |
-| 3 | SceneAPI import | negate (declared FBX axes) | **cm → m ÷100** (`UnitScaleFactor`) |
-| | **net** | negate once | ÷100 = exactly Lane A |
+| 1 | exporter bakes `scale_mesh(−1,−1,1)` | diag(−1,−1,1) | — |
+| 2 | UE FBX export | diag(1,−1,1) (LH→RH) | writes cm |
+| 3 | SceneAPI import | **diag(−1,−1,1) — a 180° yaw, a proper rotation** | **cm → m ÷100** (`UnitScaleFactor`) |
+| | **net** | diag(1,−1,1) = exactly Lane A | ÷100 |
 
-The intermediate FBX is therefore **verbatim UE geometry**, and the `.assetinfo`
-carries **no CoordinateSystemRule** — SceneAPI owns both conversions. Getting either
-of those wrong produced the two bugs that shipped mid-M2 (meshes 100× too small; a
-net-zero mirror), both invisible to every intermediate check. The permanent assertion
-reads the **product position buffers** by float byte-pattern
+The intermediate FBX is therefore **mirror-X of the UE source** (verbatim for `#mx`
+mirrored variants, whose bake is `scale_mesh(1,−1,1)`), and the `.assetinfo` carries
+**no CoordinateSystemRule** — SceneAPI owns both conversions. Three shipped bugs came
+from getting a stage wrong (meshes 100× too small; a net-zero Y mirror; every mesh
+locally X-mirrored because stage 3 was recorded as "negate Y" when it is a yaw — the
+two agree on the entire Y axis). The permanent assertions read the **product position
+buffers** by float byte-pattern on BOTH asymmetric axes
 (`Tests/m2/test_m2_artifacts.py`); full history and evidence: [LANE_B.md](LANE_B.md).
 
 ## Interchange (M1)
@@ -171,7 +173,10 @@ on codes, never on English strings.
 | `LEVEL_WP_DETECT_FAILED` | error | WP detection itself failed, so an empty actor list cannot be trusted. Aborts. |
 | `LEVEL_EXTERNAL_ACTORS` | warn | One File Per Actor without World Partition; untested layout. |
 | `ASSET_PATH_COLLISION` | error | Two UE assets sanitize onto one O3DE path. Aborts. |
-| `XFORM_NEGATIVE_SCALE` | warn | Negative UE scale; absolute value exported. |
+| `XFORM_NEGATIVE_SCALE` | warn | Mirror inside an attach hierarchy; absolute value exported (flat actors take the variant path). |
+| `XFORM_MIRRORED_MESH_VARIANT` | info | Odd negative axes folded; entity references the `#mx` mirror variant. |
+| `ACTOR_COMPONENTS_EXTRACTED` | info | Blueprint actor's StaticMeshComponents exported as child entities. |
+| `MAT_PARAMS_BY_NAME` | warn | Material classified from texture parameter NAMES (unwalkable function internals); heuristic. |
 | `ACTOR_CLASS_UNMAPPED` | warn | No v1 mapping; placeholder entity with a valid transform. |
 | `ACTOR_DEFERRED` | info | Recognized class owned by a later milestone. |
 | `MESH_SLOT_EMPTY` | info | Material slot with no material assigned. |

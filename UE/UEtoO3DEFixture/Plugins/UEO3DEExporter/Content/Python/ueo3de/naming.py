@@ -109,6 +109,18 @@ def sanitize_path(ue_path):
     return IMPORTER_ROOT + "/" + "/".join(_sanitize_segment(s) for s in segments)
 
 
+def empty_slot_label(index):
+    """The material name a NULL mesh-asset slot gets in the baked FBX.
+
+    UE's FBX exporter DROPS a null-material slot outright -- the model then
+    has fewer slots than the manifest and an actor's override of that slot
+    can never be assigned (measured: temple-roof undersides). The bake
+    substitutes a placeholder material with this name, and ue_level records
+    the same name in `material_slot_material_names`, so the label round-trips
+    like any real material's. Keyed by the ORIGINAL slot index."""
+    return "UEO3DE_Slot%d" % index
+
+
 def with_extension(stem, extension):
     """`uetoo3de/game/meshes/sm_letterf` + `fbx` -> `.../sm_letterf.fbx`."""
     return stem + "." + extension.lstrip(".")
