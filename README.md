@@ -42,6 +42,7 @@ milestone per session; each session starts from that file.
 Tests\m1\run_m1.bat          M1: UE export -> property tests -> validator -> golden diff
 Tests\m2\run_m2.bat [--cold] M2: export -> stage -> AP -> import -> prefab assertions
 Tests\m3\run_m3.bat          M3: detection tests -> seam guard -> simulated smoke import -> gem regression
+Tests\m3b\run_m3b.bat        M3b: the same adapter contract asserted on BOTH backends (Jolt + PhysX)
 Tests\m4\run_m4.bat          M4: material/texture artifacts -> assignments in the saved prefab
 Tests\m5\run_m5.bat          M5: light conversion + write order -> lights in the saved prefab
 Tests\m6\run_m6.bat          M6: sky/fog/post-process mapping -> environment in the saved prefab
@@ -91,7 +92,11 @@ each run in about a second.
 - `C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt` — JoltPhysics enabled, PhysX5 disabled,
   EditorPythonBindings enabled. Build: `cmake -S . -B build/windows -G "Visual Studio 17 2022"`,
   `cmake --build build/windows --config profile --parallel`.
-- `UEtoO3DETest-PhysX` — arrives in M3b.
+- `C:\Users\jorge\O3DE\Projects\UEtoO3DETest-PhysX` — PhysX5 enabled, JoltPhysics **absent**,
+  EditorPythonBindings enabled; otherwise gem-for-gem identical to the Jolt project, so anything
+  that differs between them is attributable to the backend rather than the environment. Created
+  with `o3de create-project` and built the same way. Note `cmake` is not on PATH by default —
+  prepend the VS 2022 path pinned above, or `o3de.bat` fails with "Unable to calculate engine ID".
 
 ## Headless test pattern (Global Constraint 10)
 

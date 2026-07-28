@@ -9,7 +9,7 @@ literals to keep it that way.
   base       the interface + capability names
   detection  which backend is active (type IDs first; never guess on ambiguity)
   jolt       the JoltPhysics implementation (M3)
-  physx      arrives in M3b
+  physx      the PhysX5 implementation (M3b)
 
 `make_adapter(name)` is the factory the importer calls after detection.
 """
@@ -25,5 +25,6 @@ def make_adapter(backend_name):
         from .jolt import JoltBackendAdapter
         return JoltBackendAdapter()
     if backend_name == "physx":
-        raise AdapterError("the PhysX adapter ships in M3b")
+        from .physx import PhysXBackendAdapter
+        return PhysXBackendAdapter()
     raise AdapterError("unknown backend %r" % (backend_name,))

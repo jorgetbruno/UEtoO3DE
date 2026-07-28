@@ -100,6 +100,32 @@ def required_capabilities(document):
     return needed
 
 
+def _mesh_collider_supported(adapter, convex):
+    """Can this backend build a collider from the entity's render mesh?
+
+    Jolt can (its Mesh Collider bakes from the render mesh on activation);
+    PhysX CANNOT -- it needs a cooked .pxmesh asset and has no render-mesh
+    path (measured, M3b). Without this guard the render-mesh fallbacks below
+    called `add_mesh_collider` unconditionally and the PhysX adapter's loud
+    refusal propagated out of `import_level`, aborting the whole import with
+    no prefab written -- on 4 entities of Fixture_01 and 14 of L_Showcase.
+    `negotiate()` is advisory (it warns and its result is discarded), so the
+    check has to happen HERE, at the call site.
+    """
+    from .adapters import base
+    needed = base.CAP_SHAPE_CONVEX if convex else base.CAP_SHAPE_TRIMESH
+    return needed in adapter.capabilities()
+
+
+def _report_mesh_gap(adapter, report, subject, convex, why):
+    """Say what was lost, in the vocabulary the report already uses."""
+    report.warn("PHYS_SHAPE_APPROXIMATED", subject,
+                "%s, and the %r backend cannot build a %s collider from a "
+                "render mesh; the body is authored WITHOUT a collider and "
+                "will not collide"
+                % (why, adapter.name(), "convex" if convex else "triangle-mesh"))
+
+
 def negotiate(adapter, document, report):
     """Compare needs against capabilities; report the gaps once, up front."""
     needed = required_capabilities(document)
@@ -213,24 +239,33 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
             # complex-as-simple -> triangle mesh, static bodies only; a
             # dynamic body gets a convex hull instead).
             convex = body in ("dynamic", "kinematic")
-            adapter.add_mesh_collider(entity_id, convex=convex)
-            report.count("mesh_colliders")
-            report.warn("PHYS_MESH_FROM_RENDER", subject,
-                        "no simple collision on %s; %s collider baked from the "
-                        "render mesh" % (asset["ue_path"],
-                                         "convex" if convex else "triangle-mesh"))
-            authored += 1
+            if _mesh_collider_supported(adapter, convex):
+                adapter.add_mesh_collider(entity_id, convex=convex)
+                report.count("mesh_colliders")
+                report.warn("PHYS_MESH_FROM_RENDER", subject,
+                            "no simple collision on %s; %s collider baked from "
+                            "the render mesh" % (asset["ue_path"],
+                                                 "convex" if convex else "triangle-mesh"))
+                authored += 1
+            else:
+                _report_mesh_gap(adapter, report, subject, convex,
+                                 "no simple collision on %s" % asset["ue_path"])
 
     if authored == 0:
         # A body with no shape is invisible to the solver -- give it the
         # entity's render mesh if there is one, otherwise report and bail.
-        if item.get("mesh"):
+        if item.get("mesh") and _mesh_collider_supported(
+                adapter, body in ("dynamic", "kinematic")):
             convex = body in ("dynamic", "kinematic")
             adapter.add_mesh_collider(entity_id, convex=convex)
             report.count("mesh_colliders")
             report.warn("PHYS_MESH_FROM_RENDER", subject,
                         "no collision shapes anywhere; render mesh used")
             authored += 1
+        elif item.get("mesh"):
+            _report_mesh_gap(adapter, report, subject,
+                             body in ("dynamic", "kinematic"),
+                             "no collision shapes anywhere")
         else:
             report.warn("PHYS_SHAPE_APPROXIMATED", subject,
                         "collidable entity has no shapes and no mesh; body "
