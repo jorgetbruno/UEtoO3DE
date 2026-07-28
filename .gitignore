@@ -18,6 +18,13 @@ __pycache__/
 # --- Test results ---
 Tests/**/results/
 
+# --- Machine-specific paths ---
+# Tests/paths.config holds one developer's engine and project locations.
+# Tests/paths.config.template is committed; the copy never is. Committing it
+# is how this repo ended up with 40 files hardcoding one machine's drive
+# letters, which nobody else could run.
+Tests/paths.config
+
 # --- Generated interchange output ---
 # NOTHING under Exports/ is committed except Exports/LaneB/ (S0.2 measurement
 # evidence cited by LANE_B.md, derived from our own fixture mesh). Everything

@@ -28,7 +28,11 @@ import traceback
 
 import unreal
 
-REPO_ROOT = "D:/Gamedev/UEtoO3DE"
+# Derived from this file, never configured: a value that can be
+# computed cannot be configured WRONG, and 40 files hardcoding one
+# machine's drive letters is what that mistake looked like here.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))).replace("\\", "/")
 PACKAGE_ROOT = REPO_ROOT + "/UE/UEtoO3DEFixture/Plugins/UEO3DEExporter/Content/Python"
 MAP_PATH = "/Game/Maps/Fixture_01"
 SCRATCH = REPO_ROOT + "/Tests/m10/results/ue_export_scratch"

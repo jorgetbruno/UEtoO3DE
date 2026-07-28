@@ -17,10 +17,12 @@ rem CI asserts on THIS script's exit code, never on console text.
 setlocal EnableExtensions
 
 set "REPO=%~dp0..\.."
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
 set "PY=python"
-set "AP=C:\O3DE\26.05\bin\Windows\profile\Default\AssetProcessorBatch.exe"
-set "JOLT=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
-set "PHYSX=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-PhysX"
+set "AP=%O3DE_BIN%\AssetProcessorBatch.exe"
+set "JOLT=%O3DE_PROJECT_JOLT%"
+set "PHYSX=%O3DE_PROJECT_PHYSX%"
 
 rem Steps 2 and 4 import a REAL manifest, so both projects need the fixture
 rem staged and its products built. Staging is idempotent and AP is a no-op

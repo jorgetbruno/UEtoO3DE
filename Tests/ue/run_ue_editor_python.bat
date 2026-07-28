@@ -12,6 +12,9 @@ rem The editor's process exit code is not trustworthy under quit_editor, so CI
 rem asserts on the RESULT line in the result file (plan constraint 10).
 setlocal EnableExtensions
 
+call "%~dp0..\paths.cmd"
+if errorlevel 1 exit /b 2
+
 if "%~1"=="" (
     echo Usage: run_ue_editor_python.bat ^<script.py^> [result-file] 1>&2
     exit /b 2
@@ -30,7 +33,7 @@ if "%~2"=="" (
 for %%D in ("%RESULT%") do if not exist "%%~dpD" mkdir "%%~dpD"
 if exist "%RESULT%" del /q "%RESULT%"
 
-"D:\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "D:\Gamedev\UEtoO3DE\UE\UEtoO3DEFixture\UEtoO3DEFixture.uproject" -ExecutePythonScript="%SCRIPT%" -unattended -nop4 -nosplash
+"%UE_EDITOR%" "%UE_PROJECT%" -ExecutePythonScript="%SCRIPT%" -unattended -nop4 -nosplash
 
 if not exist "%RESULT%" (
   echo RESULT FILE MISSING: %RESULT% 1>&2

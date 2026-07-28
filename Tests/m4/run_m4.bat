@@ -12,6 +12,8 @@ rem CI asserts on THIS script's exit code, never on console text.
 setlocal EnableExtensions
 
 set "REPO=%~dp0..\.."
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
 set "PY=python"
 
 echo === 1/2  offline artifact checks ===

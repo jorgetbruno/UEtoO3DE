@@ -10,10 +10,13 @@ rem asserts on the RESULT line in the result file. CI asserts on THIS
 rem script's exit code (plan constraint 10).
 setlocal EnableExtensions
 
+call "%~dp0..\paths.cmd"
+if errorlevel 1 exit /b 2
+
 set "RESULT=%~dp0results\export_fixture_result.txt"
 if exist "%RESULT%" del /q "%RESULT%"
 
-"D:\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "D:\Gamedev\UEtoO3DE\UE\UEtoO3DEFixture\UEtoO3DEFixture.uproject" -ExecutePythonScript="%~dp0export_fixture.py" -unattended -nop4 -nosplash
+"%UE_EDITOR%" "%UE_PROJECT%" -ExecutePythonScript="%~dp0export_fixture.py" -unattended -nop4 -nosplash
 
 if not exist "%RESULT%" (
   echo RESULT FILE MISSING: %RESULT% 1>&2

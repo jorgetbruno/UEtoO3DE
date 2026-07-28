@@ -27,6 +27,9 @@ rem -- the same contract run_o3de_python.bat uses. CI asserts on THIS
 rem script's exit code (plan constraint 10).
 setlocal EnableExtensions
 
+call "%~dp0..\paths.cmd"
+if errorlevel 1 exit /b 2
+
 if "%~1"=="" goto :usage
 if "%~2"=="" goto :usage
 
@@ -48,7 +51,7 @@ if exist "%RESULT%" del /q "%RESULT%"
 rem GeometryScripting is required by the exporter's bake (LANE_B.md) and is
 rem not enabled by default in most projects; -EnablePlugins turns it on for
 rem this run only, without touching the target .uproject.
-"D:\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "%UPROJECT%" -ExecutePythonScript="%SCRIPT%" -EnablePlugins=GeometryScripting -unattended -nop4 -nosplash
+"%UE_EDITOR%" "%UPROJECT%" -ExecutePythonScript="%SCRIPT%" -EnablePlugins=GeometryScripting -unattended -nop4 -nosplash
 
 if not exist "%RESULT%" (
   echo RESULT FILE MISSING: %RESULT% 1>&2

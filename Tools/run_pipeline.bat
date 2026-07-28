@@ -24,9 +24,10 @@ rem whitespace and a quoted value cannot survive it.
 setlocal EnableExtensions
 
 for %%R in ("%~dp0..") do set "REPO=%%~fR"
-set "UE=D:\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"
-set "UPROJECT=%REPO%\UE\UEtoO3DEFixture\UEtoO3DEFixture.uproject"
-set "O3DE_BIN=C:\O3DE\26.05\bin\Windows\profile\Default"
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
+set "UE=%UE_EDITOR%"
+set "UPROJECT=%UE_PROJECT%"
 
 rem Forward slashes, and not as a style preference. When -ExecutePythonScript
 rem carries ARGUMENTS, UE unescapes backslashes in the value: this repo's own
@@ -44,7 +45,7 @@ set "OUTDIR=%~2"
 set "PREFAB=%~3"
 set "PROJECT=%~4"
 set "BACKEND=%~5"
-if "%PROJECT%"=="" set "PROJECT=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+if "%PROJECT%"=="" set "PROJECT=%O3DE_PROJECT_JOLT%"
 
 set "OUTDIR_FS=%OUTDIR:\=/%"
 set "EXPORT_RESULT=%OUTDIR%\export_result.txt"

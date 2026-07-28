@@ -46,6 +46,34 @@ milestone per session; each session starts from that file.
   catalogue and not in the table, if a severity drifts, or if a row survives a code's
   deletion.
 
+## First run on a new machine
+
+Every runner reads `Tests/paths.config` for the engine and project locations.
+Copy the template and edit it:
+
+```
+copy Tests\paths.config.template Tests\paths.config
+python Tests\paths.py            verifies every path exists; exit code is the verdict
+```
+
+An environment variable of the same name overrides the file, so CI can point a
+run at a different project without editing anything:
+
+```
+set O3DE_PROJECT_JOLT=C:\ci\work\Jolt && Tests\m2\run_m2.bat
+```
+
+The config is gitignored; the template is committed. `REPO_ROOT` is deliberately
+*not* a config key — it is derived from each script's own location, because a
+value that can be computed cannot be configured wrong.
+
+**Known debt:** every `.bat` and every Python file the suites actually run is
+portable. About 34 one-off probe scripts under `Tests/ue/` and `Tests/o3de/`
+still hardcode this developer's paths. They are historical evidence rather than
+CI, so they were left alone rather than changed without being re-run — but a
+probe you cannot run is worth less than one you can, and they should be
+converted when next touched.
+
 ## Running the tests
 
 ```

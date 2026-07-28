@@ -12,8 +12,8 @@ rem     script itself already exits non-zero on FAIL via os._exit(1))
 rem CI must assert on this .bat's exit code, never on console text.
 
 setlocal
-set "EDITOR=C:\O3DE\26.05\bin\Windows\profile\Default\Editor.exe"
-set "PROJECT=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+set "EDITOR=%O3DE_BIN%\Editor.exe"
+set "PROJECT=%O3DE_PROJECT_JOLT%"
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT=%SCRIPT_DIR%s0_1_prefab_spike.py"
 set "RESULT=%SCRIPT_DIR%results\s0_1_result.txt"

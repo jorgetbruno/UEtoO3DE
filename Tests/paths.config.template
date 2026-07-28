@@ -1,0 +1,41 @@
+# paths.config.template -- where THIS machine keeps the engines and projects.
+#
+# Copy to `Tests/paths.config` and edit. The copy is gitignored, because these
+# values are machine-specific and committing them is what got this repo into
+# the state where 40 files hardcoded one developer's drive letters and nobody
+# else could run a single suite.
+#
+# Read by both halves of the harness, from this one file:
+#   Tests/paths.cmd  -- `call`ed by every .bat runner
+#   Tests/paths.py   -- imported by Python that needs an engine or project
+#
+# Every key can be overridden by an environment variable of the same name, so
+# CI sets them without editing anything:
+#     set O3DE_PROJECT_JOLT=C:\ci\work\Jolt && Tests\m2\run_m2.bat
+#
+# No quotes, no trailing spaces, `#` starts a comment. Paths must not contain
+# spaces where they are passed through --runpythonargs or -ExecutePythonScript
+# with arguments (the editor tokenizes both on whitespace).
+
+# --- Unreal Engine -----------------------------------------------------------
+# The editor executable. A FULL editor, not UnrealEditor-Cmd: the skeletal FBX
+# exporter asserts on render objects commandlets lack (M8).
+UE_EDITOR=D:\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
+# The commandlet host, for probes that do not touch the UI.
+UE_EDITOR_CMD=D:\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe
+# The fixture project.
+UE_PROJECT=D:\Gamedev\UEtoO3DE\UE\UEtoO3DEFixture\UEtoO3DEFixture.uproject
+
+# --- O3DE --------------------------------------------------------------------
+# The folder holding Editor.exe and AssetProcessorBatch.exe.
+O3DE_BIN=C:\O3DE\26.05\bin\Windows\profile\Default
+# The o3de CLI, for gem registration. `cmake` must be on PATH for it to work;
+# the engine ships one at <engine>\cmake\runtime\bin.
+O3DE_CLI=C:\O3DE\26.05\scripts\o3de.bat
+O3DE_CMAKE_BIN=C:\O3DE\26.05\cmake\runtime\bin
+
+# --- Test projects -----------------------------------------------------------
+# Jolt enabled / PhysX absent, and the mirror image. Anything that differs
+# between them is attributable to the backend rather than the environment.
+O3DE_PROJECT_JOLT=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt
+O3DE_PROJECT_PHYSX=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-PhysX

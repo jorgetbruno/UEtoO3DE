@@ -12,6 +12,7 @@ than on English. M10 turns this into the import dialog's summary.
 """
 
 import json
+import time
 
 INFO = "info"
 WARN = "warn"
@@ -166,11 +167,38 @@ CODES = {
 }
 
 
+class _Phase:
+    """Times a block and accumulates it under `name`. Re-entrant by name, so a
+    phase entered once per entity sums into one figure."""
+
+    def __init__(self, report, name):
+        self._report = report
+        self._name = name
+        self._started = None
+
+    def __enter__(self):
+        self._started = time.perf_counter()
+        return self
+
+    def __exit__(self, *_exc):
+        elapsed = time.perf_counter() - self._started
+        self._report.timings[self._name] = \
+            self._report.timings.get(self._name, 0.0) + elapsed
+        return False
+
+
 class Report:
     def __init__(self):
         self._records = []
         self._seen = set()
         self.counters = {}
+        # Where the wall clock went, per phase. M11 recorded 809 s to import a
+        # 2905-entity level and PERFORMANCE.md then ATTRIBUTED that cost to the
+        # collider bakes -- a plausible guess with nothing behind it, in a
+        # document that otherwise carries only measurements. Timings make the
+        # attribution checkable, and give anyone optimising this a target
+        # instead of an intuition.
+        self.timings = {}
 
     def warn(self, code, subject, detail, severity=None):
         if code not in CODES:
@@ -191,6 +219,21 @@ class Report:
     def count(self, name, amount=1):
         self.counters[name] = self.counters.get(name, 0) + amount
 
+    def phase(self, name):
+        """`with report.phase("physics"):` — accumulates wall clock by name."""
+        return _Phase(self, name)
+
+    def timing_rows(self):
+        """`[(name, seconds, percent)]`, slowest first.
+
+        Slowest-first because the only question anyone asks of this table is
+        "what do I fix", and that answer should be the first line.
+        """
+        total = sum(self.timings.values())
+        rows = sorted(self.timings.items(), key=lambda kv: -kv[1])
+        return [(name, seconds, (100.0 * seconds / total) if total else 0.0)
+                for name, seconds in rows]
+
     def records(self):
         return sorted(self._records,
                       key=lambda r: (r["code"], r["subject"], r["detail"]))
@@ -201,6 +244,8 @@ class Report:
     def to_dict(self):
         return {
             "counters": dict(sorted(self.counters.items())),
+            "timings_seconds": {name: round(seconds, 3)
+                                for name, seconds in sorted(self.timings.items())},
             "warnings": self.records(),
         }
 
@@ -233,6 +278,16 @@ class Report:
         else:
             out.append("  (none)")
         out.append("")
+
+        rows = self.timing_rows()
+        if rows:
+            total = sum(self.timings.values())
+            out.append("Where the time went  (%.1f s total)" % total)
+            out.append("-------------------")
+            width = max(len(name) for name in self.timings)
+            for name, seconds, percent in rows:
+                out.append("  %-*s  %8.1f s  %5.1f%%" % (width, name, seconds, percent))
+            out.append("")
 
         records = self.records()
         by_severity = {}

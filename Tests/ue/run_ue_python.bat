@@ -4,6 +4,9 @@ rem Usage: run_ue_python.bat <script.py>   (relative or absolute path)
 rem Propagates the UnrealEditor-Cmd exit code.
 setlocal EnableExtensions
 
+call "%~dp0..\paths.cmd"
+if errorlevel 1 exit /b 2
+
 if "%~1"=="" (
     echo Usage: run_ue_python.bat ^<script.py^> 1>&2
     exit /b 2
@@ -15,6 +18,6 @@ if not exist "%SCRIPT%" (
     exit /b 2
 )
 
-"D:\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "D:\Gamedev\UEtoO3DE\UE\UEtoO3DEFixture\UEtoO3DEFixture.uproject" -run=pythonscript -script="%SCRIPT%" -unattended -nop4 -nullrhi
+"%UE_EDITOR_CMD%" "%UE_PROJECT%" -run=pythonscript -script="%SCRIPT%" -unattended -nop4 -nullrhi
 set "RC=%ERRORLEVEL%"
 endlocal & exit /b %RC%

@@ -12,6 +12,8 @@ rem lines above the failure.
 setlocal EnableExtensions
 
 set "REPO=%~dp0..\.."
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
 set "PY=python"
 
 echo === 1/4  UE export ===

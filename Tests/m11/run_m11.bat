@@ -13,8 +13,10 @@ rem milestone that quietly tests nothing is worse than one that fails.
 setlocal EnableExtensions
 
 set "REPO=%~dp0..\.."
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
 set "PY=python"
-set "JOLT=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+set "JOLT=%O3DE_PROJECT_JOLT%"
 if "%UEO3DE_EXPORT%"=="" set "UEO3DE_EXPORT=%REPO%\Exports\L_Showcase"
 
 echo === 0/1  docs: the warning catalogues and MAPPING.md agree ===

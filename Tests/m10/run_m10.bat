@@ -17,8 +17,10 @@ rem CI asserts on THIS script's exit code, never on console text.
 setlocal EnableExtensions
 
 set "REPO=%~dp0..\.."
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
 set "PY=python"
-set "JOLT=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+set "JOLT=%O3DE_PROJECT_JOLT%"
 
 echo === 0/7  pure: the re-import diff ===
 %PY% "%REPO%\Tests\m10\test_reimport.py"

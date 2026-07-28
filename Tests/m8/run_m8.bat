@@ -18,8 +18,10 @@ rem CI asserts on THIS script's exit code, never on console text.
 setlocal EnableExtensions
 
 set "REPO=%~dp0..\.."
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
 set "PY=python"
-set "PROJECT=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+set "PROJECT=%O3DE_PROJECT_JOLT%"
 
 echo === 1/3  pure skel_build tests ===
 %PY% "%REPO%\Tests\m8\test_skel_build.py"

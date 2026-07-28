@@ -17,9 +17,11 @@ rem when the level is missing. CI asserts on THIS script's exit code.
 setlocal EnableExtensions
 
 set "REPO=%~dp0..\.."
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
 set "PY=python"
-set "AP=C:\O3DE\26.05\bin\Windows\profile\Default\AssetProcessorBatch.exe"
-set "PROJECT=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+set "AP=%O3DE_BIN%\AssetProcessorBatch.exe"
+set "PROJECT=%O3DE_PROJECT_JOLT%"
 
 echo === 1/5  pure conversion tests ===
 %PY% "%REPO%\Tests\m9\test_m9_pure.py"

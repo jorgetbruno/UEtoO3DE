@@ -23,6 +23,8 @@ rem CI asserts on THIS script's exit code, never on console text.
 setlocal EnableExtensions
 
 set "REPO=%~dp0..\.."
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
 set "PY=python"
 if "%~1"=="" (
   set "EXPORT_DIR=%REPO%\Exports\L_Showcase"

@@ -563,13 +563,32 @@ def test_ledger_path_is_beside_the_prefab():
 
 
 def test_against_a_real_saved_prefab():
-    """The fixtures above are my own idea of the format. This one is O3DE's."""
-    candidates = [
-        r"C:/Users/jorge/O3DE/Projects/UEtoO3DETest-Jolt/Prefabs/Fixture_01.prefab",
-    ]
-    path = next((c for c in candidates if os.path.isfile(c)), None)
+    """The fixtures above are my own idea of the format. This one is O3DE's.
+
+    The project location comes from `Tests/paths.config`, not from a path baked
+    into this file -- which is what it used to be, so on any other machine the
+    ONLY check here that reads a genuine O3DE prefab skipped, and the suite
+    still printed PASS. A skip is announced loudly for that reason: an
+    unrunnable check and a passing one must not look the same.
+    """
+    sys.path.insert(0, os.path.join(REPO_ROOT, "Tests"))
+    try:
+        from paths import PATHS
+        project = PATHS.get("O3DE_PROJECT_JOLT")
+    except Exception:
+        project = None
+
+    path = None
+    if project:
+        candidate = os.path.join(project, "Prefabs", "Fixture_01.prefab")
+        if os.path.isfile(candidate):
+            path = candidate
     if path is None:
-        print("  (skipped: no real prefab available)")
+        print("  !! SKIPPED: no real saved prefab to read.")
+        print("     Configure O3DE_PROJECT_JOLT in Tests/paths.config and run")
+        print("     Tests\\m2\\run_m2.bat once to produce Prefabs/Fixture_01.prefab.")
+        print("     The hand-built fixtures above are this file's own idea of")
+        print("     the format; without this check nothing confirms O3DE agrees.")
         return
     transforms = reimport.read_prefab(path)
     check(len(transforms) > 20,

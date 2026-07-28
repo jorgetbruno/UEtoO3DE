@@ -17,9 +17,11 @@ rem CI asserts on THIS script's exit code, never on console text.
 setlocal EnableExtensions
 
 set "REPO=%~dp0..\.."
+call "%REPO%\Tests\paths.cmd"
+if errorlevel 1 exit /b 2
 set "PY=python"
-set "RUNNER=C:\O3DE\26.05\bin\Windows\profile\Default\AzTestRunner.exe"
-set "GEMBIN=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt\build\windows\bin\profile"
+set "RUNNER=%O3DE_BIN%\AzTestRunner.exe"
+set "GEMBIN=%O3DE_PROJECT_JOLT%\build\windows\bin\profile"
 
 echo === 1/4  backend detection unit tests ===
 %PY% "%REPO%\Tests\m3\test_backend_detection.py"

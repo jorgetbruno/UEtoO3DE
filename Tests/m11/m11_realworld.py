@@ -214,6 +214,24 @@ def main():
              report.counters.get("reimport_added")))
 
     log("")
+    log("=== where the time went ===")
+    # The reason this exists: PERFORMANCE.md previously ATTRIBUTED the import
+    # cost to the collider bakes on plausibility alone. These rows either
+    # support that or refute it, and either way the doc can stop guessing.
+    for name, seconds, percent in report.timing_rows():
+        log("  %-42s %8.1f s  %5.1f%%" % (name, seconds, percent))
+    figures["timings_seconds"] = {name: round(value, 3)
+                                  for name, value in report.timings.items()}
+    accounted = sum(report.timings.values())
+    figures["timings_total_seconds"] = accounted
+    log("  %-42s %8.1f s  (import wall clock %.1f s)"
+        % ("accounted for", accounted, elapsed))
+    check(abs(accounted - elapsed) < 0.05 * max(1.0, elapsed),
+          "the phase timings account for %.1f s of a %.1f s import -- more "
+          "than 5%% is unattributed, so the breakdown is misleading"
+          % (accounted, elapsed))
+
+    log("")
     log("=== counters ===")
     for key in sorted(report.counters):
         log("  %-28s %d" % (key, report.counters[key]))

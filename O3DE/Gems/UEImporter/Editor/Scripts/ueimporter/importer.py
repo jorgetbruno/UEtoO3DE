@@ -58,6 +58,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     the manifest -- the escape hatch for "just give me exactly what UE says".
     """
     import json as json_module
+    import time as time_module
 
     import azlmbr.legacy.general as general
 
@@ -74,6 +75,21 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             log(message)
 
     report = Report()
+
+    # A running stopwatch: `mark(name)` attributes everything since the last
+    # mark to `name`. One line per phase boundary rather than a `with` block
+    # around each -- the phases here are long sequential stretches, and
+    # wrapping them would reindent most of this function for no extra
+    # information. Because every mark closes the previous span, the figures
+    # account for the WHOLE import rather than a chosen subset, which is the
+    # property that makes them safe to reason about.
+    _clock = [time_module.perf_counter()]
+
+    def mark(name):
+        now = time_module.perf_counter()
+        report.timings[name] = report.timings.get(name, 0.0) + (now - _clock[0])
+        _clock[0] = now
+
     document = manifest_io.load(manifest_path)
     skip_indices = {int(i) for i in os.environ.get("UEO3DE_SKIP", "").split(",") if i.strip()}
     if skip_indices:
@@ -136,6 +152,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         report.count("reimport_added", len(reimport_plan["added"]))
     report.count("reimport_removed", len(reimport_plan["removed"]))
     report.count("reimport_conflicts", len(reimport_plan["conflicts"]))
+    mark("reimport diff")
 
     # An open level comes FIRST: prefab authoring needs a root prefab instance
     # (S0.1), and the adapter's resolve step creates a scratch entity to read
@@ -151,6 +168,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     general.idle_enable(True)
     general.open_level_no_prompt(level_name)
     general.idle_wait_frames(30)
+    mark("open level")
 
     # --- physics backend: detect, resolve-or-fail, negotiate (M3) ---
     detection = detect_in_editor(explicit=backend)
@@ -160,6 +178,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     adapter.resolve_components()
     emit("  components resolved; contact offset %.4f m" % adapter.contact_offset())
     physics_build.negotiate(adapter, document, report)
+    mark("backend detect + resolve")
 
     profiles_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  "collision_profiles.json")
@@ -212,12 +231,14 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                 "wait": True,
             })
 
+    mark("stage + resolve product paths")
     waitable = [record for record in records if record.get("wait")]
     emit("waiting for %d product assets (timeout %.0fs each)"
          % (len(waitable), asset_timeout))
     asset_ids = asset_wait.wait_for_all(waitable, timeout_seconds=asset_timeout, log=emit)
     report.count("assets_waited_for", len(asset_ids))
     emit("  all %d products present in the catalog" % len(asset_ids))
+    mark("wait for product assets")
 
     mesh_asset_ids = {record["guid"]: asset_ids[record["guid"]]
                       for record in waitable if record["kind"] == "static_mesh"}
@@ -232,6 +253,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     level_root = prefab_build.create_level_root(level_root_name)
     created = prefab_build.create_entities(document, mesh_asset_ids, report, level_root, log=emit)
     report.count("entities_created", len(created))
+    mark("create entities")
 
     # --- materials (M4): per entity, default slot or per-slot by label ---
     # A model whose mapped slots all share one material takes the default
@@ -293,6 +315,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         assigned += 1
     report.count("materials_assigned", assigned)
     report.count("material_slots_assigned", slots_assigned)
+    mark("materials")
 
     # --- skeletal entities (M8): Actor + Simple Motion ---
     from . import skel_build
@@ -314,6 +337,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             item["name"],
             " + Simple Motion" if skeletal.get("animation_guid") else ""))
     report.count("skeletal_entities", skeletal_authored)
+    mark("skeletal")
 
     # --- decals + cameras (M9) ---
     from . import camera_build
@@ -352,6 +376,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                  % (item["name"], plan["properties"][0][1]))
     report.count("decals_created", decals)
     report.count("cameras_created", cameras)
+    mark("decals + cameras")
 
     # --- lights (M5) ---
     emit("authoring lights")
@@ -372,6 +397,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         emit("  %-22s %s (%d properties)"
              % (item["name"], plan["component"], len(plan["properties"])))
     report.count("lights_created", lights)
+    mark("lights")
 
     # --- environment (M6) ---
     # Sky first and only once: a level usually has both a SkyLight and a
@@ -405,6 +431,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         environments += 1
         emit("  %-22s %s" % (item["name"], ", ".join(authored)))
     report.count("environments_created", environments)
+    mark("environment")
 
     # --- physics authoring, all through the adapter (M3) ---
     # After the meshes: mesh colliders bake from the entity's own render model,
@@ -421,6 +448,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             bodies += 1
             emit("  %-22s %s" % (item["name"], summary))
     report.count("physics_bodies", bodies)
+    mark("physics authoring")
     # Let mesh-collider bakes tick with models loaded before serialization.
     # Each bake runs on the component's TickBus once its model streams in;
     # serializing mid-bake made CreatePrefabInMemory throw on a 135-collider
@@ -434,6 +462,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # Actor + motion assets stream in asynchronously like materials do.
     general.idle_wait_frames(60 + 5 * bake_count + 5 * assigned + 5 * slots_assigned
                              + 10 * skeletal_authored)
+    mark("settle: collider bakes + asset streaming")
     report.count("manifest_roots", sum(1 for item in document["entities"]
                                        if item["parent_id"] is None))
     if not created:
@@ -458,6 +487,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         general.idle_wait_frames(900)
         prefab_build.create_prefab_in_memory([level_root], prefab_path)
     prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit)
+    mark("save prefab")
 
     # --- record what this import AUTHORED, then put hand edits back (M10) ---
     #
@@ -527,5 +557,12 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                             "reported as hand-edited, but no entity of that "
                             "name was found in the rebuilt prefab, so the edit "
                             "could NOT be restored and has been lost")
+
+    mark("ledger + hand edits")
+
+    emit("")
+    emit("where the time went (%.1f s total):" % sum(report.timings.values()))
+    for name, seconds, percent in report.timing_rows():
+        emit("  %-42s %8.1f s  %5.1f%%" % (name, seconds, percent))
 
     return report, prefab_path

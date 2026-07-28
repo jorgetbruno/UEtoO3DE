@@ -18,7 +18,10 @@ if "%~1"=="" (
     exit /b 2
 )
 
-set "EDITOR=C:\O3DE\26.05\bin\Windows\profile\Default\Editor.exe"
+call "%~dp0..\paths.cmd"
+if errorlevel 1 exit /b 2
+
+set "EDITOR=%O3DE_BIN%\Editor.exe"
 set "SCRIPT=%~f1"
 set "SCRIPT_DIR=%~dp0"
 
@@ -28,7 +31,7 @@ if "%~2"=="" (
     set "RESULT=%~f2"
 )
 if "%~3"=="" (
-    set "PROJECT=C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+    set "PROJECT=%O3DE_PROJECT_JOLT%"
 ) else (
     set "PROJECT=%~3"
 )
