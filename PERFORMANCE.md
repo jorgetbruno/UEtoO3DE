@@ -31,8 +31,8 @@ preserve, but the measurement was not entitled to be trusted.)
 
 | Measure | Figure |
 |---|---|
-| Wall clock | **147 s** (2 min 27 s) |
-| Per entity | **50.5 ms** |
+| Wall clock | **73 s** (1 min 13 s) |
+| Per entity | **25.2 ms** |
 | Entities created | 2905 / 2905 |
 | Physics bodies | 2787 |
 | Mesh colliders baked | 2501 |
@@ -45,30 +45,31 @@ preserve, but the measurement was not entitled to be trusted.)
 
 `import_level` carries a phase stopwatch, and `m11_realworld.py` fails the run
 if the phases account for less than 95% of the wall clock — so this table
-cannot quietly omit anything. It accounted for 146.8 s of 146.8 s.
+cannot quietly omit anything. It accounted for 73.3 s of 73.3 s.
 
 | Phase | Seconds | Share |
 |---|---:|---:|
-| materials | 73.2 | 49.9% |
-| settle: collider bakes | 31.0 | 21.1% |
-| save prefab | 12.8 | 8.7% |
-| create entities | 10.3 | 7.0% |
-| physics authoring | 10.0 | 6.8% |
-| stage + resolve product paths | 6.3 | 4.3% |
-| open level | 2.1 | 1.4% |
-| everything else (ledger, bake verification, re-import diff, lights, environment, skeletal, decals, cameras, backend detect, asset wait) | 1.1 | 0.7% |
+| settle: collider bakes | 20.4 | 27.8% |
+| save prefab | 12.1 | 16.5% |
+| stage + resolve product paths | 10.9 | 14.8% |
+| create entities | 10.2 | 14.0% |
+| physics authoring | 8.9 | 12.2% |
+| materials | 7.8 | 10.6% |
+| open level | 1.9 | 2.6% |
+| everything else (ledger, bake verification, re-import diff, lights, environment, skeletal, decals, cameras, backend detect, asset wait) | 1.1 | 1.5% |
 
-## Three attributions, all of them wrong until something measured them
+## Four attributions, all of them wrong until something measured them
 
-This document twice stated a cause that turned out to be false, and the second
-correction found a third. They are kept here because the pattern is the point:
-every one was reached by reading the code carefully, and every one was wrong.
+Each correction here was found by measuring, and each one uncovered the next.
+They are kept because the pattern is the point: every belief below was reached
+by reading the code carefully, and every one was wrong.
 
 | Believed | Measured |
 |---|---|
-| "Dominated by the collider bakes" | physics authoring is **6.8%** |
+| "Dominated by the collider bakes" | physics authoring is **12.2%** |
 | then: materials — probably the uncached component-type lookup | that lookup: **3%** of the materials phase |
 | then: the settle needs 41,040 frames | it needs **under 30** |
+| then: what is left of `model_wait` is models streaming in | it is one **tick**, and it was being paid 1217 times |
 
 ### 1. The poll quantum (−36%)
 
@@ -148,28 +149,65 @@ its own retry and which did not occur at settle=0 either. They are gone.
 The formula is now `300 + bakes/2 + 10·skeletal` — 1550 frames here, some fifty
 times the measured need. That margin is deliberate: the failure cannot be
 repaired once the prefab is written, one level on one machine is a thin basis
-for a threshold, and 31 s of a 147 s import is a cheap premium. Collider count
+for a threshold, and 20 s of a 73 s import is a cheap premium. Collider count
 is a **proxy** for bake work, which is really geometry volume; the proxy is
 acceptable only because being wrong is now loud. The skeletal term is unchanged
 and remains **unmeasured** — L_Showcase has no skeletal entities.
 
-### The two changes together
+### 3. The wait that should have been shared (−50% again)
 
-| | before | after quantum | after settle |
-|---|---:|---:|---:|
-| total import | 806.2 s | 519.6 s | **146.8 s** |
-| per entity | 277.5 ms | 178.9 ms | **50.5 ms** |
-| materials phase | 408.8 s | 72.6 s | 73.2 s |
-| settle phase | 347.8 s | 398.7 s | **31.0 s** |
-| slots / materials assigned | 2904 / 2791 | 2904 / 2791 | 2904 / 2791 |
-| collider bakes in the file | 2501 | 2501 | 2501 |
+With the settle cut, materials was the largest phase again and 65.5 s of it was
+still `model_wait`. The obvious reading — models genuinely streaming in — is
+wrong, and the counters said so before any code changed.
 
-**5.5× faster, and the content is identical.** Not "the counters match" —
+A finer split inside the wait separated the **probe** calls from the **idle**
+frames, because the two imply opposite fixes: probes are per entity and buy
+nothing for anyone else, while idle frames are shared — a frame spent waiting
+for one entity advances every other entity too. On a 400-entity sample:
+`wait_idle` **1.1 s**, `wait_probe` **0.0 s**. The frames were the whole cost
+and the probes were free.
+
+Then the decisive counter. Every one of the 1217 multi-slot entities was
+unready on its first probe and ready after exactly one quantum — never two,
+never zero, *including the last entity processed*, long after every model in
+the level had finished streaming. Streaming does not behave like that. A tick
+that must elapse between adding a component and its rows appearing does, and a
+tick is shared.
+
+So the assignment became two passes: add every Material component, wait **once**
+for the level, then read the rows and assign. `wait_for_model_rows` re-probes
+only the stragglers each round, so the bound stays per entity rather than in
+aggregate, and the fallback for an entity that never becomes ready is unchanged.
+
+| | before | after |
+|---|---:|---:|
+| frames idled waiting for rows | 2434 | **2** |
+| materials phase | 73.2 s | **7.8 s** |
+| probe calls | 2434 | 2434 (still free) |
+| slots / materials assigned | 2904 / 2791 | 2904 / 2791 (identical) |
+
+The probe count is unchanged on purpose: probing is what makes the wait honest
+per entity, and it costs nothing, so there was no reason to trade correctness
+for it.
+
+### The three changes together
+
+| | before | after quantum | after settle | after batching |
+|---|---:|---:|---:|---:|
+| total import | 806.2 s | 519.6 s | 146.8 s | **73.3 s** |
+| per entity | 277.5 ms | 178.9 ms | 50.5 ms | **25.2 ms** |
+| materials phase | 408.8 s | 72.6 s | 73.2 s | **7.8 s** |
+| settle phase | 347.8 s | 398.7 s | 31.0 s | 20.4 s |
+| frames idled for model rows | 36,510 | 2,434 | 2,434 | **2** |
+| slots / materials assigned | 2904 / 2791 | 2904 / 2791 | 2904 / 2791 | 2904 / 2791 |
+| collider bakes in the file | 2501 | 2501 | 2501 | 2501 |
+
+**11× faster, and the content is identical.** Not "the counters match" —
 `Tests\perf\prefab_diff.py` compares the two saved prefabs entity by entity on
 component types, every asset id, every transform and the length of every baked
 collider, keyed by name because entity ids are minted per run and comparing
 duplicated names as a multiset because a saved prefab legitimately contains
-them. Verdict: **EQUIVALENT**, 0 differences across 2906 entities.
+them. Verdict after every one of the three changes: **EQUIVALENT**, 0 differences across 2906 entities.
 
 (That comparator is mutation-tested: blank one `CookedData` or alter one asset
 guid in a copy and it must report the difference, because a comparator that
@@ -179,19 +217,19 @@ cannot fail proves nothing about the run where it passed.)
 
 | Point | Working set | Δ |
 |---|---|---|
-| Before import | 849 MB | — |
-| Peak, immediately after import | **5418 MB** | +4569 MB |
-| Level open, prefab instantiated | **3251 MB** | +2402 MB |
+| Before import | 845 MB | — |
+| Peak, immediately after import | **4751 MB** | +3906 MB |
+| Level open, prefab instantiated | **3184 MB** | +2339 MB |
 
-The two deltas measure different things and both matter. **+4569 MB is the peak
+The two deltas measure different things and both matter. **+3906 MB is the peak
 cost of running the import** — the scratch level, 2905 live entities, every
 streamed model and material, and the prefab template all resident at once. That
-is the figure that decides whether the import fits in a machine's RAM. **+2402 MB
+is the figure that decides whether the import fits in a machine's RAM. **+2339 MB
 is what the finished level costs** once the editor has reopened a level and
 instantiated the prefab; the difference is the import's working state being
 released.
 
-An import of this size therefore wants ~5 GB of headroom, which is worth knowing
+An import of this size therefore wants ~4 GB of headroom, which is worth knowing
 before pointing it at something four times larger.
 
 ## Simulation sanity check
@@ -199,14 +237,18 @@ before pointing it at something four times larger.
 | Measure | Figure |
 |---|---|
 | Instantiate the saved prefab | 7.5 s |
-| 300 frames in game mode | 5.0 s (**16.7 ms/frame**) |
+| 300 frames in game mode | 2.5 s (**8.34 ms/frame**) |
 
 **This is a headless batch editor** (`-BatchMode -autotest_mode`), not a shipping
-runtime, and the figure is a **cap, not a cost**. 16.68 ms is 59.95 Hz, and two
-consecutive runs reported 16.68 to the hundredth — a work measurement does not
-reproduce to four significant figures, a tick cap does. An earlier run of this
-same test, on prefab content since verified **identical**, recorded 8.3 ms,
-which is 120 Hz: the same level pinned to whatever cap that session was under.
+runtime, and the figure is a **cap, not a cost**. Four runs of this test, on
+prefab content verified **identical** every time, reported:
+
+    8.34, 16.68, 16.68, 8.34 ms
+
+which is 119.9 Hz and 59.95 Hz — exactly 2:1, each reproduced to the
+hundredth. A work measurement does not land on two discrete values and repeat
+to four significant figures; a tick cap does. The level is not getting faster
+and slower, it is being pinned to whatever cap the session came up under.
 
 So it bounds nothing and must never be quoted as a frame rate. What it is good
 for is what it is used for: 300 frames complete, and nothing pathological

@@ -321,12 +321,14 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # A model whose mapped slots all share one material takes the default
     # slot (covers everything, no dependency on the model asset having
     # streamed in). Distinct materials per slot go through o3dimport's
-    # label-matching technique in assign_material_slots.
+    # label-matching technique, which needs the component's Model Materials
+    # rows and so runs in TWO passes with one shared wait between them.
     assets_by_guid = manifest_io.assets_by_guid(document)
     emit("assigning materials (%d converted)" % len(material_asset_ids))
     prefab_build.reset_material_stats()
     assigned = 0
     slots_assigned = 0
+    pending_slots = []   # (component pair, entity id, assignments, name)
     for item in document["entities"]:
         entity_id = created.get(item["id"])
         # Skeletal entities carry the same per-slot structure; the Material
@@ -373,9 +375,21 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                 continue
             labels_seen[label] = guid
             assignments.append((label, material_asset_ids[guid]))
-        slots_assigned += prefab_build.assign_material_slots(
-            entity_id, assignments, item["name"], report)
+        # Pass 1 stops here: add the component and remember what to do with it.
+        # The rows it exposes do not exist until a tick has elapsed, and that
+        # tick is SHARED -- see prefab_build.wait_for_model_rows. Assigning
+        # inline instead made every one of these entities wait for its own
+        # copy of the same tick.
+        pending_slots.append((prefab_build.begin_material_slots(entity_id, item["name"]),
+                              entity_id, assignments, item["name"]))
         assigned += 1
+
+    # One wait for the whole level, then pass 2.
+    not_ready = prefab_build.wait_for_model_rows([p for p, _e, _a, _n in pending_slots])
+    for index, (pair, entity_id, assignments, name) in enumerate(pending_slots):
+        slots_assigned += prefab_build.finish_material_slots(
+            pair, entity_id, assignments, name, report,
+            ready=index not in not_ready)
     report.count("materials_assigned", assigned)
     report.count("material_slots_assigned", slots_assigned)
     mark("materials")

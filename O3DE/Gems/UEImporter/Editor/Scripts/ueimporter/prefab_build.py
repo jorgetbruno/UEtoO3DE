@@ -42,15 +42,21 @@ MODEL_SLOT_ASSET = "Model Materials|[%d]|Material Asset"
 # LOD wildcard for FindMaterialAssignmentId (u32 -1).
 NO_LOD = 0xFFFFFFFF
 # The Model Materials rows exist only once the entity's model asset has
-# streamed in; how long assign_material_slots waits for that, total frames.
+# streamed in; how long wait_for_model_rows waits for that, total frames.
 MODEL_READY_WAIT_FRAMES = 600
-# Poll GRANULARITY, not the budget. Measured on L_Showcase: every
-# multi-material entity's model was unready on the first check and then ready
-# well inside one quantum, so a coarse quantum charged each of them the whole
-# thing -- 1217 entities x 30 frames, which was ~95% of the materials phase and
-# the single largest cost in the entire import. The cap below is unchanged, so
-# a model that genuinely takes 600 frames still gets them; only the rounding-up
-# of the common case goes away. Overridable to re-measure without editing code.
+# Poll GRANULARITY, not the budget, and now the granularity of ONE shared wait
+# rather than of 1217 private ones.
+#
+# Its history is the shape of both mistakes this file has made. It was 30, and
+# because every multi-material entity was unready on its first check and ready
+# well inside one quantum, each was charged the whole 30 -- 1217 x 30 = 36,510
+# frames, ~95% of the materials phase and the largest single cost in the whole
+# import. Dropping it to 2 removed the rounding-up and left 1217 x 2 = 2434.
+# What it did NOT remove was the 1217: the loop still paid a fresh wait per
+# entity for a tick that advances every entity at once. `wait_for_model_rows`
+# does the waiting once for the level, so this number is now multiplied by the
+# number of ROUNDS (typically one) rather than by the number of entities.
+# Overridable to re-measure without editing code.
 MODEL_READY_POLL_FRAMES = int(os.environ.get("UEO3DE_MODEL_POLL_FRAMES", "2"))
 
 # Sub-phase accounting for material assignment, which the M11 phase timings
@@ -66,12 +72,25 @@ MATERIAL_STATS = {
     "material_default_set_s": 0.0,     # the single-material fast path
     "material_wait_frames": 0,         # frames burned polling
     "material_entities_that_waited": 0,
+    # The wait loop splits two ways, and the split decides what to fix. Frames
+    # are shared -- idling for entity A advances every other entity's stream
+    # too -- but the PROBE calls are strictly per entity and buy nothing for
+    # anyone else. If the probes dominate, batching the wait is the fix; if the
+    # frames dominate, the quantum is. Guessing between those two is what cost
+    # this project its last two performance rounds.
+    "material_wait_probe_s": 0.0,      # GetComponentProperty inside the loop
+    "material_wait_idle_s": 0.0,       # idle_wait_frames inside the loop
+    "material_wait_probes": 0,         # how many probe calls, total
 }
 
 
 def reset_material_stats():
-    for key in MATERIAL_STATS:
-        MATERIAL_STATS[key] = 0 if key.endswith(("frames", "waited")) else 0.0
+    # Reset each key to a zero of its OWN type rather than by guessing from the
+    # name: the previous version keyed off a suffix list ("frames", "waited"),
+    # so the first counter added that did not end in one of those came back as
+    # 0.0 and reported itself as a float count.
+    for key, value in MATERIAL_STATS.items():
+        MATERIAL_STATS[key] = type(value)()
 
 # Below this, a scale is treated as uniform and goes in the transform.
 UNIFORM_SCALE_EPSILON = 1e-6
@@ -339,7 +358,7 @@ def assign_material(entity_id, material_asset_id, entity_name):
     per-slot override inherits the default slot, so a model whose mapped slots
     all share one material is fully covered without touching the (asset-load-
     dependent) Model Materials rows. Multi-material models go through
-    `assign_material_slots` instead.
+    `begin_material_slots` / `finish_material_slots` instead.
     """
     import time
 
@@ -357,50 +376,98 @@ def assign_material(entity_id, material_asset_id, entity_name):
     MATERIAL_STATS["material_default_set_s"] += time.perf_counter() - started
 
 
-def assign_material_slots(entity_id, assignments, entity_name, report):
+def begin_material_slots(entity_id, entity_name):
+    """Add the Material component for a per-slot assignment. Returns its pair.
+
+    Half of a two-pass protocol; `wait_for_model_rows` and
+    `finish_material_slots` are the other half. See `wait_for_model_rows` for
+    why the passes are split.
+    """
+    return _add_material_component(entity_id, entity_name)
+
+
+def wait_for_model_rows(pairs):
+    """Idle until every pair's Model Materials rows exist. Returns the stragglers.
+
+    ONE wait for the whole level, not one per entity, and that is the entire
+    point. Idling is shared: a frame spent waiting for entity A advances every
+    other entity's component too. Waiting per entity buys the same frame over
+    and over.
+
+    The old per-entity loop made that concrete. On L_Showcase every one of the
+    1217 multi-slot entities was unready on its first probe and ready after
+    exactly one quantum -- never two, never zero, including the last entity
+    processed, long after every model had finished streaming. That is not a
+    stream to wait out; it is a tick that has to elapse between adding the
+    component and its rows appearing. One tick, shared, is enough for all of
+    them, so the cost should be one wait rather than 1217 x 2 = 2434 frames.
+
+    The probes are free (measured: 0.0 s against 1.1 s of idling on a
+    400-entity sample), so probing every pair on every round costs nothing and
+    keeps the bound honest per entity rather than in aggregate.
+
+    Returns the set of INDICES into `pairs` still not ready when
+    MODEL_READY_WAIT_FRAMES ran out -- each is an entity whose caller must fall
+    back. Indices rather than the pairs themselves: an EntityComponentIdPair is
+    an engine proxy object with no promised hashing or equality, so a caller
+    matching stragglers by identity would be relying on something the binding
+    never offered.
+    """
+    import time
+
+    import azlmbr.legacy.general as general
+
+    def ready(pair):
+        probe_started = time.perf_counter()
+        found, _value = _get_property(pair, MODEL_SLOT_STABLE_ID % 0)
+        MATERIAL_STATS["material_wait_probe_s"] += time.perf_counter() - probe_started
+        MATERIAL_STATS["material_wait_probes"] += 1
+        return found
+
+    wait_started = time.perf_counter()
+    pending = [index for index, pair in enumerate(pairs) if not ready(pair)]
+    MATERIAL_STATS["material_entities_that_waited"] += len(pending)
+
+    waited = 0
+    while pending and waited < MODEL_READY_WAIT_FRAMES:
+        idle_started = time.perf_counter()
+        general.idle_wait_frames(MODEL_READY_POLL_FRAMES)
+        MATERIAL_STATS["material_wait_idle_s"] += time.perf_counter() - idle_started
+        waited += MODEL_READY_POLL_FRAMES
+        pending = [index for index in pending if not ready(pairs[index])]
+
+    MATERIAL_STATS["material_model_wait_s"] += time.perf_counter() - wait_started
+    MATERIAL_STATS["material_wait_frames"] += waited
+    return set(pending)
+
+
+def finish_material_slots(pair, entity_id, assignments, entity_name, report,
+                          ready=True):
     """Per-slot assignment by label, o3dimport's technique (M4 slot fidelity).
 
     `assignments` is an ordered list of (label, material_asset_id) with unique
     labels; the label is the UE material asset name, which is the FBX material
-    name, which is the azmodel slot label (`mesh_export` docstring). The Model
-    Materials rows only exist after the entity's model streams in, so this
-    waits for row 0 first, bounded; if the model never turns up the first
-    material goes on the default slot so the entity is never worse off than
-    the flattened behaviour this replaces. Returns the number of slots set.
+    name, which is the azmodel slot label (`mesh_export` docstring).
+
+    `ready=False` means `wait_for_model_rows` gave up on this entity: the first
+    material goes on the default slot so it is never worse off than the
+    flattened behaviour this replaces. Returns the number of slots set.
     """
     import azlmbr.bus as bus
     import azlmbr.editor as editor
-    import azlmbr.legacy.general as general
     import azlmbr.render as render
 
     import time
 
-    pair = _add_material_component(entity_id, entity_name)
-
-    wait_started = time.perf_counter()
-    waited = 0
-    while True:
-        found, _value = _get_property(pair, MODEL_SLOT_STABLE_ID % 0)
-        if found:
-            break
-        if waited >= MODEL_READY_WAIT_FRAMES:
-            MATERIAL_STATS["material_model_wait_s"] += time.perf_counter() - wait_started
-            MATERIAL_STATS["material_wait_frames"] += waited
-            report.warn("MAT_MODEL_NOT_READY", entity_name,
-                        "Model Materials rows never appeared within %d frames; "
-                        "assigned %r on the default slot instead"
-                        % (MODEL_READY_WAIT_FRAMES, assignments[0][0]))
-            editor.EditorComponentAPIBus(
-                bus.Broadcast, 'SetComponentProperty', pair,
-                MATERIAL_ASSET_PROPERTY, assignments[0][1])
-            return 0
-        general.idle_wait_frames(MODEL_READY_POLL_FRAMES)
-        waited += MODEL_READY_POLL_FRAMES
-
-    MATERIAL_STATS["material_model_wait_s"] += time.perf_counter() - wait_started
-    MATERIAL_STATS["material_wait_frames"] += waited
-    if waited:
-        MATERIAL_STATS["material_entities_that_waited"] += 1
+    if not ready:
+        report.warn("MAT_MODEL_NOT_READY", entity_name,
+                    "Model Materials rows never appeared within %d frames; "
+                    "assigned %r on the default slot instead"
+                    % (MODEL_READY_WAIT_FRAMES, assignments[0][0]))
+        editor.EditorComponentAPIBus(
+            bus.Broadcast, 'SetComponentProperty', pair,
+            MATERIAL_ASSET_PROPERTY, assignments[0][1])
+        return 0
 
     slot_started = time.perf_counter()
     # Stable id per row, once; rows are as many as the model has unique slots.

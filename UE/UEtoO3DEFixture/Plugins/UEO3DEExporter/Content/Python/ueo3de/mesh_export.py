@@ -54,7 +54,7 @@ Material slots: the baked temp asset carries the SOURCE asset's material list
 (`static_materials`, verbatim), so the FBX carries one material per used slot
 and the material NAMES are the UE material asset names. That name is what
 SceneAPI turns into the azmodel's material slot label, which is what the
-importer's per-slot assignment matches on (`prefab_build.assign_material_slots`).
+importer's per-slot assignment matches on (`prefab_build.finish_material_slots`).
 Slot names ("Wood") do NOT survive the FBX -- measured in
 `Tests/ue/probe_slots.py`: the FBX contains `M_Fixture_PBR`/`M_Fixture_ORM`
 but not `SlotA`/`SlotB` -- so the material asset name is the only label there
