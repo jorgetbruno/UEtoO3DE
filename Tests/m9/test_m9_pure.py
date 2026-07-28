@@ -71,17 +71,26 @@ def test_fov_conversion():
         pass
 
 
-def test_decal_rotation_is_right_multiplied_ry_minus_90():
+def quat_samples():
+    """Unit quaternions covering all axes and sign cases.
+
+    -30 degrees about Z is Fixture_02's Decal_01 (the yawed canary); the
+    tilted axes catch a remap that only works in the ground plane.
+    """
     samples = [(0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 1.0, 0.0)]
     for axis in ((1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 2, 3)):
         norm = math.sqrt(sum(c * c for c in axis))
         unit = [c / norm for c in axis]
-        for angle_deg in (30, 90, 150, 222.5):
+        for angle_deg in (-30, 30, 90, 150, 222.5):
             half = math.radians(angle_deg) / 2.0
             s = math.sin(half)
             samples.append((unit[0] * s, unit[1] * s, unit[2] * s,
                             math.cos(half)))
-    for q in samples:
+    return samples
+
+
+def test_decal_rotation_is_right_multiplied_ry_minus_90():
+    for q in quat_samples():
         composed = decal_build.compose_projection_rotation(q)
         expected = mat_mul(rotation_matrix(q), RY_MINUS_90)
         actual = rotation_matrix(composed)
@@ -98,6 +107,37 @@ def test_projection_axis_lands_on_plus_x():
     direction = mat_vec(rotation_matrix(composed), [0.0, 0.0, -1.0])
     check(all(close(direction[i], [1.0, 0.0, 0.0][i], 1e-9) for i in range(3)),
           "local -Z must land on +X, got %r" % (direction,))
+
+
+def test_projection_direction_survives_any_rotation():
+    """The property that actually matters, for ROTATED decals.
+
+    The identity check above cannot distinguish a correct remap from one
+    that happens to work only at identity. For every entity rotation, the
+    authored rotation's Atom -Z image must equal the manifest rotation's +X
+    image -- i.e. the decal keeps projecting exactly where UE projected it,
+    whatever the actor's yaw. (Verified by hand against Fixture_02's
+    yawed-30 Decal_01: exact to machine epsilon; the ~3e-7 seen when
+    reading the value back from the manifest is that file's 6-decimal float
+    rounding, not the algebra.)
+
+    The FOOTPRINT axes are asserted the same way: Atom local X must land on
+    the frame axis carrying the UE z half-extent and Atom local Y on the y
+    one -- a swapped pair keeps the projection correct while stretching the
+    decal the wrong way across the surface.
+    """
+    for q in quat_samples():
+        authored = decal_build.compose_projection_rotation(q)
+        frame, remapped = rotation_matrix(q), rotation_matrix(authored)
+        for atom_axis, frame_axis, label in (
+                ([0.0, 0.0, -1.0], [1.0, 0.0, 0.0], "projection (-Z -> +X)"),
+                ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], "footprint X -> frame Z"),
+                ([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], "footprint Y -> frame Y")):
+            got, want = mat_vec(remapped, atom_axis), mat_vec(frame, frame_axis)
+            check(all(close(a, b, 1e-12) for a, b in zip(got, want)),
+                  "%s wrong for rotation %r: %r vs %r"
+                  % (label, [round(v, 4) for v in q],
+                     [round(v, 6) for v in got], [round(v, 6) for v in want]))
 
 
 def test_corrected_transform_scale_mapping():
@@ -120,6 +160,7 @@ def main():
     for test in (test_fov_conversion,
                  test_decal_rotation_is_right_multiplied_ry_minus_90,
                  test_projection_axis_lands_on_plus_x,
+                 test_projection_direction_survives_any_rotation,
                  test_corrected_transform_scale_mapping):
         test()
     if failures:
