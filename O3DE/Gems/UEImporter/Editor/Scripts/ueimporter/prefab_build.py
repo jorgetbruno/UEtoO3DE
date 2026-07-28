@@ -469,6 +469,13 @@ def create_entities(document, asset_ids_by_guid, report, level_root_id, log=None
             # into the rotation (skel_build, LANE_B.md M8).
             from . import skel_build
             local = skel_build.corrected_local_transform(local)
+        if item.get("decal") is not None:
+            # Atom decals project along local -Z over a scaled unit box; UE
+            # projected along local +X with half-extent sizes. One local
+            # Ry(-90) plus the extent scale remaps the volume (decal_build).
+            from . import decal_build
+            local = decal_build.corrected_local_transform(
+                local, item["decal"]["half_extents_m"])
         _apply_transform(entity_id, local, report, item["name"],
                          children_count.get(item["id"], 0) > 0)
 

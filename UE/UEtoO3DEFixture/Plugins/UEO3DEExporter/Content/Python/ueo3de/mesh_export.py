@@ -533,6 +533,78 @@ def _find_level_actor(actor_path):
     return None
 
 
+def _export_spline(asset, base_path, output_root, options, emit):
+    """Bake and export one SplineMeshComponent's deformed geometry (M9).
+
+    `base_path` is "<actor path>:<component name>". The copy runs in
+    COMPONENT-LOCAL space (bWantsWorldSpace False), so the manifest entity's
+    transform places it -- unlike terrain, a spline bake stays movable.
+    Measured: copy_mesh_from_component DOES return the deformed geometry
+    (a bent cylinder's bounds, probe_m9_authoring.py), unlike its landscape
+    behaviour (0 triangles, probe_m7_geometry.py).
+    """
+    actor_path, _, component_name = base_path.rpartition(":")
+    actor = _find_level_actor(actor_path)
+    if actor is None:
+        raise MeshExportError(
+            "spline actor %r is not in the open level" % actor_path)
+    component = None
+    for candidate in actor.get_components_by_class(unreal.SplineMeshComponent) or []:
+        if candidate.get_name() == component_name:
+            component = candidate
+    if component is None:
+        raise MeshExportError(
+            "spline component %r not found on %r" % (component_name, actor_path))
+
+    dyn = unreal.DynamicMesh()
+    copy_options = unreal.GeometryScriptCopyMeshFromComponentOptions()
+    dyn = _unwrap(unreal.GeometryScript_SceneUtils.copy_mesh_from_component(
+        component, dyn, copy_options, False))
+    if dyn is None:
+        raise MeshExportError("copy_mesh_from_component returned no mesh for "
+                              + base_path)
+    box = _unwrap(unreal.GeometryScript_MeshQueries.get_mesh_bounding_box(dyn))
+    local_min = [box.min.x, box.min.y, box.min.z]
+    local_max = [box.max.x, box.max.y, box.max.z]
+
+    # The normal Lane B bake; a spline bake is never a mirror variant.
+    dyn = _unwrap(unreal.GeometryScript_MeshTransforms.scale_mesh(
+        dyn, unreal.Vector(-1.0, -1.0, 1.0), unreal.Vector(0.0, 0.0, 0.0)))
+    if dyn is None:
+        raise MeshExportError("spline bake scale_mesh failed")
+
+    node_name = asset["fbx_node_name"]
+    output_path = os.path.join(
+        output_root, asset["o3de_relative_path"]).replace("\\", "/")
+    temp_path, baked = _bake_temp_asset(dyn, node_name)
+    try:
+        slots = []
+        for index in range(component.get_num_materials()):
+            material = component.get_material(index)
+            entry = unreal.StaticMaterial()
+            entry.set_editor_property(
+                "material_interface",
+                material if material is not None
+                else _placeholder_material(index))
+            slots.append(entry)
+        if slots:
+            baked.set_editor_property("static_materials", slots)
+        _export_fbx(baked, output_path, options)
+    finally:
+        unreal.EditorAssetLibrary.delete_asset(temp_path)
+
+    # Normal-entry rule: the FBX intermediate is mirror-X of the local bake.
+    return {
+        "guid": asset["guid"],
+        "ue_path": asset["ue_path"],
+        "relative_path": asset["o3de_relative_path"],
+        "node_name": node_name,
+        "ue_bounds_min": [-local_max[0], local_min[1], local_min[2]],
+        "ue_bounds_max": [-local_min[0], local_max[1], local_max[2]],
+        "bytes": os.path.getsize(output_path),
+    }
+
+
 def source_bounds(mesh):
     """The asset's local AABB in UE space (centimetres)."""
     box = mesh.get_bounding_box()
@@ -577,6 +649,14 @@ def export_meshes(assets, output_root, log=None):
                     record["bytes"], record["node_name"]))
             continue
 
+        if fragment == "spline":
+            record = _export_spline(asset, base_path, output_root, options, emit)
+            exported.append(record)
+            emit("  %-42s -> %-46s (%d bytes, node %r, SPLINE)"
+                 % (base_path, asset["o3de_relative_path"],
+                    record["bytes"], record["node_name"]))
+            continue
+
         source = unreal.EditorAssetLibrary.load_asset(base_path)
         if source is None:
             raise MeshExportError("could not load source mesh " + base_path)
@@ -599,6 +679,33 @@ def export_meshes(assets, output_root, log=None):
             _export_fbx(baked, output_path, options)
         finally:
             unreal.EditorAssetLibrary.delete_asset(temp_path)
+
+        try:
+            lod_count = int(source.get_num_lods())
+        except Exception:
+            lod_count = 1
+        if lod_count > 1:
+            # The asset AABB is the UNION of all LODs; the bake reads LOD0
+            # only (M9's LOD_FLATTENED), so the FBX expectation must come
+            # from the baked geometry itself. dyn already carries the bake's
+            # negations, so mirror-Y of ITS bounds is the FBX-writer
+            # expectation for normal and variant entries alike.
+            box = _unwrap(unreal.GeometryScript_MeshQueries.get_mesh_bounding_box(dyn))
+            bounds_min = [box.min.x, -box.max.y, box.min.z]
+            bounds_max = [box.max.x, -box.min.y, box.max.z]
+            exported.append({
+                "guid": guid,
+                "ue_path": asset["ue_path"],
+                "relative_path": asset["o3de_relative_path"],
+                "node_name": node_name,
+                "ue_bounds_min": bounds_min,
+                "ue_bounds_max": bounds_max,
+                "bytes": os.path.getsize(output_path),
+            })
+            emit("  %-42s -> %-46s (%d bytes, node %r, LOD0 of %d)"
+                 % (asset["ue_path"], asset["o3de_relative_path"],
+                    exported[-1]["bytes"], node_name, lod_count))
+            continue
 
         bounds_min, bounds_max = source_bounds(source)
         if not mirrored:

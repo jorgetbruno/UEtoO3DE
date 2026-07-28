@@ -47,6 +47,7 @@ Tests\m5\run_m5.bat          M5: light conversion + write order -> lights in the
 Tests\m6\run_m6.bat          M6: sky/fog/post-process mapping -> environment in the saved prefab
 Tests\m7\run_m7.bat [dir]    M7: terrain contract -> sphere drop on the imported terrain
 Tests\m8\run_m8.bat          M8: skeletal frame math -> .actor/.motion products -> playback by frame capture
+Tests\m9\run_m9.bat          M9: Fixture_02 export -> instance/spline/LOD/decal/camera assertions -> import readbacks
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
 
@@ -70,6 +71,11 @@ The M8 fixture canaries import once from `Tests\ue\data\SK_Canary.fbx`
 (CC0, Quaternius "Platformer Game Kit") via `Tests\ue\add_m8_skeletal.py`,
 which also regenerates `Tests\m8\skel_reference.json` (the UE-side truth the
 artifact test compares against).
+
+`Fixture_02` (the M9 feature level: instanced meshes, a bent spline mesh, a
+two-LOD mesh, a decal, a camera) is built once by
+`Tests\ue\build_fixture_02.py` — FULL editor run (StaticMeshEditorSubsystem
+is None in commandlets). Fixture_01 stays frozen per the plan.
 
 Each `.bat` propagates a real exit code and CI must assert on that, never on console
 text (plan constraint 10). `run_m2.bat --cold` deletes the staged sources and their

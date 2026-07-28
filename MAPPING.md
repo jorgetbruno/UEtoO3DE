@@ -311,6 +311,16 @@ exporter walks render objects that do not exist under `-nullrhi`
 through `export_fixture.bat` (full editor, result-file contract), same as
 `export_level.bat` has since M7.
 
+## Foliage, decals, splines, LODs, cameras (M9)
+
+| UE | O3DE | Note |
+|---|---|---|
+| ISM/HISM components (incl. foliage) | one child entity **per instance**, all sharing one mesh asset | Atom re-instances identical models at render time, but the EDITOR does not scale to six figures of entities: per-component ceiling `UEO3DE_MAX_INSTANCES` (default 2000), excess dropped loudly → `ACTOR_INSTANCES_EXPANDED` / `INSTANCES_TRUNCATED`. (The measured showcase `InstancedFoliageActor` is empty; Fixture_02 carries the canary) |
+| `SplineMeshComponent` | a child entity over a `#spline` baked asset | `copy_mesh_from_component` DOES return the deformed geometry (measured — unlike its landscape behaviour); baked in COMPONENT-LOCAL space through the normal Lane B pipeline, so the entity stays movable → `SPLINE_BAKED`. Collision source "none" → the render-mesh trimesh path, and the render mesh IS the deformed bake |
+| static mesh LODs | LOD0 only | `LOD_FLATTENED` once per multi-LOD asset; a real LOD chain is follow-on work (`.assetinfo` LOD rules) |
+| `DecalActor` | Atom **Decal** component | UE projects along local +X with `decal_size` HALF-extents (x = depth); Atom projects along local −Z over a unit box scaled by entity scale. The importer composes a local Ry(−90) and scale `(2hz, 2hy, 2hx)` (decal_build, matrix-identity tested). The material converts through StandardPBR, not an Atom decal material type → `DECAL_MATERIAL_APPROX`; `Sort Key` maps from `sort_order` |
+| `CameraActor` | **Camera** component | UE `field_of_view` is HORIZONTAL; O3DE takes VERTICAL: `2·atan(tan(h/2)/aspect)` with the manifest carrying both raw numbers. Orthographic → `CAMERA_UNSUPPORTED_MODE`, transform-only entity |
+
 ## World Partition detection
 
 UE 5.8 exposes no direct route from Python: `UWorld` has neither `persistent_level` nor

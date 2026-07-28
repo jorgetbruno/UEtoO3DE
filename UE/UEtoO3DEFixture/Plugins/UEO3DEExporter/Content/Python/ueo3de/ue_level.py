@@ -357,6 +357,17 @@ MIRROR_SUFFIX = "#mx"
 # Landscape ACTOR's path (a landscape has no asset), which mesh_export
 # resolves to the live actor in the open level.
 TERRAIN_SUFFIX = "#terrain"
+# Spline-mesh bakes (M9): the part before '#' is "<actor path>:<component>",
+# resolved to the live SplineMeshComponent; the deformed geometry bakes
+# through the normal Lane B pipeline in COMPONENT-LOCAL space, so the entity
+# keeps the component's transform.
+SPLINE_SUFFIX = "#spline"
+
+# Instance-expansion ceiling (M9). Foliage/ISM components expand to one child
+# entity per instance -- Atom re-instances identical models at render time,
+# but the EDITOR does not scale to six figures of entities: a 100k-instance
+# level will not open. Per component; the excess is dropped LOUDLY.
+INSTANCE_CEILING = int(os.environ.get("UEO3DE_MAX_INSTANCES", "2000"))
 
 
 class AssetTable:
@@ -424,6 +435,16 @@ class AssetTable:
 
         subject = naming.package_path(ue_path)
         source, shapes = _collision_shapes(mesh, subject, self._warnings)
+
+        # M9: only LOD0 is baked (RENDER_DATA LOD0); a multi-LOD source says
+        # so once, at the asset, rather than once per placed actor.
+        try:
+            lod_count = int(mesh.get_num_lods())
+        except Exception:
+            lod_count = 1
+        if lod_count > 1 and not mirrored:
+            self._warnings.add("LOD_FLATTENED", subject,
+                               "%d LODs in UE; only LOD0 exported" % lod_count)
 
         box = mesh.get_bounding_box()
         aabb_min, aabb_max = _converted_aabb(_vec3(_field(box, "min")),
@@ -536,6 +557,53 @@ class AssetTable:
         }
         return guid
 
+    def add_spline_bake(self, actor_path, component, warnings):
+        """Register a SplineMeshComponent's baked-geometry asset entry (M9).
+
+        The ue_path is "<actor path>:<component name>#spline" -- the same
+        fragment technique as #mx/#terrain: guid from the stored path,
+        sanitize maps ':'/'#' onto '_', mesh_export resolves the live
+        component and bakes `copy_mesh_from_component` (component-LOCAL, so
+        the entity keeps the component transform) through the normal Lane B
+        pipeline. Collision source is "none": the physics block sends the
+        importer down its render-mesh triangle-collider path, and the render
+        mesh IS the deformed bake.
+        """
+        key = "%s:%s%s" % (actor_path, component.get_name(), SPLINE_SUFFIX)
+        guid = naming.asset_guid(key)
+        if guid in self._entries:
+            return guid
+
+        label = "%s.%s" % (actor_path.rsplit(".", 1)[-1], component.get_name())
+        warnings.add("SPLINE_BAKED", label,
+                     "deformed spline-mesh geometry baked to a static mesh; "
+                     "the live spline is lost")
+
+        node_name = "".join(c if c.isalnum() else "_" for c in label) + "_Spline"
+        slot_names = []
+        slot_material_names = []
+        for index in range(component.get_num_materials()):
+            material = component.get_material(index)
+            slot_names.append("")
+            slot_material_names.append(material.get_name() if material
+                                       else naming.empty_slot_label(index))
+
+        self._entries[guid] = {
+            "guid": guid,
+            "kind": "static_mesh",
+            "ue_path": key,
+            "name": node_name,
+            "o3de_relative_path": self._claim(key, "static_mesh"),
+            "fbx_node_name": node_name,
+            # mesh_export fills real bounds at bake time; the asset entry
+            # carries the component's local bounds when readable.
+            "bounds_local": _spline_local_bounds(component),
+            "collision": {"source": "none", "shapes": []},
+            "material_slot_names": slot_names,
+            "material_slot_material_names": slot_material_names,
+        }
+        return guid
+
     def add_skeletal_mesh(self, mesh, component):
         """Register a skeletal mesh asset (M8). `component` supplies the bone
         table -- get_num_bones lives on SkinnedMeshComponent, not the asset.
@@ -620,6 +688,8 @@ def _classify(actor):
     """Coarse entity kind. Physics/trigger detection is behavioural, below."""
     for class_name, kind in (("StaticMeshActor", "static_mesh"),
                              ("SkeletalMeshActor", "skeletal_mesh"),
+                             ("DecalActor", "decal"),
+                             ("CameraActor", "camera"),
                              ("Light", "light"),
                              ("SkyLight", "environment"),
                              ("ExponentialHeightFog", "environment"),
@@ -943,6 +1013,72 @@ def _mesh_block(actor, assets, subject, warnings, mirrored=False):
                                       subject, warnings, mirrored=mirrored)
 
 
+def _spline_local_bounds(component):
+    """Component-local AABB (converted) for the asset entry, best effort."""
+    try:
+        local = component.get_local_bounds()
+        box_min = local[0] if isinstance(local, tuple) else local
+        box_max = local[1] if isinstance(local, tuple) else local
+        aabb_min, aabb_max = _converted_aabb(_vec3(box_min), _vec3(box_max))
+        return {"min": aabb_min, "max": aabb_max}
+    except Exception:
+        return {"min": [0.0, 0.0, 0.0], "max": [0.0, 0.0, 0.0]}
+
+
+def _decal_block(actor, assets, subject, warnings):
+    """The manifest `decal` block for a DecalActor (M9).
+
+    UE decals project along the component's LOCAL +X, with `decal_size` as
+    HALF-extents (x = projection depth, cm). Atom's Decal component projects
+    along the entity's -Z with the footprint from the entity scale; the
+    importer owns that remapping (decal_build). The material converts through
+    the M4 StandardPBR subset, never an Atom decal material type -- say so.
+    """
+    component = actor.get_component_by_class(unreal.DecalComponent)
+    if component is None:
+        return None
+    material = None
+    try:
+        material = component.get_decal_material()
+    except Exception:
+        material = _field(component, "decal_material")
+    material_guid = assets.add_material(material) if material is not None else None
+    warnings.add("DECAL_MATERIAL_APPROX", subject,
+                 "decal material %r converts through the StandardPBR subset"
+                 % (material.get_name() if material else None))
+    size = _vec3(_field(component, "decal_size", unreal.Vector(128, 256, 256)))
+    return {
+        "material_guid": material_guid,
+        # Half-extents, metres, UE order (x = projection depth).
+        "half_extents_m": [lane_a.convert_length(abs(v)) for v in size],
+        "sort_order": int(_field(component, "sort_order", 0) or 0),
+        "fade_screen_size": float(_field(component, "fade_screen_size", 0.01) or 0.0),
+    }
+
+
+def _camera_block(actor, subject, warnings):
+    """The manifest `camera` block for a CameraActor (M9).
+
+    UE's field_of_view is HORIZONTAL degrees; O3DE's Camera takes VERTICAL.
+    Both numbers ship (plus the aspect ratio the conversion needs) so the
+    importer's arithmetic is testable offline.
+    """
+    component = actor.get_component_by_class(unreal.CameraComponent)
+    if component is None:
+        return None
+    projection = _enum_name(_field(component, "projection_mode"), "perspective")
+    if projection != "perspective":
+        warnings.add("CAMERA_UNSUPPORTED_MODE", subject,
+                     "projection mode %r has no v1 mapping" % projection)
+        return None
+    return {
+        "fov_horizontal_deg": float(_field(component, "field_of_view", 90.0)),
+        "aspect_ratio": float(_field(component, "aspect_ratio", 16.0 / 9.0)),
+        "constrain_aspect_ratio": bool(_field(component, "constrain_aspect_ratio",
+                                              False)),
+    }
+
+
 def _skeletal_block(component, assets, subject, warnings):
     """The manifest `skeletal` block for one SkeletalMeshComponent (M8).
 
@@ -1048,12 +1184,18 @@ def _extract_mesh_components(actor, actor_entity, assets, warnings):
     skipped = []
     for component in actor.get_components_by_class(unreal.StaticMeshComponent) or []:
         subject = "%s.%s" % (label, component.get_name())
+        if isinstance(component, getattr(unreal, "SplineMeshComponent", ())):
+            # M9: the deformed geometry bakes to a '#spline' asset in
+            # COMPONENT-LOCAL space, so the child entity keeps the
+            # component's own transform and the mesh pipeline is unchanged.
+            children.extend(_spline_child(actor, actor_entity, component,
+                                          subject, assets, warnings))
+            continue
         if isinstance(component, getattr(unreal, "InstancedStaticMeshComponent", ())):
-            # No ISMC in the measured levels; refuse loudly-but-softly if one
-            # appears rather than exporting only the component origin.
-            warnings.add("ACTOR_CLASS_UNMAPPED", subject,
-                         "instanced static mesh components are not extracted")
-            skipped.append(component.get_name())
+            # M9: expand instances into child entities sharing one mesh
+            # asset (Atom re-instances identical models at render time).
+            children.extend(_instance_children(actor, actor_entity, component,
+                                               subject, assets, warnings))
             continue
 
         world_ue = component.get_world_transform()
@@ -1159,6 +1301,107 @@ def _extract_mesh_components(actor, actor_entity, assets, warnings):
     return children
 
 
+def _child_transforms(world_ue, actor, subject, warnings):
+    """(world, local, mirrored) for a component/instance world transform."""
+    world, mirrored = _transform_from_parts(
+        _vec3(world_ue.translation), _quat_xyzw(world_ue.rotation),
+        _vec3(world_ue.scale3d), subject, warnings)
+    relative_ue = unreal.MathLibrary.make_relative_transform(
+        world_ue, actor.get_actor_transform())
+    local, mirrored_local = _transform_from_parts(
+        _vec3(relative_ue.translation), _quat_xyzw(relative_ue.rotation),
+        _vec3(relative_ue.scale3d), subject, warnings)
+    if mirrored != mirrored_local:
+        warnings.add("XFORM_NEGATIVE_SCALE", subject,
+                     "component/actor mirror parity disagrees; not represented")
+        mirrored = False
+    return world, local, mirrored
+
+
+def _spline_child(actor, actor_entity, component, subject, assets, warnings):
+    """One child entity over a '#spline' baked asset (M9)."""
+    mesh_guid = assets.add_spline_bake(actor.get_path_name(), component, warnings)
+    world, local, _mirrored = _child_transforms(
+        component.get_world_transform(), actor, subject, warnings)
+
+    slots = []
+    for index in range(component.get_num_materials()):
+        material = component.get_material(index)
+        slots.append({
+            "index": index,
+            "slot_name": "",
+            "material_guid": assets.add_material(material)
+            if material is not None else None,
+        })
+
+    actor_path = actor.get_path_name()
+    entity = {
+        "id": naming.entity_id(actor_path + ":" + component.get_name()),
+        "name": subject,
+        "ue_class": component.get_class().get_name(),
+        "ue_actor_path": actor_path + ":" + component.get_name(),
+        "kind": "static_mesh",
+        "parent_id": actor_entity["id"],
+        "mobility": _enum_name(_field(component, "mobility"), "static"),
+        "transform": {"world": world, "local": local},
+        "mesh": {"asset_guid": mesh_guid, "material_slots": slots},
+    }
+    physics = _physics_block(component, mesh_guid, subject, warnings)
+    if physics["has_collision"]:
+        entity["physics"] = physics
+    return [entity]
+
+
+def _instance_children(actor, actor_entity, component, subject, assets, warnings):
+    """Child entities for an ISM/HISM component's instances (M9)."""
+    count = component.get_instance_count()
+    if count == 0:
+        return []
+    exported = min(count, INSTANCE_CEILING)
+    if exported < count:
+        warnings.add("INSTANCES_TRUNCATED", subject,
+                     "%d of %d instances exported (UEO3DE_MAX_INSTANCES=%d)"
+                     % (exported, count, INSTANCE_CEILING))
+    warnings.add("ACTOR_INSTANCES_EXPANDED", subject,
+                 "%d instance(s) of %s expanded to child entities"
+                 % (exported, component.get_class().get_name()))
+
+    actor_path = actor.get_path_name()
+    children = []
+    for index in range(exported):
+        result = component.get_instance_transform(index, True)
+        ok = result[0] if isinstance(result, tuple) else True
+        world_ue = result[1] if isinstance(result, tuple) else result
+        if not ok:
+            continue
+        instance_subject = "%s#%d" % (subject, index)
+        world, local, mirrored = _child_transforms(
+            world_ue, actor, instance_subject, warnings)
+        mesh_block, mesh_guid = _mesh_block_from_component(
+            component, assets, instance_subject, warnings, mirrored=mirrored)
+        if mesh_block is None:
+            break   # no mesh on the component: nothing to place, once
+        entity = {
+            "id": naming.entity_id("%s:%s#%d" % (actor_path,
+                                                 component.get_name(), index)),
+            "name": instance_subject,
+            "ue_class": component.get_class().get_name(),
+            "ue_actor_path": "%s:%s#%d" % (actor_path, component.get_name(),
+                                           index),
+            "kind": "static_mesh",
+            "parent_id": actor_entity["id"],
+            "mobility": _enum_name(_field(component, "mobility"), "static"),
+            "transform": {"world": world, "local": local},
+            "mesh": mesh_block,
+        }
+        physics = _physics_block(component, mesh_guid, instance_subject,
+                                 warnings)
+        if physics["has_collision"]:
+            entity["physics"] = physics
+        children.append(entity)
+    return children
+
+
 def _terrain_entity(actor, entity, assets, warnings):
     """A Landscape actor -> a static-mesh entity over a '#terrain' asset (M7).
 
@@ -1252,6 +1495,16 @@ def _build_entity(actor, assets, warnings):
             actor.skeletal_mesh_component, assets, label, warnings)
         if skeletal_block is not None:
             entity["skeletal"] = skeletal_block
+
+    if kind == "decal":
+        decal = _decal_block(actor, assets, label, warnings)
+        if decal is not None:
+            entity["decal"] = decal
+
+    if kind == "camera":
+        camera = _camera_block(actor, label, warnings)
+        if camera is not None:
+            entity["camera"] = camera
 
     if kind == "light":
         light = _light_block(actor)

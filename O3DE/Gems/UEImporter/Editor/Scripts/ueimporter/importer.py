@@ -259,6 +259,44 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             " + Simple Motion" if skeletal.get("animation_guid") else ""))
     report.count("skeletal_entities", skeletal_authored)
 
+    # --- decals + cameras (M9) ---
+    from . import camera_build
+    from . import decal_build
+    emit("authoring decals + cameras")
+    decals = 0
+    cameras = 0
+    for item in document["entities"]:
+        entity_id = created.get(item["id"])
+        if entity_id is None:
+            continue
+        decal = item.get("decal")
+        if decal is not None:
+            material_asset = material_asset_ids.get(decal.get("material_guid"))
+            plan = decal_build.plan_decal(decal, item["name"])
+            if decal.get("material_guid") and material_asset is None:
+                # Unconverted material: author the volume + sort key only,
+                # and say so -- an invisible decal must never be silent.
+                plan["properties"] = [p for p in plan["properties"]
+                                      if p[1] != "material_asset"]
+                report.warn("DECAL_MATERIAL_UNCONVERTED", item["name"],
+                            "the decal's material did not convert; the decal "
+                            "imports without a material")
+            decal_build.author_decal(entity_id, plan, material_asset,
+                                     item["name"],
+                                     prefab_build.resolve_component_type)
+            decals += 1
+            emit("  %-22s Decal" % item["name"])
+        camera = item.get("camera")
+        if camera is not None:
+            plan = camera_build.plan_camera(camera, item["name"])
+            camera_build.author_camera(entity_id, plan, item["name"],
+                                       prefab_build.resolve_component_type)
+            cameras += 1
+            emit("  %-22s Camera (v-fov %.2f deg)"
+                 % (item["name"], plan["properties"][0][1]))
+    report.count("decals_created", decals)
+    report.count("cameras_created", cameras)
+
     # --- lights (M5) ---
     emit("authoring lights")
     lights = 0

@@ -114,6 +114,32 @@ CODES = {
               "from the per-bone PhysicsAsset; per-bone bodies have no v1 "
               "mapping, so the entity imports without physics."),
 
+    # --- foliage / decals / splines / LODs / cameras (M9) ---
+    "ACTOR_INSTANCES_EXPANDED": (
+        INFO, "An instanced static mesh component's instances were expanded "
+              "into individual child entities sharing one mesh asset. O3DE "
+              "has no per-component instancing to import into; Atom "
+              "re-instances identical models at render time."),
+    "INSTANCES_TRUNCATED": (
+        WARN, "An instanced component carries more instances than the export "
+              "ceiling (UEO3DE_MAX_INSTANCES); the excess was dropped. A "
+              "level of 100k instances as individual entities will not open."),
+    "SPLINE_BAKED": (
+        WARN, "A SplineMeshComponent's deformed geometry was baked to a "
+              "static mesh; the live spline (control points, later edits) "
+              "is lost."),
+    "LOD_FLATTENED": (
+        WARN, "The source mesh has multiple LODs; only LOD0 is exported and "
+              "the model renders at full detail at every distance."),
+    "DECAL_MATERIAL_APPROX": (
+        WARN, "The decal's material converts through the StandardPBR subset, "
+              "not an Atom decal material type; projection blending will not "
+              "match UE's deferred decal exactly."),
+    "CAMERA_UNSUPPORTED_MODE": (
+        WARN, "The camera uses a projection mode with no v1 mapping "
+              "(orthographic); the entity keeps its transform and gets no "
+              "camera component."),
+
     # --- physics source data (M1 records, M3 consumes) ---
     "PHYS_NO_SIMPLE_COLLISION": (
         INFO, "Static mesh has no simple collision primitives; M3 must fall "

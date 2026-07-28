@@ -2822,7 +2822,7 @@
     "name": "Fixture_01",
     "ue_package": "/Game/Maps/Fixture_01"
   },
-  "schema_version": 6,
+  "schema_version": 7,
   "units": {
     "angle": "degrees",
     "coordinate_system": "o3de_right_handed_z_up",

@@ -228,6 +228,16 @@ def validate_references(document):
                     errors.append("entity %s: animation_guid points at a "
                                   "non-animation asset" % entity["name"])
 
+        decal = entity.get("decal")
+        if decal is not None and decal.get("material_guid") is not None:
+            target = assets.get(decal["material_guid"])
+            if target is None:
+                errors.append("entity %s: decal material_guid does not resolve"
+                              % entity["name"])
+            elif target["kind"] != "material":
+                errors.append("entity %s: decal material_guid points at a "
+                              "non-material" % entity["name"])
+
         physics = entity.get("physics")
         if physics is not None:
             source = physics.get("shapes_from_asset")

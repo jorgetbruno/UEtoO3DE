@@ -29,9 +29,12 @@ import json
 # 5 -> 6 (M8): new asset kinds `skeletal_mesh` (bone_count/bone_names,
 # native-FBX export, product `.actor`) and `animation` (product `.motion`);
 # entities gained a `skeletal` block; `units` gained `lane_b_skeletal_rule`.
-SCHEMA_VERSION = 6
+# 6 -> 7 (M9): entity kinds `decal` + `camera` with their blocks; instanced
+# components expand to child entities and spline bakes ride `#spline`
+# fragments (no schema shape change for either).
+SCHEMA_VERSION = 7
 TOOL_NAME = "UEO3DEExporter"
-TOOL_VERSION = "0.5.0"
+TOOL_VERSION = "0.6.0"
 
 # The Lane A basis map actually applied, recorded so the O3DE importer can
 # refuse a manifest produced under a different convention rather than

@@ -55,6 +55,16 @@ exists, is a design change recorded here rather than a patch.
 | Playback verification | n/a | EMotionFX exposes **no Python bus** in 26.05, so joint transforms are unverifiable headless; the acceptance proves playback by frame-capture pixel deltas and bone fidelity by byte-searching every manifest bone name in the `.actor` product |
 | Morph targets, cloth, physics-driven tails | animated at runtime | morph targets travel in the FBX (`export_morph_targets`) but nothing drives them; cloth/physics assets are dropped with the PhysicsAsset |
 
+## Foliage, decals, splines, LODs, cameras (M9)
+
+| Behaviour | UE | → O3DE |
+|---|---|---|
+| Instanced meshes / foliage | one component draws N instances; painting tools, per-instance culling | N individual entities sharing one mesh asset (Atom re-instances identical models at render time). Editor scalability caps the expansion at `UEO3DE_MAX_INSTANCES` (default 2000) per component — beyond it instances are DROPPED (`INSTANCES_TRUNCATED`); a 100k-instance forest is out of v1 scope |
+| Spline meshes | live spline: move a control point, the mesh re-deforms | a frozen bake of the current deformation (`SPLINE_BAKED`); per-instance unique mesh assets, no dedup across identical splines |
+| LODs | per-distance LOD chain + screen-size switching | LOD0 everywhere (`LOD_FLATTENED`): full detail at every distance — visually identical, costs GPU on heavy scenes |
+| Decals | deferred decal material domain, per-channel blend modes, fade | Atom Decal with a **StandardPBR** material (`DECAL_MATERIAL_APPROX`): projection works, blending semantics differ; `fade_screen_size` has no mapping. The projection-axis remap (local Ry(−90) + extent scale) is derived from both engines' documented conventions, not yet screenshot-verified |
+| Cameras | horizontal FOV, aspect constraints, camera post-process | vertical-FOV Camera component (converted); no aspect constraint, no per-camera post-process; orthographic cameras dropped (`CAMERA_UNSUPPORTED_MODE`) |
+
 ## Lights (M5)
 
 | Behaviour | UE | → O3DE (Atom) |

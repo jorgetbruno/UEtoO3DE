@@ -25,6 +25,10 @@ CODES = {
         WARN, "O3DE applies non-uniform scale at the component rather than in "
               "the transform hierarchy, so it does not reach child entities "
               "the way UE's does."),
+    "DECAL_MATERIAL_UNCONVERTED": (
+        WARN, "A decal's material did not convert through the StandardPBR "
+              "subset; the decal entity imports with its volume and sort key "
+              "but no material assigned."),
     "MESH_MISSING": (
         WARN, "Entity is a static mesh actor in UE but carries no mesh "
               "reference; imported as a transform-only placeholder."),

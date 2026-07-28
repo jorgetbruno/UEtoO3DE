@@ -16,9 +16,9 @@
   ],
   "properties": {
     "schema_version": {
-      "description": "Bumped whenever a change would break an existing importer. 2 (M2) added assets[].fbx_node_name and units.lane_b_rule; 3 (M4) added material_data and the texture asset kind; 4 (M6) added entities[].environment; 5 (M4 slot fidelity) added assets[].material_slot_material_names; 6 (M8) added the skeletal_mesh/animation asset kinds, entities[].skeletal and units.lane_b_skeletal_rule.",
+      "description": "Bumped whenever a change would break an existing importer. 2 (M2) added assets[].fbx_node_name and units.lane_b_rule; 3 (M4) added material_data and the texture asset kind; 4 (M6) added entities[].environment; 5 (M4 slot fidelity) added assets[].material_slot_material_names; 6 (M8) added the skeletal_mesh/animation asset kinds, entities[].skeletal and units.lane_b_skeletal_rule; 7 (M9) added the decal/camera entity kinds and blocks.",
       "type": "integer",
-      "const": 6
+      "const": 7
     },
     "generator": {
       "type": "object",
@@ -615,6 +615,8 @@
           "enum": [
             "static_mesh",
             "skeletal_mesh",
+            "decal",
+            "camera",
             "light",
             "trigger",
             "environment",
@@ -657,6 +659,12 @@
         "skeletal": {
           "$ref": "#/definitions/skeletal"
         },
+        "decal": {
+          "$ref": "#/definitions/decal"
+        },
+        "camera": {
+          "$ref": "#/definitions/camera"
+        },
         "light": {
           "$ref": "#/definitions/light"
         },
@@ -665,6 +673,56 @@
         },
         "environment": {
           "$ref": "#/definitions/environment"
+        }
+      }
+    },
+    "decal": {
+      "description": "A decal entity (M9): Atom Decal component. UE projects along local +X with decal_size half-extents (x = projection depth); the importer owns the axis remap onto Atom's projection. The material converts through the StandardPBR subset (DECAL_MATERIAL_APPROX).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "material_guid",
+        "half_extents_m",
+        "sort_order"
+      ],
+      "properties": {
+        "material_guid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "half_extents_m": {
+          "$ref": "#/definitions/vec3"
+        },
+        "sort_order": {
+          "type": "integer"
+        },
+        "fade_screen_size": {
+          "type": "number"
+        }
+      }
+    },
+    "camera": {
+      "description": "A camera entity (M9): O3DE Camera component. UE field_of_view is HORIZONTAL degrees; O3DE takes VERTICAL -- both the number and the aspect ratio the conversion needs are carried so the arithmetic is testable offline. Orthographic cameras are dropped (CAMERA_UNSUPPORTED_MODE).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fov_horizontal_deg",
+        "aspect_ratio"
+      ],
+      "properties": {
+        "fov_horizontal_deg": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 179
+        },
+        "aspect_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "constrain_aspect_ratio": {
+          "type": "boolean"
         }
       }
     },

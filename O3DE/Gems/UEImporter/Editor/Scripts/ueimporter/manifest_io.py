@@ -21,7 +21,13 @@ checks matter more than the rest:
 
 import json
 
-SUPPORTED_SCHEMA_VERSION = 6
+# 7 (M9) is additive over 6 (M8): new entity kinds/blocks only, no change to
+# any existing field or either Lane B rule -- so v6 documents import exactly
+# as they did. NEWER-than-supported documents are still refused (quietly
+# ignoring fields is the failure this check exists for), as is anything
+# older than 6 (v5 predates lane_b_skeletal_rule).
+SUPPORTED_SCHEMA_VERSIONS = (6, 7)
+SUPPORTED_SCHEMA_VERSION = 7
 EXPECTED_LANE_A_RULE = "negate_y"
 EXPECTED_LANE_B_RULE = "negate_y_scene_rz180"
 # M8: skeletal geometry ships through UE's native exporter with no bake stage,
@@ -47,10 +53,10 @@ def load(path):
 
 def verify(document, path="<manifest>"):
     version = document.get("schema_version")
-    if version != SUPPORTED_SCHEMA_VERSION:
+    if version not in SUPPORTED_SCHEMA_VERSIONS:
         raise ManifestError(
             "%s: schema_version is %r, this importer supports %r"
-            % (path, version, SUPPORTED_SCHEMA_VERSION))
+            % (path, version, SUPPORTED_SCHEMA_VERSIONS))
 
     units = document.get("units") or {}
     for key, expected in (("lane_a_rule", EXPECTED_LANE_A_RULE),

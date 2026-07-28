@@ -76,8 +76,9 @@ def load_manifest():
 # ---------------------------------------------------------------------------
 
 def test_manifest_contract(document):
-    check(document["schema_version"] == 6,
-          "schema_version %r != 6" % document["schema_version"])
+    check(document["schema_version"] >= 6,
+          "schema_version %r < 6 (predates the skeletal contract)"
+          % document["schema_version"])
     check(document["units"].get("lane_b_skeletal_rule")
           == "native_y_scene_rz180_entity_rz180",
           "lane_b_skeletal_rule is %r" % document["units"].get("lane_b_skeletal_rule"))
