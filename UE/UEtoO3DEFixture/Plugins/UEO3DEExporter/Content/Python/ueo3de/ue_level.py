@@ -1633,12 +1633,20 @@ def _guard_world_partition(world, level, map_path, warnings):
 # entry point
 # ---------------------------------------------------------------------------
 
-def export_level(map_path, output_path):
+def export_level(map_path, output_path, load=True):
     """Export `map_path` to `output_path`.
 
     Returns (document, warnings, asset_table); the caller runs
     `asset_table.texture_bank.export_all(...)` to write the texture files the
     manifest references (M4).
+
+    `load` opens the map first, which is what a batch export wants: the run
+    is then reproducible regardless of what the editor happened to have open.
+    It is exactly wrong for the M10 menu item, though -- `load_level` on the
+    level the user is standing in DISCARDS their unsaved edits, so "Export
+    Level to O3DE..." would silently throw away work and then export the
+    version on disk. With `load=False` the caller asserts the map is already
+    current and the in-memory state is what gets exported.
 
     On an aborting condition the manifest is still written -- carrying the
     error record and an empty entity list -- so CI has a machine-readable
@@ -1649,8 +1657,17 @@ def export_level(map_path, output_path):
     level_info = {"package": map_path, "name": level_name}
 
     level_subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-    if not level_subsystem.load_level(map_path):
-        raise ExportAborted("failed to load level " + map_path)
+    if load:
+        if not level_subsystem.load_level(map_path):
+            raise ExportAborted("failed to load level " + map_path)
+    else:
+        current = level_subsystem.get_current_level().get_outer().get_path_name()
+        current = current.split(":")[0].split(".")[0]
+        if current != map_path:
+            raise ExportAborted(
+                "asked to export %s without loading it, but the open level is "
+                "%s. Refusing rather than exporting the wrong level."
+                % (map_path, current))
 
     actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     actors = actor_subsystem.get_all_level_actors()

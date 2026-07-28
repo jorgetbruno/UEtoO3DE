@@ -6,7 +6,7 @@
 	"Description": "Exports UE levels and assets to the UEtoO3DE interchange manifest (O3DE 26.05 target).",
 	"Category": "UEtoO3DE",
 	"CreatedBy": "UEtoO3DE",
-	"CanContainContent": false,
+	"CanContainContent": true,
 	"IsBetaVersion": true,
 	"Installed": false,
 	"Modules": [

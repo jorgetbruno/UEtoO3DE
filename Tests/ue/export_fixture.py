@@ -45,7 +45,7 @@ for _path in (PACKAGE_ROOT, LIB_ROOT):
         sys.path.insert(0, _path)
 
 import fbx_reader  # noqa: E402
-from ueo3de import lane_a, mesh_export, ue_level  # noqa: E402
+from ueo3de import export_api  # noqa: E402
 from ueo3de.warnings import ERROR, WARN  # noqa: E402
 
 # The FBX is still in centimetres; only the .assetinfo scales it to metres.
@@ -96,42 +96,21 @@ def verify_fbx_intermediate(record):
 
 status = "PASS"
 try:
-    log("== manifest ==")
-    document, warnings, asset_table = ue_level.export_level(MAP_PATH, MANIFEST_PATH)
-    log("  wrote " + MANIFEST_PATH)
-    log("  entities: %d  assets: %d  warnings: %d (%d warn, %d error)"
-        % (len(document["entities"]), len(document["assets"]), len(warnings),
-           warnings.count_by_severity(WARN), warnings.count_by_severity(ERROR)))
+    # The export sequence itself lives in the plugin (ueo3de.export_api) since
+    # M10, so the "Export Level to O3DE..." menu item and this acceptance run
+    # drive the same code. What stays here is the verification the menu item
+    # has no business doing: re-reading every written FBX and checking its
+    # bounds against the Lane B contract.
+    result = export_api.export_level(MAP_PATH, OUTPUT_DIR, log=log)
+    document = result["document"]
+    warnings = result["warnings"]
+    exported = result["static_meshes"]
+    skeletal_exported = result["skeletal"]
+    log("  %d warn, %d error"
+        % (warnings.count_by_severity(WARN), warnings.count_by_severity(ERROR)))
     for record in document["warnings"]:
         log("    [%s] %s %s - %s" % (record["severity"], record["code"],
                                      record["subject"], record["detail"]))
-
-    log("== static mesh FBX export ==")
-    exported = mesh_export.export_meshes(document["assets"], ASSETS_ROOT, log=log)
-    mesh_assets = [a for a in document["assets"] if a["kind"] == "static_mesh"]
-    log("  %d FBX files for %d unique mesh GUIDs" % (len(exported), len(mesh_assets)))
-    if len(exported) != len(mesh_assets):
-        raise RuntimeError("exported %d FBX files for %d mesh assets"
-                           % (len(exported), len(mesh_assets)))
-
-    log("== skeletal mesh + animation FBX export (M8, native exporter) ==")
-    skeletal_exported = mesh_export.export_skeletal(
-        document["assets"], ASSETS_ROOT, log=log)
-    skeletal_assets = [a for a in document["assets"]
-                       if a["kind"] in ("skeletal_mesh", "animation")]
-    log("  %d FBX files for %d skeletal/animation assets"
-        % (len(skeletal_exported), len(skeletal_assets)))
-    if len(skeletal_exported) != len(skeletal_assets):
-        raise RuntimeError("exported %d skeletal FBX files for %d assets"
-                           % (len(skeletal_exported), len(skeletal_assets)))
-
-    log("== texture export (TGA, role-suffixed; ORM channels split) ==")
-    raw_root = OUTPUT_DIR + "/RawTextures"
-    texture_files = asset_table.texture_bank.export_all(ASSETS_ROOT, raw_root, log=log)
-    texture_assets = [a for a in document["assets"] if a["kind"] == "texture"]
-    log("  %d texture files for %d texture entries" % (len(texture_files), len(texture_assets)))
-    if len(texture_files) != len(texture_assets):
-        raise RuntimeError("texture export count mismatch")
 
     log("== FBX intermediate check: bake and export negations cancel ==")
     for record in exported:

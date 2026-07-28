@@ -26,6 +26,12 @@ milestone per session; each session starts from that file.
 - `O3DE/Gems/UEImporter/` — the O3DE-side importer, packaged as a tool gem.
   `Editor/Scripts/ueimporter/` holds it; everything except `asset_wait` and
   `prefab_build` is pure Python and testable without an editor.
+  `Editor/Scripts/bootstrap.py` is the gem's editor entry point and installs the
+  **Tools → Import UE Manifest…** menu item; `install_gem.py` puts the gem into a
+  project (see *Installing the gem* below).
+- `Tools/` — the headless pipeline. `run_pipeline.bat` drives UE export → Asset
+  Processor → O3DE import as one command with one exit code; `ue_export.py` and
+  `o3de_import.py` are the two halves it invokes.
 - `Schema/manifest.schema.json` — the interchange contract (plan constraint 7).
 - `Tests/ue/` — UE Editor Python scripts (fixture builder, S0.2 export, manifest export,
   API probes) + `run_ue_python.bat`.
@@ -49,6 +55,7 @@ Tests\m6\run_m6.bat          M6: sky/fog/post-process mapping -> environment in 
 Tests\m7\run_m7.bat [dir]    M7: terrain contract -> sphere drop on the imported terrain
 Tests\m8\run_m8.bat          M8: skeletal frame math -> .actor/.motion products -> playback by frame capture
 Tests\m9\run_m9.bat          M9: Fixture_02 export -> instance/spline/LOD/decal/camera assertions -> import readbacks
+Tests\m10\run_m10.bat        M10: menus both sides -> import dialog -> re-import diff -> full headless pipeline
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
 
@@ -68,6 +75,14 @@ NOTE (Windows): invoke `export_level.bat` from cmd or PowerShell, not Git
 Bash — MSYS path conversion mangles the `/Game/...` package argument into
 `C:/Program Files/Git/Game/...`.
 
+NOTE (UE argument passing): when `-ExecutePythonScript=` carries **arguments**,
+UE unescapes backslashes in the value. This repo's own path arrived at the
+interpreter as `D:\GamedevtoO3DE\Tools_export.py` — `\U` and `\ue` consumed as
+escape sequences — and failed as "Could not load Python file" naming a path
+nobody typed. Use forward slashes for the script path whenever arguments follow
+it (`Tools\run_pipeline.bat` does). The no-argument form is unaffected, which is
+why only the M10 pipeline hit it.
+
 The M8 fixture canaries import once from `Tests\ue\data\SK_Canary.fbx`
 (CC0, Quaternius "Platformer Game Kit") via `Tests\ue\add_m8_skeletal.py`,
 which also regenerates `Tests\m8\skel_reference.json` (the UE-side truth the
@@ -86,6 +101,44 @@ The pure-Python parts need no editor: `python Tests\m1\test_lane_a.py`,
 `python Tests\m1\validate_manifest.py --self-test`,
 `python Tests\m2\test_m2_artifacts.py` and `python Tests\m5\test_light_build.py`
 each run in about a second.
+
+## Using it as a tool (M10)
+
+**UE side.** With the plugin enabled, **Tools → Export Level to O3DE…** opens an
+options dialog whose folder field carries a native browse button, then exports with
+a progress bar. It exports the level *as it stands in memory*, deliberately: the
+batch path reloads the map first, and doing that to the level someone is standing
+in would discard their unsaved edits and export the older version from disk.
+
+**O3DE side.** Install the gem into a project first:
+
+```
+python O3DE\Gems\UEImporter\install_gem.py --project <project-path>
+python O3DE\Gems\UEImporter\install_gem.py --project <project-path> --check
+```
+
+Then **Tools → Import UE Manifest…** picks a manifest, names the prefab, and offers
+the physics backend — pre-selected from detection and disabled when only one
+backend resolves. The summary afterwards lists every warning with its meaning and
+exports as `.txt`.
+
+Installation is two steps for a reason worth knowing: registering and enabling the
+gem is *not* enough for a gem with no compiled code. A prebuilt SDK editor mounts
+the gems its build told it about, so the gem resolves by name yet is never mounted
+and `bootstrap.py` is silently never read — the menu item simply does not appear,
+with nothing in the log to say why. `install_gem.py` writes the one Registry entry
+that would otherwise come from a project rebuild.
+
+**Headless / CI.** One command, one exit code:
+
+```
+Tools\run_pipeline.bat /Game/Maps/L_Showcase D:\Exports\Showcase Showcase <project> [jolt|physx]
+```
+
+Re-running an import is incremental by default: entities are matched by manifest id
+(a uuid5 of the UE actor path), removals are reported, and anything edited by hand
+in O3DE is reported as `REIMPORT_ENTITY_CONFLICT` and **kept**. Pass
+`--reimport=0` to author everything from the manifest and overwrite those edits.
 
 ## O3DE test projects (outside this repo, per O3DE convention)
 

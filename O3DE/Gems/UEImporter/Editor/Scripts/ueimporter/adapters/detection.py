@@ -44,6 +44,18 @@ class BackendAmbiguityError(BackendDetectionError):
     """Both backends resolve and no explicit choice was given. Never guess."""
 
 
+def available(resolver):
+    """Which backends' components resolve here. Pure; never raises.
+
+    `detect` deliberately raises on ambiguity, which is right for an import
+    that must not guess -- but the M10 dialog needs the *list* precisely in
+    the ambiguous case, to offer it. Asking that question through an exception
+    would mean parsing an error message for data.
+    """
+    return sorted(backend for backend, names in PROBE_NAMES.items()
+                  if all(resolver(names)))
+
+
 def detect(resolver, settings_reader=None, explicit=None):
     """Decide the backend. Pure logic; I/O is injected.
 

@@ -43,12 +43,19 @@ def stage_only(manifest_path, source_assets_root, project_assets_root, log=None)
 
 def import_level(manifest_path, source_assets_root, project_assets_root,
                  prefab_path, level_name="DefaultLevel", asset_timeout=180.0,
-                 restage=False, backend=None, log=None, max_entities=None):
+                 restage=False, backend=None, log=None, max_entities=None,
+                 reimport=True):
     """Import a manifest into a saved `.prefab`. Returns (report, prefab_path).
 
     `backend` is the explicit physics backend name ('jolt'/'physx') or None to
     detect. Detection never guesses: if both backends resolve and no explicit
     choice is given, the import fails before authoring anything (constraint 5).
+
+    `reimport` (M10) makes a second import of the same prefab incremental: the
+    previous import's ledger is consulted, entities are matched by manifest id,
+    and anything the user edited by hand in O3DE is reported and KEPT rather
+    than reverted. Pass False to ignore the ledger and author everything from
+    the manifest -- the escape hatch for "just give me exactly what UE says".
     """
     import json as json_module
 
@@ -59,6 +66,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     from . import light_build
     from . import physics_build
     from . import prefab_build
+    from . import reimport as reimport_module
     from .adapters import detect_in_editor, make_adapter
 
     def emit(message):
@@ -80,6 +88,37 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         document["entities"] = [e for e in document["entities"]
                                 if e["id"] in keep and
                                 (e["parent_id"] is None or e["parent_id"] in keep)]
+
+    # --- incremental re-import (M10) ---------------------------------------
+    # Computed BEFORE anything is authored, because it reads the prefab as it
+    # stands right now -- which is where the user's hand edits are. Once the
+    # rebuild starts, that state is gone.
+    previous_ledger = reimport_module.load_ledger(prefab_path) if reimport else None
+    transforms_before = reimport_module.read_prefab(prefab_path)
+    reimport_plan = reimport_module.plan(previous_ledger, document, transforms_before)
+    emit(reimport_module.summarize(reimport_plan))
+    if reimport and previous_ledger is None and transforms_before:
+        report.warn("REIMPORT_LEDGER_MISSING", os.path.basename(prefab_path),
+                    "a prefab exists at this path but has no ledger beside it; "
+                    "hand edits in it cannot be detected and will be replaced")
+    for name in reimport_plan["name_collisions"]:
+        report.warn("REIMPORT_NAME_COLLISION", name,
+                    "two entities in the manifest share this name")
+    for removed in reimport_plan["removed"]:
+        report.warn("REIMPORT_ENTITY_REMOVED", removed["name"] or removed["id"],
+                    "present in the previous import, absent from this manifest")
+    # "Added" means "new SINCE THE LAST IMPORT". On a first import every
+    # entity is new in the trivial sense, and counting them all reads as
+    # "12 actors appeared" on a report where nothing appeared -- so the
+    # re-import counters stay at zero until there is a previous import to be
+    # different from.
+    if not reimport_plan["first_import"]:
+        for entity_id in reimport_plan["added"]:
+            report.warn("REIMPORT_ENTITY_ADDED", entity_id,
+                        "new since the last import")
+        report.count("reimport_added", len(reimport_plan["added"]))
+    report.count("reimport_removed", len(reimport_plan["removed"]))
+    report.count("reimport_conflicts", len(reimport_plan["conflicts"]))
 
     # An open level comes FIRST: prefab authoring needs a root prefab instance
     # (S0.1), and the adapter's resolve step creates a scratch entity to read
@@ -402,5 +441,34 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         general.idle_wait_frames(900)
         prefab_build.create_prefab_in_memory([level_root], prefab_path)
     prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit)
+
+    # --- put hand edits back, then record what this import produced (M10) ---
+    # The prefab has just been rebuilt from the manifest, so any entity the
+    # user had moved is now back at UE's value. Patch those few entities in
+    # the saved file and say which ones, loudly.
+    if reimport_plan["conflicts"]:
+        rebuilt = reimport_module.read_prefab(prefab_path)
+        for conflict in reimport_plan["conflicts"]:
+            authored_now = rebuilt.get(conflict["name"])
+            also_moved_in_ue = (
+                authored_now is not None
+                and not reimport_module.transforms_equal(authored_now,
+                                                         conflict["authored"]))
+            if also_moved_in_ue:
+                detail = ("edited in O3DE AND moved in UE since the last "
+                          "import; the O3DE edit is kept, so this actor's new "
+                          "UE transform was NOT applied")
+            else:
+                detail = ("edited in O3DE since the last import; the edit is "
+                          "kept and the manifest's transform was not applied")
+            report.warn("REIMPORT_ENTITY_CONFLICT", conflict["name"], detail)
+        patched = reimport_module.preserve_conflicts(
+            prefab_path, reimport_plan["conflicts"])
+        report.count("reimport_preserved", len(patched))
+        emit("preserved %d hand-edited transform(s)" % len(patched))
+
+    ledger_path = reimport_module.write_ledger(
+        prefab_path, reimport_module.build_ledger(document, prefab_path))
+    emit("wrote import ledger " + os.path.basename(ledger_path))
 
     return report, prefab_path

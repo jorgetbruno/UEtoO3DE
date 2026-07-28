@@ -128,6 +128,27 @@ CODES = {
         INFO, "No simple collision primitives; a mesh collider was baked from "
               "the entity's render geometry (triangle mesh on static bodies, "
               "convex hull on dynamic ones)."),
+
+    # --- incremental re-import (M10) ---
+    "REIMPORT_ENTITY_ADDED": (
+        INFO, "The actor is new since the previous import of this prefab."),
+    "REIMPORT_ENTITY_REMOVED": (
+        INFO, "The actor existed in the previous import and is gone from the "
+              "new manifest; its entity is not recreated."),
+    "REIMPORT_ENTITY_CONFLICT": (
+        WARN, "The entity's transform in O3DE differs from what the previous "
+              "import authored, so someone edited it by hand. The manual edit "
+              "is KEPT and the manifest's value is not applied -- re-importing "
+              "must never silently discard someone's work."),
+    "REIMPORT_LEDGER_MISSING": (
+        INFO, "A re-import was requested but this prefab has no import ledger "
+              "(never imported by this version, or the file was deleted). "
+              "Treated as a first import: everything is authored fresh and "
+              "no hand edits can be detected."),
+    "REIMPORT_NAME_COLLISION": (
+        WARN, "Two manifest entities share a name. Entities are matched back "
+              "to the prefab by name, so hand-edit detection cannot tell "
+              "these two apart and their conflicts are not reported."),
 }
 
 
@@ -174,6 +195,61 @@ class Report:
             json.dump(self.to_dict(), handle, indent=2, sort_keys=True)
             handle.write("\n")
         return path
+
+    def to_text(self, title=None):
+        """A plain-text report for the M10 dialog's "Save as .txt".
+
+        Every warning carries its catalogue explanation, not just its code:
+        the file is read by someone deciding whether their level imported
+        correctly, away from this source tree, and a bare
+        `PHYS_SHAPE_APPROXIMATED` tells them nothing about what to look at.
+        """
+        out = []
+        if title:
+            out.append(title)
+            out.append("=" * len(title))
+            out.append("")
+
+        out.append("Counters")
+        out.append("--------")
+        if self.counters:
+            width = max(len(name) for name in self.counters)
+            for name in sorted(self.counters):
+                out.append("  %-*s  %d" % (width, name, self.counters[name]))
+        else:
+            out.append("  (none)")
+        out.append("")
+
+        records = self.records()
+        by_severity = {}
+        for record in records:
+            by_severity.setdefault(record["severity"], []).append(record)
+        out.append("Warnings: %d (%s)"
+                   % (len(records),
+                      ", ".join("%d %s" % (len(by_severity[s]), s)
+                                for s in (ERROR, WARN, INFO) if s in by_severity)
+                      or "none"))
+        out.append("-" * len(out[-1]))
+        if not records:
+            out.append("  (none)")
+        for severity in (ERROR, WARN, INFO):
+            group = by_severity.get(severity)
+            if not group:
+                continue
+            by_code = {}
+            for record in group:
+                by_code.setdefault(record["code"], []).append(record)
+            for code in sorted(by_code):
+                items = by_code[code]
+                out.append("")
+                out.append("[%s] %s  (x%d)" % (severity.upper(), code, len(items)))
+                explanation = CODES.get(code, (severity, ""))[1]
+                if explanation:
+                    out.append("  what it means: " + explanation)
+                for record in items:
+                    out.append("    - %s: %s" % (record["subject"], record["detail"]))
+        out.append("")
+        return "\n".join(out)
 
     def __len__(self):
         return len(self._records)
