@@ -451,7 +451,12 @@ class AssetTable:
             lod_count = int(mesh.get_num_lods())
         except Exception:
             lod_count = 1
-        if lod_count > 1 and not mirrored:
+        if lod_count > 1:
+            # Reported for the variant too. `subject` and the detail are the
+            # source mesh's either way, so Warnings' dedupe collapses the
+            # base and its '#mx' variant to one record -- while skipping
+            # mirrored entries left a mesh used ONLY at negative scale
+            # reporting nothing at all.
             self._warnings.add("LOD_FLATTENED", subject,
                                "%d LODs in UE; only LOD0 exported" % lod_count)
 
