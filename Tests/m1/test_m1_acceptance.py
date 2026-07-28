@@ -330,6 +330,7 @@ def assert_coverage(document):
         "Atmo_SkyLight", "Atmo_HeightFog", "Atmo_SkyAtmosphere", "PPV_01",
         "MirroredF", "RotationFold_Box", "BP_Like_Props",
         "BP_Like_Props.StaticMesh", "BP_Like_Props.StaticMesh1",
+        "SkelWave", "SkelRootMotion", "SkelBind",
     }
     missing = sorted(expected_names - set(entities))
     check(not missing, "fixture actors missing from the manifest: %r" % missing)
@@ -357,6 +358,58 @@ def assert_coverage(document):
     used = [e["mesh"]["asset_guid"] for e in document["entities"] if "mesh" in e]
     check(len(used) > len(set(used)),
           "no mesh is shared between actors; the dedup assertion is vacuous")
+
+
+def assert_skeletal_canaries(document):
+    """The M8 canaries, at the manifest level.
+
+    SkelWave: single-node Wave -> a skeletal block referencing an animation
+    asset with root_motion False. SkelRootMotion: its (duplicated) anim has
+    root_motion True and the export says so in warnings[]. SkelBind: no
+    animation at all -- the Actor-only path must survive, or a fixture edit
+    could quietly turn every skeletal import into the animated shape only.
+    The deep product checks live in Tests/m8/test_m8_artifacts.py.
+    """
+    entities = by_name(document)
+    assets = {asset["guid"]: asset for asset in document["assets"]}
+
+    wave = entities.get("SkelWave")
+    if check(wave is not None, "fixture is missing SkelWave"):
+        check(wave["kind"] == "skeletal_mesh", "SkelWave kind %r" % wave["kind"])
+        skeletal = wave.get("skeletal") or {}
+        mesh_asset = assets.get(skeletal.get("asset_guid"))
+        check(mesh_asset is not None and mesh_asset["kind"] == "skeletal_mesh",
+              "SkelWave does not reference a skeletal_mesh asset")
+        if mesh_asset is not None:
+            check(mesh_asset.get("bone_count", 0) > 0
+                  and len(mesh_asset.get("bone_names") or [])
+                  == mesh_asset.get("bone_count"),
+                  "SkelWave's mesh asset bone table is inconsistent")
+        animation = assets.get(skeletal.get("animation_guid"))
+        check(animation is not None and animation["kind"] == "animation",
+              "SkelWave does not reference an animation asset")
+        if animation is not None:
+            check(animation.get("root_motion") is False,
+                  "SkelWave's animation unexpectedly has root motion")
+
+    root_motion = entities.get("SkelRootMotion")
+    if check(root_motion is not None, "fixture is missing SkelRootMotion"):
+        animation = assets.get((root_motion.get("skeletal") or {}).get("animation_guid"))
+        check(animation is not None and animation.get("root_motion") is True,
+              "SkelRootMotion's animation does not carry the root-motion flag")
+        coded = {(record["code"], record["subject"])
+                 for record in document["warnings"]}
+        check(("ANIM_ROOT_MOTION_DROPPED", "SkelRootMotion") in coded,
+              "root motion dropped without an ANIM_ROOT_MOTION_DROPPED record")
+
+    bind = entities.get("SkelBind")
+    if check(bind is not None, "fixture is missing SkelBind"):
+        skeletal = bind.get("skeletal") or {}
+        check(skeletal.get("animation_guid") is None,
+              "SkelBind must be motionless (the Actor-only path)")
+        check("physics" not in bind,
+              "skeletal entities must not carry physics blocks "
+              "(SKEL_PHYSICS_DROPPED)")
 
 
 def assert_two_tone_slots(document):
@@ -586,6 +639,7 @@ def main(argv=None):
             ("coverage + dedup", assert_coverage),
             ("two-tone slot canary", assert_two_tone_slots),
             ("negative-scale canaries", assert_negative_scale_canaries),
+            ("skeletal canaries", assert_skeletal_canaries),
             ("light unit coverage", assert_light_units_covered),
             ("environment coverage", assert_environment_covered),
             ("generator pins", assert_generator),

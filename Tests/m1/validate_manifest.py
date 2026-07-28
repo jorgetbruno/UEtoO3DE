@@ -211,12 +211,39 @@ def validate_references(document):
                     errors.append("entity %s: material slot %d points at a non-material"
                                   % (entity["name"], slot["index"]))
 
+        skeletal = entity.get("skeletal")
+        if skeletal is not None:
+            if skeletal["asset_guid"] not in assets:
+                errors.append("entity %s: skeletal asset_guid does not resolve"
+                              % entity["name"])
+            elif assets[skeletal["asset_guid"]]["kind"] != "skeletal_mesh":
+                errors.append("entity %s: skeletal asset_guid points at a "
+                              "non-skeletal asset" % entity["name"])
+            anim_guid = skeletal.get("animation_guid")
+            if anim_guid is not None:
+                if anim_guid not in assets:
+                    errors.append("entity %s: animation_guid does not resolve"
+                                  % entity["name"])
+                elif assets[anim_guid]["kind"] != "animation":
+                    errors.append("entity %s: animation_guid points at a "
+                                  "non-animation asset" % entity["name"])
+
         physics = entity.get("physics")
         if physics is not None:
             source = physics.get("shapes_from_asset")
             if source is not None and source not in assets:
                 errors.append("entity %s: shapes_from_asset does not resolve"
                               % entity["name"])
+
+    # Skeletal assets: the bone table must be internally consistent (M8) --
+    # the artifact test asserts these names against the .actor product bytes.
+    for asset in document["assets"]:
+        if asset["kind"] != "skeletal_mesh":
+            continue
+        names = asset.get("bone_names") or []
+        if len(names) != asset.get("bone_count"):
+            errors.append("skeletal %s: bone_count %r != len(bone_names) %d"
+                          % (asset["ue_path"], asset.get("bone_count"), len(names)))
 
     # material_data texture references must resolve to texture assets (M4).
     for asset in document["assets"]:
@@ -244,7 +271,9 @@ def validate_references(document):
         errors.append("schema_version %r does not match the exporter's %r"
                       % (document["schema_version"], manifest_module.SCHEMA_VERSION))
     for key, expected in (("lane_a_rule", manifest_module.LANE_A_RULE),
-                          ("lane_b_rule", manifest_module.LANE_B_RULE)):
+                          ("lane_b_rule", manifest_module.LANE_B_RULE),
+                          ("lane_b_skeletal_rule",
+                           manifest_module.LANE_B_SKELETAL_RULE)):
         if document["units"].get(key) != expected:
             errors.append("units.%s %r does not match the exporter's %r"
                           % (key, document["units"].get(key), expected))
@@ -288,7 +317,8 @@ def _self_test():
         "units": {"length": "meters", "angle": "degrees",
                   "coordinate_system": "o3de_right_handed_z_up",
                   "lane_a_rule": manifest_module.LANE_A_RULE,
-                  "lane_b_rule": manifest_module.LANE_B_RULE},
+                  "lane_b_rule": manifest_module.LANE_B_RULE,
+                  "lane_b_skeletal_rule": manifest_module.LANE_B_SKELETAL_RULE},
         "assets": [], "entities": [], "warnings": [],
     }
     if validate(minimal, schema):
@@ -362,11 +392,46 @@ def _self_test():
                       "o3de_relative_path": "uetoo3de/Game/M.material"}]
     expect_errors("unsanitized path", bad, "does not match")
 
+    # M8: a skeletal rule mismatch means the importer's Rz180 composition no
+    # longer matches how the geometry was produced -- refuse, don't yaw wrong.
+    bad = json.loads(json.dumps(minimal))
+    bad["units"]["lane_b_skeletal_rule"] = "none"
+    expect_errors("wrong lane_b_skeletal_rule", bad, "const")
+
+    # M8: a skeletal entity whose animation_guid points at a mesh would author
+    # a Simple Motion component around the wrong product kind.
+    bad = json.loads(json.dumps(minimal))
+    skel_guid = naming.asset_guid("/Game/SK.SK")
+    bad["assets"] = [{
+        "guid": skel_guid, "kind": "skeletal_mesh", "ue_path": "/Game/SK",
+        "name": "SK", "o3de_relative_path": "uetoo3de/game/sk.fbx",
+        "bone_count": 2, "bone_names": ["Root", "Hips"],
+        "material_slot_names": [], "material_slot_material_names": [],
+    }]
+    wrong = json.loads(json.dumps(entity))
+    wrong["kind"] = "skeletal_mesh"
+    wrong["id"] = naming.entity_id("/p")
+    wrong["skeletal"] = {"asset_guid": skel_guid, "animation_guid": skel_guid,
+                         "loop": True, "play": True, "material_slots": []}
+    bad["entities"] = [wrong]
+    expect_errors("animation_guid at a non-animation", bad, "non-animation")
+
+    # M8: bone_count must equal len(bone_names) -- the .actor byte assertion
+    # keys off the names, and a silent mismatch would weaken it.
+    bad = json.loads(json.dumps(minimal))
+    bad["assets"] = [{
+        "guid": skel_guid, "kind": "skeletal_mesh", "ue_path": "/Game/SK",
+        "name": "SK", "o3de_relative_path": "uetoo3de/game/sk.fbx",
+        "bone_count": 3, "bone_names": ["Root", "Hips"],
+        "material_slot_names": [], "material_slot_material_names": [],
+    }]
+    expect_errors("bone_count mismatch", bad, "bone_count")
+
     for failure in failures:
         print("SELF-TEST FAIL: " + failure)
     if failures:
         return 1
-    print("validator self-test: %d rejection cases pass" % 12)
+    print("validator self-test: %d rejection cases pass" % 15)
     return 0
 
 

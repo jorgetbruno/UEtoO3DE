@@ -30,6 +30,10 @@ import traceback
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
+# skel_build.compose_rz180: the skeletal entities' expected rotation (M8).
+GEM_SCRIPTS = os.path.join(REPO_ROOT, "O3DE", "Gems", "UEImporter", "Editor", "Scripts")
+if GEM_SCRIPTS not in sys.path:
+    sys.path.insert(0, GEM_SCRIPTS)
 
 if len(sys.argv) > 1 and sys.argv[1].strip() and not sys.argv[1].startswith('-'):
     RESULT_PATH = sys.argv[1]
@@ -190,10 +194,18 @@ def main():
 
         rotation = components.TransformBus(bus.Event, 'GetWorldRotationQuaternion', entity_id)
         actual_rotation = [rotation.x, rotation.y, rotation.z, rotation.w]
-        angle = quaternion_angle_degrees(actual_rotation, want['rotation'])
+        want_rotation = want['rotation']
+        if expected[name].get('skeletal') is not None:
+            # Skeletal entities DELIBERATELY carry the manifest rotation
+            # composed with a local Rz180 -- the lane_b_skeletal_rule frame
+            # correction (LANE_B.md M8). Right-composition passes through the
+            # hierarchy, so the world expectation composes the same way.
+            from ueimporter import skel_build
+            want_rotation = skel_build.compose_rz180(want_rotation)
+        angle = quaternion_angle_degrees(actual_rotation, want_rotation)
         if angle > ROTATION_TOLERANCE_DEG:
-            fail('%s rotation is %.4f deg from the manifest value (%r vs %r)'
-                 % (name, angle, [round(v, 5) for v in actual_rotation], want['rotation']))
+            fail('%s rotation is %.4f deg from the expected value (%r vs %r)'
+                 % (name, angle, [round(v, 5) for v in actual_rotation], want_rotation))
 
         # Scale: uniform in the transform, or on the non-uniform scale component.
         want_scale = want['scale']

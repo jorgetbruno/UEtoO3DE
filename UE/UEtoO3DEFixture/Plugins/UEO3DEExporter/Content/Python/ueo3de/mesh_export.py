@@ -630,3 +630,99 @@ def export_meshes(assets, output_root, log=None):
     _placeholder_cache.clear()
 
     return exported
+
+
+# ---------------------------------------------------------------------------
+# skeletal meshes + animations (M8): UE's NATIVE FBX exporter
+# ---------------------------------------------------------------------------
+# No GeometryScript bake is possible without destroying skinning, so skeletal
+# sources ship through UE's own exporter and carry the SKELETAL Lane B rule:
+# FBX = diag(1,-1,1) * source (the writer's LH->RH negation), SceneAPI then
+# applies its diag(-1,-1,1) yaw, net product = diag(-1,1,1) * source =
+# LaneA * Rz180 -- the importer composes a local Rz180 into skeletal entity
+# rotations (LANE_B.md, M8). Measured: product Y negated vs FBX and Z kept,
+# at azmodel-buffer byte level (the probe character's X is symmetric; the X
+# sign follows from SceneAPI being a rotation, the load-bearing fact of Lane
+# B correction #3).
+#
+# FULL-EDITOR ONLY: the skeletal FBX exporter walks render objects that do
+# not exist in commandlets (Assertion failed: MeshObject, SkinnedMeshComponent
+# .cpp:4987 -- measured, probe_m8_skeletal.py round 1).
+
+def _skeletal_export_options(preview_mesh):
+    options = unreal.FbxExportOption()
+    required = {
+        "collision": False,
+        "level_of_detail": False,
+        "export_preview_mesh": preview_mesh,
+    }
+    for name, value in required.items():
+        try:
+            options.set_editor_property(name, value)
+        except Exception as exc:
+            raise MeshExportError(
+                "FbxExportOption.%s could not be set (%s)" % (name, exc))
+    return options
+
+
+def export_skeletal(assets, output_root, log=None):
+    """Export every skeletal_mesh and animation asset entry to FBX.
+
+    Returns one record per file. Mesh records carry expected FBX bounds =
+    mirror-Y(source bounds) -- stage 2's negation with NO bake stage 1.
+    Animation records carry no geometry at all (export_preview_mesh False);
+    they are byte-checked here for animation curves instead, loudly.
+    """
+    def emit(message):
+        if log is not None:
+            log(message)
+
+    exported = []
+    for asset in assets:
+        kind = asset.get("kind")
+        if kind not in ("skeletal_mesh", "animation"):
+            continue
+        source = unreal.EditorAssetLibrary.load_asset(asset["ue_path"])
+        if source is None:
+            raise MeshExportError("could not load skeletal source " + asset["ue_path"])
+        output_path = os.path.join(
+            output_root, asset["o3de_relative_path"]).replace("\\", "/")
+        _export_fbx(source, output_path,
+                    _skeletal_export_options(preview_mesh=False))
+
+        record = {
+            "guid": asset["guid"],
+            "kind": kind,
+            "ue_path": asset["ue_path"],
+            "relative_path": asset["o3de_relative_path"],
+            "bytes": os.path.getsize(output_path),
+        }
+        if kind == "skeletal_mesh":
+            bounds = source.get_bounds()
+            origin = bounds.get_editor_property("origin")
+            extent = bounds.get_editor_property("box_extent")
+            source_min = [origin.x - extent.x, origin.y - extent.y,
+                          origin.z - extent.z]
+            source_max = [origin.x + extent.x, origin.y + extent.y,
+                          origin.z + extent.z]
+            # Native export negates Y only (measured on SM_LetterF in S0.2);
+            # min/max swap on the negated axis.
+            record["ue_bounds_min"] = [source_min[0], -source_max[1], source_min[2]]
+            record["ue_bounds_max"] = [source_max[0], -source_min[1], source_max[2]]
+            # The asset's BoxSphereBounds is not vertex-exact the way a baked
+            # static's bounding box is; a centimetre catches axis bugs (which
+            # show up as tens of cm) without tripping on bounds padding.
+            record["tolerance_cm"] = 1.0
+        else:
+            with open(output_path, "rb") as handle:
+                blob = handle.read()
+            if b"AnimationCurveNode" not in blob:
+                raise MeshExportError(
+                    "%s exported without animation curves; the .motion product "
+                    "would be an empty pose" % asset["ue_path"])
+            record["duration_seconds"] = asset.get("duration_seconds")
+        exported.append(record)
+        emit("  %-42s -> %-46s (%d bytes, %s)"
+             % (asset["ue_path"], asset["o3de_relative_path"],
+                record["bytes"], kind))
+    return exported

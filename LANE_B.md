@@ -72,6 +72,39 @@ is the real path plus a literal `#mx`, baked with the opposite-determinant
 vector. Even negative counts are pure 180° rotations and need no variant.
 The importer does not know mirrors exist.
 
+## Skeletal sources (M8): a second rule, one entity-side rotation
+
+Skinned meshes cannot go through the GeometryScript bake — `scale_mesh` on a
+DynamicMesh copy destroys skinning — so skeletal meshes and AnimSequences ship
+through **UE's native FBX exporter** with NO stage-1 bake:
+
+    stage 2 (UE FBX writer):   diag(1, −1, 1)        (same negation as ever)
+    stage 3 (SceneAPI):        diag(−1, −1, 1)       (same yaw as ever)
+    net product:               diag(−1, 1, 1) = LaneA · Rz180
+
+The compensation is **one lossless local yaw-180 composed into every skeletal
+entity's rotation by the importer** (`skel_build.compose_rz180`, proven as a
+matrix identity in `Tests/m8/test_skel_build.py`): the entity turns 180° in
+its own frame, exactly undoing the extra yaw the geometry carries. Motions go
+through the same stages 2+3, so joint animation stays consistent with the
+actor product and needs nothing extra.
+
+Manifest units carry `lane_b_skeletal_rule =
+"native_y_scene_rz180_entity_rz180"`; `manifest_io` refuses a mismatch — a
+wrong rule errors nowhere and simply faces every character backwards.
+
+Measured (`Tests/m8/test_m8_artifacts.py`, permanent): the skinned azmodel
+position buffer carries the FBX's asymmetric **Y extremes negated** (/100)
+with the wrong-sign patterns absent, and the **Z extremes unchanged**. The
+canary character's X is symmetric, so the X sign rests on stage 3 being a
+proper rotation — the load-bearing fact of correction #3 below, measured on
+the same SceneAPI for statics — plus the full-frame evidence: the Rz180'd
+`SkelBind` canary imports with its authored rotation verified and renders
+where UE puts it. The commandlet caveat: the native skeletal exporter walks
+render objects and **asserts under -nullrhi** (`MeshObject`,
+SkinnedMeshComponent.cpp:4987), which is why every fixture export runs a full
+editor session since M8 (`export_fixture.bat`).
+
 ## The product-level assertion (what finally makes this file trustworthy)
 
 O3DE reflects no bounds API to Python and the product buffers are AZ object

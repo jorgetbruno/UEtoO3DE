@@ -283,12 +283,15 @@ def test_one_fbx_per_unique_mesh_guid(document):
     guids = [asset["guid"] for asset in mesh_assets]
     check(len(guids) == len(set(guids)), "manifest repeats a static mesh GUID")
 
+    # Since M8 the export tree also holds one FBX per skeletal_mesh and per
+    # animation asset (native-exporter route, LANE_B.md M8).
+    fbx_assets = mesh_assets + manifest_io.skeletal_assets(document)
     on_disk = []
     for root, _dirs, files in os.walk(EXPORT_ASSETS):
         on_disk.extend(os.path.join(root, name) for name in files if name.endswith(".fbx"))
-    check(len(on_disk) == len(mesh_assets),
+    check(len(on_disk) == len(fbx_assets),
           "%d FBX files on disk for %d unique mesh GUIDs (dedup broken)"
-          % (len(on_disk), len(mesh_assets)))
+          % (len(on_disk), len(fbx_assets)))
 
     for asset in mesh_assets:
         path = os.path.join(EXPORT_ASSETS, asset["o3de_relative_path"])
@@ -470,11 +473,12 @@ def test_import_report(document):
           % (counters.get("entities_created"), len(document["entities"])))
     # 7 mesh products (6 meshes + the sm_letterf_mx mirrored variant) + 5
     # converted materials (the 4 fixture PBR set plus WorldGridMaterial,
-    # whose Multiply graph resolves through the texture-DFS approximation);
+    # whose Multiply graph resolves through the texture-DFS approximation)
+    # + 3 skeletal products since M8 (sk_canary.actor + 2 .motion files);
     # image products are dependencies of the material jobs and are not
     # waited on directly.
-    check(counters.get("assets_waited_for") == 12,
-          "import waited for %r assets, expected 12" % counters.get("assets_waited_for"))
+    check(counters.get("assets_waited_for") == 15,
+          "import waited for %r assets, expected 15" % counters.get("assets_waited_for"))
     # SM_TwoTone is the only multi-material mesh: exactly its 2 slots go
     # through per-slot assignment, and both labels must match model slots.
     check(counters.get("material_slots_assigned") == 2,

@@ -30,6 +30,19 @@ def product_path_for(relative_path, product_prefix):
     return ("%s/%s.azmodel" % (product_prefix, relative_path)).lower()
 
 
+def skeletal_product_path_for(relative_path, product_prefix, kind):
+    """`uetoo3de/a/b.fbx` -> `assets/uetoo3de/a/b.actor` / `.motion`.
+
+    Unlike azmodel products, the EMotionFX builders name their products from
+    the source STEM, dropping the .fbx (measured on the M8 probe: the default
+    scene rules produced probe_character.actor and probe_anim.motion with no
+    .assetinfo involved).
+    """
+    stem = relative_path.rsplit(".", 1)[0]
+    suffix = "actor" if kind == "skeletal_mesh" else "motion"
+    return ("%s/%s.%s" % (product_prefix, stem, suffix)).lower()
+
+
 def stage(document, source_root, project_assets_root, log=None):
     """Stage everything a manifest references into the project.
 
@@ -83,6 +96,36 @@ def stage(document, source_root, project_assets_root, log=None):
                 "wait": True,
             })
             emit("  %-42s -> %s" % (asset["ue_path"], records[-1]["product_path"]))
+            continue
+
+        if asset["kind"] in ("skeletal_mesh", "animation"):
+            # Skeletal + animation FBX stage WITHOUT an .assetinfo: the
+            # default scene rules already produce the .actor/.motion products
+            # (measured, Tests/o3de/probe_m8_emfx.py prep), and an authored
+            # manifest would have to reproduce EMotionFX group defaults for
+            # no gain. Auto-generated azmaterials ride along; harmless.
+            relative_path = asset["o3de_relative_path"]
+            source_fbx = os.path.join(source_root, relative_path).replace("\\", "/")
+            if not os.path.exists(source_fbx):
+                raise StagingError(
+                    "exported skeletal FBX is missing for %s: %s"
+                    % (asset["ue_path"], source_fbx))
+            staged_fbx = os.path.join(project_assets_root, relative_path).replace("\\", "/")
+            os.makedirs(os.path.dirname(staged_fbx), exist_ok=True)
+            shutil.copyfile(source_fbx, staged_fbx)
+            record = {
+                "kind": asset["kind"],
+                "guid": asset["guid"],
+                "ue_path": asset["ue_path"],
+                "relative_path": relative_path,
+                "source_fbx": source_fbx,
+                "staged_fbx": staged_fbx,
+                "product_path": skeletal_product_path_for(
+                    relative_path, product_prefix, asset["kind"]),
+                "wait": True,
+            }
+            records.append(record)
+            emit("  %-42s -> %s" % (asset["ue_path"], record["product_path"]))
             continue
 
         if asset["kind"] != "static_mesh":

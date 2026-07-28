@@ -130,6 +130,17 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                 "product_path": staging.product_path_for(relative_path, product_prefix),
                 "wait": True,
             })
+        for asset in manifest_io.skeletal_assets(document):
+            relative_path = asset["o3de_relative_path"]
+            records.append({
+                "kind": asset["kind"],
+                "guid": asset["guid"],
+                "relative_path": relative_path,
+                "staged_fbx": os.path.join(project_assets_root, relative_path).replace("\\", "/"),
+                "product_path": staging.skeletal_product_path_for(
+                    relative_path, product_prefix, asset["kind"]),
+                "wait": True,
+            })
         for asset in document["assets"]:
             if asset["kind"] != "material" or not asset.get("material_data"):
                 continue
@@ -156,6 +167,9 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                       for record in waitable if record["kind"] == "static_mesh"}
     material_asset_ids = {record["guid"]: asset_ids[record["guid"]]
                           for record in waitable if record["kind"] == "material"}
+    skeletal_asset_ids = {record["guid"]: asset_ids[record["guid"]]
+                          for record in waitable
+                          if record["kind"] in ("skeletal_mesh", "animation")}
 
     level_root_name = document["level"]["name"]
     emit("creating entities under level root %r" % level_root_name)
@@ -174,7 +188,10 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     slots_assigned = 0
     for item in document["entities"]:
         entity_id = created.get(item["id"])
-        mesh = item.get("mesh")
+        # Skeletal entities carry the same per-slot structure; the Material
+        # component consumes an Actor component's model the way it does a
+        # Mesh component's (both are material consumers).
+        mesh = item.get("mesh") or item.get("skeletal")
         if entity_id is None or mesh is None:
             continue
         slots = mesh.get("material_slots") or []
@@ -220,6 +237,27 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         assigned += 1
     report.count("materials_assigned", assigned)
     report.count("material_slots_assigned", slots_assigned)
+
+    # --- skeletal entities (M8): Actor + Simple Motion ---
+    from . import skel_build
+    emit("authoring skeletal entities")
+    skeletal_authored = 0
+    for item in document["entities"]:
+        entity_id = created.get(item["id"])
+        skeletal = item.get("skeletal")
+        if entity_id is None or skeletal is None:
+            continue
+        plan = skel_build.plan_skeletal(skeletal, item["name"])
+        skel_build.author_skeletal(
+            entity_id, plan,
+            skeletal_asset_ids.get(skeletal["asset_guid"]),
+            skeletal_asset_ids.get(skeletal.get("animation_guid")),
+            item["name"], prefab_build.resolve_component_type)
+        skeletal_authored += 1
+        emit("  %-22s Actor%s" % (
+            item["name"],
+            " + Simple Motion" if skeletal.get("animation_guid") else ""))
+    report.count("skeletal_entities", skeletal_authored)
 
     # --- lights (M5) ---
     emit("authoring lights")
@@ -299,7 +337,9 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # (measured: cumulative threshold, not tied to any specific entity).
     # Per-slot assignments load one material instance each on top of the
     # per-entity ones, so they scale the wait too.
-    general.idle_wait_frames(60 + 5 * bake_count + 5 * assigned + 5 * slots_assigned)
+    # Actor + motion assets stream in asynchronously like materials do.
+    general.idle_wait_frames(60 + 5 * bake_count + 5 * assigned + 5 * slots_assigned
+                             + 10 * skeletal_authored)
     report.count("manifest_roots", sum(1 for item in document["entities"]
                                        if item["parent_id"] is None))
     if not created:

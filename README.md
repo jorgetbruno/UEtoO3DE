@@ -46,18 +46,30 @@ Tests\m4\run_m4.bat          M4: material/texture artifacts -> assignments in th
 Tests\m5\run_m5.bat          M5: light conversion + write order -> lights in the saved prefab
 Tests\m6\run_m6.bat          M6: sky/fog/post-process mapping -> environment in the saved prefab
 Tests\m7\run_m7.bat [dir]    M7: terrain contract -> sphere drop on the imported terrain
+Tests\m8\run_m8.bat          M8: skeletal frame math -> .actor/.motion products -> playback by frame capture
 Tests\o3de\run_s0_1.bat      M0 spike S0.1: prefab authoring from Python
 ```
 
 `run_m4.bat`, `run_m5.bat` and `run_m6.bat` assert against the prefab
-`run_m2.bat` produced, so run M2 first. `run_m7.bat` needs an EXPORTED LEVEL
+`run_m2.bat` produced, so run M2 first; `run_m8.bat` needs M2's staged +
+AP-processed products too. `run_m7.bat` needs an EXPORTED LEVEL
 THAT CONTAINS A LANDSCAPE (default `Exports\L_Showcase`, staged and
 AP-processed) — the fixture cannot host one: spawning a Landscape in a
 scripted session trips the engine's `!IsRunningCommandlet()` assertion, so
 terrain coverage lives against real content and the suite fails hard when
 that content is missing. Since M7, `export_level.bat` runs a FULL editor
 session (`-ExecutePythonScript`) because terrain sampling needs the physics
-scene commandlets don't have; it asserts on the export result file.
+scene commandlets don't have; since M8 `export_fixture.bat` does the same
+because the native skeletal FBX exporter asserts on the render objects
+commandlets lack (`MeshObject`). Both assert on the export result file.
+NOTE (Windows): invoke `export_level.bat` from cmd or PowerShell, not Git
+Bash — MSYS path conversion mangles the `/Game/...` package argument into
+`C:/Program Files/Git/Game/...`.
+
+The M8 fixture canaries import once from `Tests\ue\data\SK_Canary.fbx`
+(CC0, Quaternius "Platformer Game Kit") via `Tests\ue\add_m8_skeletal.py`,
+which also regenerates `Tests\m8\skel_reference.json` (the UE-side truth the
+artifact test compares against).
 
 Each `.bat` propagates a real exit code and CI must assert on that, never on console
 text (plan constraint 10). `run_m2.bat --cold` deletes the staged sources and their

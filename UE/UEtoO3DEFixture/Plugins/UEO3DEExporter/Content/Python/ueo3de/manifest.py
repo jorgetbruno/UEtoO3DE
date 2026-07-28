@@ -26,9 +26,12 @@ import json
 # 2 -> 3 (M4): material assets gained `material_data` (blend mode, two-sided,
 # per-property specs) and a new asset kind `texture` (exported TGA, role
 # suffix chooses the Atom image preset, `channel` marks ORM splits).
-SCHEMA_VERSION = 5
+# 5 -> 6 (M8): new asset kinds `skeletal_mesh` (bone_count/bone_names,
+# native-FBX export, product `.actor`) and `animation` (product `.motion`);
+# entities gained a `skeletal` block; `units` gained `lane_b_skeletal_rule`.
+SCHEMA_VERSION = 6
 TOOL_NAME = "UEO3DEExporter"
-TOOL_VERSION = "0.4.1"
+TOOL_VERSION = "0.5.0"
 
 # The Lane A basis map actually applied, recorded so the O3DE importer can
 # refuse a manifest produced under a different convention rather than
@@ -43,6 +46,13 @@ LANE_A_RULE = "negate_y"
 # product-buffer byte level (Tests/m2/test_m2_artifacts.py). Recorded so the
 # importer can refuse a manifest from a pipeline with a different net map.
 LANE_B_RULE = "negate_y_scene_rz180"
+
+# Lane B for SKELETAL sources (M8): no bake stage exists (a GeometryScript
+# mirror would destroy skinning), so the product carries LaneA * Rz180 and the
+# IMPORTER composes a local Rz180 into every skeletal entity's rotation.
+# Measured at the skinned azmodel buffer level (Y negated vs FBX, Z kept);
+# the X sign follows from SceneAPI being a proper rotation (correction #3).
+LANE_B_SKELETAL_RULE = "native_y_scene_rz180_entity_rz180"
 
 FLOAT_DIGITS = 6
 
@@ -86,6 +96,7 @@ def build(level, assets, entities, warning_records, engine_version):
             "coordinate_system": "o3de_right_handed_z_up",
             "lane_a_rule": LANE_A_RULE,
             "lane_b_rule": LANE_B_RULE,
+            "lane_b_skeletal_rule": LANE_B_SKELETAL_RULE,
         },
         "assets": assets,
         "entities": entities,

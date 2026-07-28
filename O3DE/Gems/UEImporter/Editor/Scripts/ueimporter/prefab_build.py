@@ -462,7 +462,14 @@ def create_entities(document, asset_ids_by_guid, report, level_root_id, log=None
         editor.EditorEntityAPIBus(bus.Event, 'SetName', entity_id, item["name"])
         created[item["id"]] = entity_id
 
-        _apply_transform(entity_id, item["transform"]["local"], report, item["name"],
+        local = item["transform"]["local"]
+        if item.get("skeletal") is not None:
+            # Skeletal products carry LaneA * Rz180 (native FBX export, no
+            # bake stage); the compensation is one local yaw-180 composed
+            # into the rotation (skel_build, LANE_B.md M8).
+            from . import skel_build
+            local = skel_build.corrected_local_transform(local)
+        _apply_transform(entity_id, local, report, item["name"],
                          children_count.get(item["id"], 0) > 0)
 
         mesh = item.get("mesh")
@@ -476,6 +483,10 @@ def create_entities(document, asset_ids_by_guid, report, level_root_id, log=None
         elif item["kind"] == "static_mesh":
             report.warn("MESH_MISSING", item["name"],
                         "entity is a static mesh actor but carries no mesh reference")
+        elif item["kind"] == "skeletal_mesh" and item.get("skeletal") is None:
+            report.warn("MESH_MISSING", item["name"],
+                        "entity is a skeletal mesh actor but carries no "
+                        "skeletal reference")
 
         emit("  %-22s kind=%-12s parent=%s"
              % (item["name"], item["kind"], item["parent_id"] and "yes" or "-"))

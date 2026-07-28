@@ -77,9 +77,10 @@ def verify_fbx_intermediate(record):
 
     path = os.path.join(ASSETS_ROOT, record["relative_path"]).replace("\\", "/")
     stats = fbx_reader.vertex_stats(path)
+    tolerance = record.get("tolerance_cm", BOUNDS_TOLERANCE_CM)
     deltas = [max(abs(stats["min"][i] - expected_min[i]),
                   abs(stats["max"][i] - expected_max[i])) for i in range(3)]
-    if max(deltas) > BOUNDS_TOLERANCE_CM:
+    if max(deltas) > tolerance:
         raise RuntimeError(
             "%s: FBX does not match its expected intermediate bounds.\n"
             "  FBX bounds %s .. %s\n"
@@ -139,10 +140,25 @@ try:
                            % (len(exported), len(mesh_assets)))
 
     log("")
+    log("== skeletal mesh + animation FBX export (M8, native exporter) ==")
+    skeletal_exported = mesh_export.export_skeletal(
+        document["assets"], ASSETS_ROOT, log=log)
+    skeletal_assets = [a for a in document["assets"]
+                       if a["kind"] in ("skeletal_mesh", "animation")]
+    log("  %d FBX files for %d skeletal/animation assets"
+        % (len(skeletal_exported), len(skeletal_assets)))
+    if len(skeletal_exported) != len(skeletal_assets):
+        raise RuntimeError("exported %d skeletal FBX files for %d assets"
+                           % (len(skeletal_exported), len(skeletal_assets)))
+
+    log("")
     log("== FBX intermediate check: bake and export negations cancel ==")
     for record in exported:
         verify_fbx_intermediate(record)
     log("  ok: all %d FBX files match their expected intermediate bounds (mirror-X for normal entries, verbatim for #mx variants)" % len(exported))
+    for record in skeletal_exported:
+        if record["kind"] == "skeletal_mesh":
+            verify_fbx_intermediate(record)   # mirror-Y, no bake stage (M8)
 except Exception:
     log("EXPORT FAILED")
     log(traceback.format_exc())

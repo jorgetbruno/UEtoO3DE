@@ -51,7 +51,8 @@ def clear_manifest_files(project, document):
     removed = []
 
     clearable = [a for a in document["assets"]
-                 if a["kind"] in ("static_mesh", "texture")
+                 if a["kind"] in ("static_mesh", "texture",
+                                  "skeletal_mesh", "animation")
                  or (a["kind"] == "material" and a.get("material_data"))]
     for asset in clearable:
         relative = asset["o3de_relative_path"]

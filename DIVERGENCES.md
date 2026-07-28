@@ -43,6 +43,18 @@ exists, is a design change recorded here rather than a patch.
 | Heightfield physics | native heightfield collider | triangle mesh from the render bake (the plan's v1 path). The Jolt gem's heightfield collider needs O3DE's Terrain gem as provider — that integration is the plan's stretch goal, prepared for by the exported heightmap TGA |
 | World orientation | +X forward | the negate-Y basis map lands UE's forward on O3DE's +X (O3DE's right): faithful shape, mirror-free, yawed 90° versus O3DE's forward convention. Nothing in v1 scope depends on it (MAPPING.md, Lane A) |
 
+## Skeletal meshes + animations (M8)
+
+| Behaviour | UE | → O3DE |
+|---|---|---|
+| Animation Blueprints | state machines, blend spaces, per-instance logic | **gone.** The component imports with its Actor in bind pose + `ANIM_BLUEPRINT_UNMAPPED`; only single-node playback (`anim_to_play`) maps, to a Simple Motion component |
+| Root motion | extracted by AnimBlueprints/Characters when `enable_root_motion` is set | not extracted (`ANIM_ROOT_MOTION_DROPPED`); the motion plays in place. A plain UE `SkeletalMeshActor` does not extract it either, so the showcase-style levels match; a Character that walked away in UE will walk in place in O3DE |
+| Skeletal collision | per-bone PhysicsAsset bodies (query + ragdoll) | none (`SKEL_PHYSICS_DROPPED`): per-bone bodies have no v1 mapping and a bind-pose trimesh on an animated character would collide wrongly all the time |
+| Materials | per-component override list | the FBX's auto-generated azmaterials by default; converted UE materials assign through the same Material-component path as static meshes (the Actor is a material consumer) |
+| Negative scale | mirrors the skinned mesh | not representable: no skinned mirror-variant bake exists. The scale-sign fold still makes the scale positive; the mirror itself is dropped → `XFORM_NEGATIVE_SCALE` |
+| Playback verification | n/a | EMotionFX exposes **no Python bus** in 26.05, so joint transforms are unverifiable headless; the acceptance proves playback by frame-capture pixel deltas and bone fidelity by byte-searching every manifest bone name in the `.actor` product |
+| Morph targets, cloth, physics-driven tails | animated at runtime | morph targets travel in the FBX (`export_morph_targets`) but nothing drives them; cloth/physics assets are dropped with the PhysicsAsset |
+
 ## Lights (M5)
 
 | Behaviour | UE | → O3DE (Atom) |

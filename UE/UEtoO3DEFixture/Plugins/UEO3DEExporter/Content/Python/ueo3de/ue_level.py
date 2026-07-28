@@ -345,7 +345,8 @@ def _collision_shapes(mesh, subject, warnings):
 # asset table
 # ---------------------------------------------------------------------------
 
-_EXTENSIONS = {"static_mesh": "fbx", "material": "material"}
+_EXTENSIONS = {"static_mesh": "fbx", "material": "material",
+               "skeletal_mesh": "fbx", "animation": "fbx"}
 
 # The mirrored-variant ue_path fragment (negative-scale fidelity). Stored
 # literally in the asset entry's ue_path: the GUID derives from it, sanitize
@@ -535,6 +536,78 @@ class AssetTable:
         }
         return guid
 
+    def add_skeletal_mesh(self, mesh, component):
+        """Register a skeletal mesh asset (M8). `component` supplies the bone
+        table -- get_num_bones lives on SkinnedMeshComponent, not the asset.
+
+        The exported FBX goes through UE's NATIVE skeletal exporter (no
+        GeometryScript bake is possible without destroying skinning), so its
+        product carries the Lane B SKELETAL rule: the importer composes a
+        local Rz180 into the entity rotation instead (LANE_B.md, M8).
+        Products: `<stem>.actor` (+ skinned azmodel), from the DEFAULT scene
+        rules -- no `.assetinfo` sidecar exists for skeletal sources.
+        """
+        ue_path = unreal.SystemLibrary.get_path_name(mesh)
+        guid = naming.asset_guid(ue_path)
+        if guid in self._entries:
+            return guid
+
+        bounds = mesh.get_bounds()
+        origin = _vec3(_field(bounds, "origin"))
+        extent = _vec3(_field(bounds, "box_extent"))
+        aabb_min, aabb_max = _converted_aabb(
+            [origin[0] - extent[0], origin[1] - extent[1], origin[2] - extent[2]],
+            [origin[0] + extent[0], origin[1] + extent[1], origin[2] + extent[2]])
+
+        slot_names = []
+        slot_material_names = []
+        for index, slot in enumerate(_field(mesh, "materials", []) or []):
+            slot_names.append(_name_str(_field(slot, "material_slot_name")))
+            material = _field(slot, "material_interface")
+            slot_material_names.append(material.get_name() if material
+                                       else naming.empty_slot_label(index))
+
+        skeleton = _field(mesh, "skeleton")
+        bone_count = int(component.get_num_bones())
+        self._entries[guid] = {
+            "guid": guid,
+            "kind": "skeletal_mesh",
+            "ue_path": naming.package_path(ue_path),
+            "name": mesh.get_name(),
+            "o3de_relative_path": self._claim(ue_path, "skeletal_mesh"),
+            "bounds_local": {"min": aabb_min, "max": aabb_max},
+            "bone_count": bone_count,
+            "bone_names": [_name_str(component.get_bone_name(i))
+                           for i in range(bone_count)],
+            "skeleton_ue_path": (naming.package_path(
+                unreal.SystemLibrary.get_path_name(skeleton))
+                if skeleton is not None else ""),
+            "material_slot_names": slot_names,
+            "material_slot_material_names": slot_material_names,
+        }
+        return guid
+
+    def add_animation(self, sequence):
+        """Register an AnimSequence asset (M8). Product: `<stem>.motion`."""
+        ue_path = unreal.SystemLibrary.get_path_name(sequence)
+        guid = naming.asset_guid(ue_path)
+        if guid in self._entries:
+            return guid
+        try:
+            duration = float(sequence.get_play_length())
+        except Exception:
+            duration = float(_field(sequence, "sequence_length", 0.0) or 0.0)
+        self._entries[guid] = {
+            "guid": guid,
+            "kind": "animation",
+            "ue_path": naming.package_path(ue_path),
+            "name": sequence.get_name(),
+            "o3de_relative_path": self._claim(ue_path, "animation"),
+            "duration_seconds": duration,
+            "root_motion": bool(_field(sequence, "enable_root_motion", False)),
+        }
+        return guid
+
     def entries(self):
         return sorted(self._entries.values(), key=lambda e: e["ue_path"])
 
@@ -546,6 +619,7 @@ class AssetTable:
 def _classify(actor):
     """Coarse entity kind. Physics/trigger detection is behavioural, below."""
     for class_name, kind in (("StaticMeshActor", "static_mesh"),
+                             ("SkeletalMeshActor", "skeletal_mesh"),
                              ("Light", "light"),
                              ("SkyLight", "environment"),
                              ("ExponentialHeightFog", "environment"),
@@ -869,6 +943,73 @@ def _mesh_block(actor, assets, subject, warnings, mirrored=False):
                                       subject, warnings, mirrored=mirrored)
 
 
+def _skeletal_block(component, assets, subject, warnings):
+    """The manifest `skeletal` block for one SkeletalMeshComponent (M8).
+
+    Single-node playback maps to the Simple Motion component; an Animation
+    Blueprint has no mapping (bind pose + ANIM_BLUEPRINT_UNMAPPED). The
+    anim-to-play lives in `animation_data` in 5.8 -- the flat `anim_to_play`
+    property does not exist (measured on the UndeadPack showcase maps).
+    """
+    mesh = _field(component, "skeletal_mesh_asset")
+    if mesh is None:
+        return None, None
+    mesh_guid = assets.add_skeletal_mesh(mesh, component)
+
+    slot_names = []
+    for slot in _field(mesh, "materials", []) or []:
+        slot_names.append(_name_str(_field(slot, "material_slot_name")))
+    slots = []
+    for index in range(component.get_num_materials()):
+        material = component.get_material(index)
+        if material is None:
+            warnings.add("MESH_SLOT_EMPTY", subject, "material slot %d" % index)
+            material_guid = None
+        else:
+            material_guid = assets.add_material(material)
+        slots.append({
+            "index": index,
+            "slot_name": slot_names[index] if index < len(slot_names) else "",
+            "material_guid": material_guid,
+        })
+
+    block = {
+        "asset_guid": mesh_guid,
+        "animation_guid": None,
+        "loop": False,
+        "play": False,
+        "material_slots": slots,
+    }
+
+    mode = _enum_name(_field(component, "animation_mode"), "")
+    if mode == "animation_single_node":
+        data = _field(component, "animation_data")
+        sequence = _field(data, "anim_to_play")
+        if sequence is None:
+            pass    # bind pose on purpose: Actor component only
+        elif isinstance(sequence, unreal.AnimSequence):
+            block["animation_guid"] = assets.add_animation(sequence)
+            block["loop"] = bool(_field(data, "saved_looping", True))
+            block["play"] = bool(_field(data, "saved_playing", True))
+            if bool(_field(sequence, "enable_root_motion", False)):
+                warnings.add("ANIM_ROOT_MOTION_DROPPED", subject,
+                             "%s has enable_root_motion; the motion plays in "
+                             "place" % sequence.get_name())
+        else:
+            # Montages/composites are graph-adjacent assets, same drop rule.
+            warnings.add("ANIM_BLUEPRINT_UNMAPPED", subject,
+                         "single-node asset %s (%s) is not a plain AnimSequence"
+                         % (sequence.get_name(),
+                            sequence.get_class().get_name()))
+    elif mode == "animation_blueprint":
+        anim_class = _field(component, "anim_class")
+        warnings.add("ANIM_BLUEPRINT_UNMAPPED", subject,
+                     "driven by %s; imported in bind pose"
+                     % (anim_class.get_name() if anim_class is not None
+                        else "an Animation Blueprint"))
+    return block, mesh_guid
+
+
 # Actor classes deliberately NOT component-extracted, with the deferral they
 # belong to. BP_Sky_Sphere is a giant textured sphere enclosing the level --
 # extracting it would wrap the imported level in an unconvertible shell while
@@ -956,9 +1097,52 @@ def _extract_mesh_components(actor, actor_entity, assets, warnings):
             entity["physics"] = physics
         children.append(entity)
 
+    # Skeletal components extract the same way (M8): BP_Ghoul-style actors
+    # carry their character in SkeletalMeshComponents (mesh + rags + armor).
+    # Almost always AnimBlueprint-driven, so each child usually lands in bind
+    # pose with ANIM_BLUEPRINT_UNMAPPED from _skeletal_block.
+    skeletal_count = 0
+    for component in actor.get_components_by_class(unreal.SkeletalMeshComponent) or []:
+        subject = "%s.%s" % (label, component.get_name())
+        world_ue = component.get_world_transform()
+        world, mirrored = _transform_from_parts(
+            _vec3(world_ue.translation),
+            _quat_xyzw(world_ue.rotation),
+            _vec3(world_ue.scale3d),
+            subject, warnings)
+        relative_ue = unreal.MathLibrary.make_relative_transform(
+            world_ue, actor.get_actor_transform())
+        local, _mirrored_local = _transform_from_parts(
+            _vec3(relative_ue.translation),
+            _quat_xyzw(relative_ue.rotation),
+            _vec3(relative_ue.scale3d),
+            subject, warnings)
+        if mirrored:
+            warnings.add("XFORM_NEGATIVE_SCALE", subject,
+                         "mirrored skeletal component; no skinned mirror "
+                         "variant exists, imported unmirrored")
+
+        skeletal_block, _guid = _skeletal_block(component, assets, subject,
+                                                warnings)
+        if skeletal_block is None:
+            continue
+        children.append({
+            "id": naming.entity_id(actor_path + ":" + component.get_name()),
+            "name": subject,
+            "ue_class": component.get_class().get_name(),
+            "ue_actor_path": actor_path + ":" + component.get_name(),
+            "kind": "skeletal_mesh",
+            "parent_id": actor_entity["id"],
+            "mobility": _enum_name(_field(component, "mobility"), "static"),
+            "transform": {"world": world, "local": local},
+            "skeletal": skeletal_block,
+        })
+        skeletal_count += 1
+
     for component in actor.get_components_by_class(unreal.SceneComponent) or []:
         kind_name = component.get_class().get_name()
-        if isinstance(component, unreal.StaticMeshComponent):
+        if isinstance(component, (unreal.StaticMeshComponent,
+                                  unreal.SkeletalMeshComponent)):
             continue
         if kind_name in _EXTRACT_SKIP_COMPONENTS or kind_name == "SceneComponent" \
                 or kind_name == "ChildActorComponent":
@@ -967,8 +1151,9 @@ def _extract_mesh_components(actor, actor_entity, assets, warnings):
 
     if children:
         warnings.add("ACTOR_COMPONENTS_EXTRACTED", label,
-                     "%s: %d static mesh component(s) extracted%s"
-                     % (actor.get_class().get_name(), len(children),
+                     "%s: %d static + %d skeletal mesh component(s) extracted%s"
+                     % (actor.get_class().get_name(),
+                        len(children) - skeletal_count, skeletal_count,
                         ("; not extracted: " + ", ".join(sorted(set(skipped))))
                         if skipped else ""))
     return children
@@ -1055,6 +1240,19 @@ def _build_entity(actor, assets, warnings):
         if mesh_block is not None:
             entity["mesh"] = mesh_block
 
+    if kind == "skeletal_mesh":
+        if mirrored:
+            # A skeletal mirror variant would need a mirrored SKINNED bake,
+            # which the native exporter cannot produce; the fold already made
+            # the scale positive, the mirror itself is dropped.
+            warnings.add("XFORM_NEGATIVE_SCALE", label,
+                         "mirrored skeletal actor; no skinned mirror variant "
+                         "exists, imported unmirrored")
+        skeletal_block, mesh_guid = _skeletal_block(
+            actor.skeletal_mesh_component, assets, label, warnings)
+        if skeletal_block is not None:
+            entity["skeletal"] = skeletal_block
+
     if kind == "light":
         light = _light_block(actor)
         if light is not None:
@@ -1083,10 +1281,17 @@ def _build_entity(actor, assets, warnings):
     component = _primitive_component(actor)
     if component is not None:
         physics = _physics_block(component, mesh_guid, label, warnings)
+        if kind == "skeletal_mesh":
+            # UE serves skeletal collision from the per-bone PhysicsAsset;
+            # per-bone bodies have no v1 mapping, and a static trimesh of a
+            # bind pose would be worse than nothing on an animated character.
+            if physics["has_collision"]:
+                warnings.add("SKEL_PHYSICS_DROPPED", label,
+                             "collision_enabled on the skeletal component")
         # "No collision -> render-only entity, no physics components" (plan M3).
         # Emitting a block that says has_collision=false for every light and fog
         # actor would only give the O3DE side something to ignore.
-        if physics["has_collision"]:
+        elif physics["has_collision"]:
             entity["physics"] = physics
             # A trigger volume is a trigger whatever its declared class.
             if physics["is_trigger"]:

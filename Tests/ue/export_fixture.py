@@ -18,8 +18,11 @@ position buffers directly -- the FBX is the wrong place to assert the final
 orientation, which is exactly the mistake that shipped a mirrored pipeline
 during M2. See LANE_B.md.)
 
-Run:  run_ue_python.bat export_fixture.py
-Writes Tests/ue/results/export_fixture_result.txt and exits non-zero on failure.
+Run:  export_fixture.bat (a FULL editor session since M8 -- the skeletal
+canaries go through UE's native FBX exporter, which asserts on missing render
+objects in commandlets; see probe_m8_skeletal.py).
+Writes Tests/ue/results/export_fixture_result.txt; the .bat asserts on the
+RESULT line because the editor's exit code is meaningless under quit_editor.
 """
 
 import os
@@ -75,9 +78,10 @@ def verify_fbx_intermediate(record):
     path = os.path.join(ASSETS_ROOT, record["relative_path"]).replace("\\", "/")
     stats = fbx_reader.vertex_stats(path)
 
+    tolerance = record.get("tolerance_cm", BOUNDS_TOLERANCE_CM)
     deltas = [max(abs(stats["min"][i] - expected_min[i]),
                   abs(stats["max"][i] - expected_max[i])) for i in range(3)]
-    if max(deltas) > BOUNDS_TOLERANCE_CM:
+    if max(deltas) > tolerance:
         raise RuntimeError(
             "%s: FBX does not match its expected intermediate bounds.\n"
             "  FBX bounds %s .. %s\n"
@@ -110,6 +114,17 @@ try:
         raise RuntimeError("exported %d FBX files for %d mesh assets"
                            % (len(exported), len(mesh_assets)))
 
+    log("== skeletal mesh + animation FBX export (M8, native exporter) ==")
+    skeletal_exported = mesh_export.export_skeletal(
+        document["assets"], ASSETS_ROOT, log=log)
+    skeletal_assets = [a for a in document["assets"]
+                       if a["kind"] in ("skeletal_mesh", "animation")]
+    log("  %d FBX files for %d skeletal/animation assets"
+        % (len(skeletal_exported), len(skeletal_assets)))
+    if len(skeletal_exported) != len(skeletal_assets):
+        raise RuntimeError("exported %d skeletal FBX files for %d assets"
+                           % (len(skeletal_exported), len(skeletal_assets)))
+
     log("== texture export (TGA, role-suffixed; ORM channels split) ==")
     raw_root = OUTPUT_DIR + "/RawTextures"
     texture_files = asset_table.texture_bank.export_all(ASSETS_ROOT, raw_root, log=log)
@@ -125,6 +140,14 @@ try:
             % (record["relative_path"], stats["min"][1], stats["max"][1],
                record["ue_bounds_min"][1], record["ue_bounds_max"][1]))
     log("  ok: all %d FBX files match their expected intermediate bounds (mirror-X for normal entries, verbatim for #mx variants)" % len(exported))
+
+    log("== skeletal FBX intermediate check: mirror-Y (no bake stage) ==")
+    for record in skeletal_exported:
+        if record["kind"] != "skeletal_mesh":
+            continue    # animations carry no geometry; curve check ran at export
+        stats, _emin, _emax = verify_fbx_intermediate(record)
+        log("  %-46s y [%.3f, %.3f]"
+            % (record["relative_path"], stats["min"][1], stats["max"][1]))
 except Exception:
     log("EXPORT FAILED")
     log(traceback.format_exc())
@@ -137,5 +160,11 @@ with open(RESULT_PATH, "w") as handle:
     handle.write("\n".join(lines) + "\n")
 
 print("RESULT: " + status)
+# Under -ExecutePythonScript the editor must be told to exit; harmless in a
+# commandlet, where the process ends with the script anyway.
+try:
+    unreal.SystemLibrary.quit_editor()
+except Exception:
+    pass
 if status != "PASS":
     raise SystemExit(1)

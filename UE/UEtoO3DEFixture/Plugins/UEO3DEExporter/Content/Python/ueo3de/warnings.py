@@ -99,6 +99,21 @@ CODES = {
               "terrain renders with the single converted material (the "
               "classifier picks one layer's texture per channel)."),
 
+    # --- skeletal meshes + animations (M8) ---
+    "ANIM_ROOT_MOTION_DROPPED": (
+        WARN, "The assigned AnimSequence has enable_root_motion set; O3DE's "
+              "Simple Motion component does not extract root motion to entity "
+              "movement, so the character animates in place (which is also "
+              "what UE itself does for a plain SkeletalMeshActor)."),
+    "ANIM_BLUEPRINT_UNMAPPED": (
+        WARN, "The skeletal component is driven by an Animation Blueprint; "
+              "graph logic has no mapping, so the character imports with its "
+              "Actor component in bind pose and no motion."),
+    "SKEL_PHYSICS_DROPPED": (
+        INFO, "The skeletal component has collision enabled, which UE serves "
+              "from the per-bone PhysicsAsset; per-bone bodies have no v1 "
+              "mapping, so the entity imports without physics."),
+
     # --- physics source data (M1 records, M3 consumes) ---
     "PHYS_NO_SIMPLE_COLLISION": (
         INFO, "Static mesh has no simple collision primitives; M3 must fall "

@@ -291,6 +291,26 @@ in a scripted session trips the engine's `!IsRunningCommandlet()` assertion,
 so M7's suite takes a real landscape level's export directory as its input and
 fails hard when it is missing.
 
+## Skeletal meshes + animations (M8)
+
+| UE | O3DE | Note |
+|---|---|---|
+| `SkeletalMeshActor` | entity with an EMotionFX **Actor** component (`Actor asset` ← the `.actor` product) | the skinned FBX ships through UE's **native** exporter (no GeometryScript bake is possible without destroying skinning); the DEFAULT scene rules already produce `<stem>.actor` + the skinned azmodel — no `.assetinfo` sidecar |
+| single-node animation (`animation_data.anim_to_play` — the flat `anim_to_play` property does not exist in 5.8, measured) | **Simple Motion** component (`Configuration\|Motion` ← the `.motion` product, `Play on active`, `Loop motion` from the manifest) | each AnimSequence exports to its own FBX with `export_preview_mesh=False` — skeleton + curves, no geometry |
+| skeletal frame | the importer composes a **local Rz180** into every skeletal entity's rotation | no bake stage exists, so skeletal products carry LaneA · Rz180; the manifest pins `units.lane_b_skeletal_rule` and the importer refuses a mismatch (LANE_B.md, M8) |
+| Animation Blueprint | Actor component in bind pose, no motion | graph logic has no mapping → `ANIM_BLUEPRINT_UNMAPPED` |
+| `enable_root_motion` on the anim | plays in place | Simple Motion does not extract root motion → `ANIM_ROOT_MOTION_DROPPED` (a plain UE `SkeletalMeshActor` does not extract it either) |
+| skeletal collision (PhysicsAsset per-bone bodies) | — | no v1 mapping → `SKEL_PHYSICS_DROPPED`; a bind-pose trimesh on an animated character would be worse than nothing |
+| Blueprint actors with `SkeletalMeshComponent`s | child entities under the placeholder, same skeletal recipe | the M4.5 component-extraction path extended to skeletal components (BP_Ghoul: mesh + rags + armor) |
+| bone count / names | `bone_count` + `bone_names` in the skeletal asset entry | EMotionFX reflects **no bus** to EditorPythonBindings in 26.05 (measured, 7 probe rounds — no joint transforms, no bounds, attachment follows the entity not a joint), so the plan's bone-count assertion runs at the `.actor` product byte level: every manifest bone name must appear |
+| playback proof | frame-capture pixel deltas | `FrameCaptureRequestBus` writes real screenshots headless with a measured **zero** edit-mode noise floor; the M8 acceptance requires the waving canary's frames to differ and the bind-pose control's not to (`Tests/lib/png_diff.py`) |
+
+**Skeletal export needs a FULL editor session** — the native skeletal FBX
+exporter walks render objects that do not exist under `-nullrhi`
+(`Assertion failed: MeshObject`, measured). Since M8 the fixture export runs
+through `export_fixture.bat` (full editor, result-file contract), same as
+`export_level.bat` has since M7.
+
 ## World Partition detection
 
 UE 5.8 exposes no direct route from Python: `UWorld` has neither `persistent_level` nor

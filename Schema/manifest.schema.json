@@ -16,9 +16,9 @@
   ],
   "properties": {
     "schema_version": {
-      "description": "Bumped whenever a change would break an existing importer. 2 (M2) added assets[].fbx_node_name and units.lane_b_rule; 3 (M4) added material_data and the texture asset kind; 4 (M6) added entities[].environment; 5 (M4 slot fidelity) added assets[].material_slot_material_names.",
+      "description": "Bumped whenever a change would break an existing importer. 2 (M2) added assets[].fbx_node_name and units.lane_b_rule; 3 (M4) added material_data and the texture asset kind; 4 (M6) added entities[].environment; 5 (M4 slot fidelity) added assets[].material_slot_material_names; 6 (M8) added the skeletal_mesh/animation asset kinds, entities[].skeletal and units.lane_b_skeletal_rule.",
       "type": "integer",
-      "const": 5
+      "const": 6
     },
     "generator": {
       "type": "object",
@@ -71,7 +71,8 @@
         "angle",
         "coordinate_system",
         "lane_a_rule",
-        "lane_b_rule"
+        "lane_b_rule",
+        "lane_b_skeletal_rule"
       ],
       "properties": {
         "length": {
@@ -94,6 +95,11 @@
           "description": "How the referenced geometry ends up reflected in the O3DE product. The exporter bakes diag(-1,-1,1), UE's FBX writer negates Y, and SceneAPI applies a 180-degree yaw diag(-1,-1,1) (a proper rotation -- importers rotate into a declared frame, they never mirror), netting Lane A's diag(1,-1,1); SceneAPI also converts cm to m from the FBX UnitScaleFactor. Measured at the product-buffer level on BOTH asymmetric axes (Lane B correction #3).",
           "type": "string",
           "const": "negate_y_scene_rz180"
+        },
+        "lane_b_skeletal_rule": {
+          "description": "Lane B for SKELETAL sources (M8): no bake stage exists (a GeometryScript mirror destroys skinning), so the product carries LaneA * Rz180 and the importer composes a local Rz180 into every skeletal entity's rotation. Measured at the skinned azmodel buffer level (Y negated vs FBX, Z kept, cm->m).",
+          "type": "string",
+          "const": "native_y_scene_rz180_entity_rz180"
         }
       }
     },
@@ -234,7 +240,9 @@
           "enum": [
             "static_mesh",
             "material",
-            "texture"
+            "texture",
+            "skeletal_mesh",
+            "animation"
           ]
         },
         "ue_path": {
@@ -340,6 +348,32 @@
           "items": {
             "type": "string"
           }
+        },
+        "bone_count": {
+          "description": "Skeletal meshes: joints in the skeleton, from SkinnedMeshComponent.get_num_bones (M8). The .actor product must carry the same skeleton.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "bone_names": {
+          "description": "Skeletal meshes: every joint name, in component bone order. The M8 artifact test asserts each appears in the .actor product bytes.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "skeleton_ue_path": {
+          "description": "Skeletal meshes: the UE Skeleton asset package path (informational).",
+          "type": "string"
+        },
+        "duration_seconds": {
+          "description": "Animations: AnimSequence play length.",
+          "type": "number",
+          "minimum": 0
+        },
+        "root_motion": {
+          "description": "Animations: UE enable_root_motion. True is reported as ANIM_ROOT_MOTION_DROPPED at the referencing entity; the motion plays in place.",
+          "type": "boolean"
         }
       }
     },
@@ -580,6 +614,7 @@
           "type": "string",
           "enum": [
             "static_mesh",
+            "skeletal_mesh",
             "light",
             "trigger",
             "environment",
@@ -619,6 +654,9 @@
         "mesh": {
           "$ref": "#/definitions/mesh"
         },
+        "skeletal": {
+          "$ref": "#/definitions/skeletal"
+        },
         "light": {
           "$ref": "#/definitions/light"
         },
@@ -627,6 +665,41 @@
         },
         "environment": {
           "$ref": "#/definitions/environment"
+        }
+      }
+    },
+    "skeletal": {
+      "description": "A skeletal-mesh entity (M8): Actor component from the skeletal_mesh asset's .actor product, plus a Simple Motion component when an animation is assigned (UE single-node playback). An AnimBlueprint-driven component carries no animation_guid and imports in bind pose.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_guid",
+        "animation_guid",
+        "loop",
+        "play",
+        "material_slots"
+      ],
+      "properties": {
+        "asset_guid": {
+          "$ref": "#/definitions/guid"
+        },
+        "animation_guid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "loop": {
+          "type": "boolean"
+        },
+        "play": {
+          "type": "boolean"
+        },
+        "material_slots": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/material_slot"
+          }
         }
       }
     },

@@ -25,7 +25,8 @@ set "COLD="
 if /I "%~1"=="--cold" set "COLD=--cold"
 
 echo === 1/6  UE export (manifest + FBX) ===
-call "%REPO%\Tests\ue\run_ue_python.bat" "%REPO%\Tests\ue\export_fixture.py" >nul 2>&1
+rem Full editor since M8: skeletal FBX export asserts in commandlets.
+call "%REPO%\Tests\ue\export_fixture.bat" >nul 2>&1
 if errorlevel 1 (
   echo   see Tests\ue\results\export_fixture_result.txt
   goto :failed

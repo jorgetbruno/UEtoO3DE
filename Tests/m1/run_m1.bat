@@ -15,7 +15,8 @@ set "REPO=%~dp0..\.."
 set "PY=python"
 
 echo === 1/4  UE export ===
-call "%REPO%\Tests\ue\run_ue_python.bat" "%REPO%\Tests\ue\export_fixture.py" >nul 2>&1
+rem Full editor since M8: skeletal FBX export asserts in commandlets.
+call "%REPO%\Tests\ue\export_fixture.bat" >nul 2>&1
 if errorlevel 1 goto :failed_export
 
 echo === 2/4  Lane A / naming property tests ===

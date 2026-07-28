@@ -21,9 +21,15 @@ checks matter more than the rest:
 
 import json
 
-SUPPORTED_SCHEMA_VERSION = 5
+SUPPORTED_SCHEMA_VERSION = 6
 EXPECTED_LANE_A_RULE = "negate_y"
 EXPECTED_LANE_B_RULE = "negate_y_scene_rz180"
+# M8: skeletal geometry ships through UE's native exporter with no bake stage,
+# so its products carry LaneA * Rz180 and THIS importer composes the local
+# Rz180 into skeletal entity rotations (skel_build.compose_rz180). A manifest
+# with a different rule means that composition would yaw the level's
+# characters wrong -- refuse it.
+EXPECTED_LANE_B_SKELETAL_RULE = "native_y_scene_rz180_entity_rz180"
 EXPECTED_COORDINATE_SYSTEM = "o3de_right_handed_z_up"
 EXPECTED_LENGTH_UNIT = "meters"
 
@@ -49,6 +55,7 @@ def verify(document, path="<manifest>"):
     units = document.get("units") or {}
     for key, expected in (("lane_a_rule", EXPECTED_LANE_A_RULE),
                           ("lane_b_rule", EXPECTED_LANE_B_RULE),
+                          ("lane_b_skeletal_rule", EXPECTED_LANE_B_SKELETAL_RULE),
                           ("coordinate_system", EXPECTED_COORDINATE_SYSTEM),
                           ("length", EXPECTED_LENGTH_UNIT)):
         actual = units.get(key)
@@ -78,6 +85,12 @@ def assets_by_guid(document):
 
 def static_mesh_assets(document):
     return [asset for asset in document["assets"] if asset["kind"] == "static_mesh"]
+
+
+def skeletal_assets(document):
+    """skeletal_mesh + animation entries (M8) -- both stage as plain FBX."""
+    return [asset for asset in document["assets"]
+            if asset["kind"] in ("skeletal_mesh", "animation")]
 
 
 def entities_parents_first(document):
