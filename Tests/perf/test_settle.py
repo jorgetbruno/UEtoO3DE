@@ -113,12 +113,61 @@ check(prefab_build.unbaked_colliders(path) == [],
       "non-mesh-collider components were reported as unbaked colliders "
       "(a detector that fires on everything passes just as quietly)")
 
-# Both backends' names carry "MeshCollider"; M3b compares them on content, so
-# the check cannot be Jolt-only.
+# Both backends' names carry "MeshCollider", but they fail in different ways
+# and the file check must tell them apart. A Jolt collider serializes its
+# baked geometry (CookedData); a PhysX EditorMeshColliderComponent serializes
+# only a REFERENCE to the cooked .pxmesh product -- checking it for CookedData
+# would flag every healthy one, and checking nothing would let a collider
+# whose asset reference never serialized pass as geometry. So: Jolt-typed ->
+# `unbaked` on empty CookedData, PhysX-typed -> `missing_asset` on a missing
+# or null .pxmesh reference, both from ONE parse (collider_verification).
 path = write_prefab([("PhysXOne", [collider("", kind="EditorMeshColliderComponent")])])
 paths.append(path)
-check(prefab_build.unbaked_colliders(path) == ["PhysXOne"],
-      "a PhysX-named mesh collider with no cooked data was not reported")
+verification = prefab_build.collider_verification(path)
+check(verification["missing_asset"] == ["PhysXOne"],
+      "a PhysX-typed mesh collider with no asset reference was not reported "
+      "as missing_asset: %r" % verification)
+check(verification["unbaked"] == [],
+      "a PhysX-typed mesh collider was swept into the Jolt bake check: %r"
+      % verification)
+
+# A healthy PhysX mesh collider: null-guid references and non-pxmesh hints
+# (physics material slots) must not satisfy the check -- only a real cooked
+# mesh reference does.
+good_reference = {"$type": "EditorMeshColliderComponent", "Id": 1,
+                  "ShapeConfiguration": {"PhysicsAsset": {"Asset": {
+                      "assetId": {"guid": "{0E50EE05-BA3A-587D-BD27-BD75DC423A4B}",
+                                  "subId": 858390244},
+                      "assetHint": "assets/things/sm_rock.fbx.pxmesh"}}}}
+null_reference = {"$type": "EditorMeshColliderComponent", "Id": 1,
+                  "ColliderConfiguration": {"MaterialSlots": {"Slots": [{
+                      "assetId": {"guid": "{11111111-2222-3333-4444-555555555555}"},
+                      "assetHint": "materials/wood.physicsmaterial"}]},
+                  },
+                  "ShapeConfiguration": {"PhysicsAsset": {"Asset": {
+                      "assetId": {"guid": "{00000000-0000-0000-0000-000000000000}",
+                                  "subId": 0},
+                      "assetHint": ""}}}}
+# The combination that isolates the GUID half of the check: the hint says
+# .pxmesh but the id is null -- a reference whose name serialized and whose
+# identity did not. Without this fixture, reordering the check to return True
+# on the hint alone passes every suite (verified), and a collider that collides
+# with nothing verifies as healthy: the precise silence this check exists to
+# break.
+hint_only = {"$type": "EditorMeshColliderComponent", "Id": 1,
+             "ShapeConfiguration": {"PhysicsAsset": {"Asset": {
+                 "assetId": {"guid": "{00000000-0000-0000-0000-000000000000}",
+                             "subId": 0},
+                 "assetHint": "assets/things/sm_rock.fbx.pxmesh"}}}}
+path = write_prefab([("Healthy", [good_reference]),
+                     ("NullRef", [null_reference]),
+                     ("HintOnly", [hint_only])])
+paths.append(path)
+verification = prefab_build.collider_verification(path)
+check(verification["missing_asset"] == ["HintOnly", "NullRef"],
+      "a null .pxmesh reference must be reported even when OTHER asset "
+      "references (physics materials) are present or when the assetHint alone "
+      "looks right, and a real reference must not be: %r" % verification)
 
 path = write_prefab([("Zebra", [collider("")]),
                      ("Alpha", [collider(cooked=None)]),

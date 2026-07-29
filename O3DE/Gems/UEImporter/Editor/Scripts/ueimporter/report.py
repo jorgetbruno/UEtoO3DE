@@ -137,6 +137,20 @@ CODES = {
                "bake cannot be recovered afterwards, because the in-memory "
                "template is a snapshot and O3DE refuses to re-create a prefab "
                "in the same session (both measured -- see PERFORMANCE.md)."),
+    "PHYS_MESH_NOT_COOKED": (
+        WARN, "The mesh needs a cooked physics mesh (.pxmesh) on this backend, "
+              "but the Asset Processor produced none -- either the staged "
+              "sidecar predates cooked-mesh support (restage to fix) or the "
+              "cook failed (check the AP log). The affected entities fall "
+              "back to AABB boxes over each convex element, or to no collider "
+              "where the fallback needed a triangle mesh."),
+    "PHYS_MESH_ASSET_MISSING": (
+        ERROR, "A PhysX mesh collider reached the saved prefab without a "
+               "cooked physics mesh reference, so it collides with nothing. "
+               "The reference was set through the editor without error, which "
+               "makes this the asset-route sibling of PHYS_COLLIDER_NOT_BAKED: "
+               "a write the editor accepted is not proof of what serialized, "
+               "so the file is checked after the save."),
 
     # --- incremental re-import (M10) ---
     "REIMPORT_ENTITY_ADDED": (

@@ -197,6 +197,41 @@ from its parent (`Tests/perf/test_chunk.py`).
 That city converted in twelve chunks: 44,504 entities, 42,088 mesh colliders with
 every bake verified present, 715 MB of prefabs, ~24 minutes, no errors.
 
+**PhysX mesh collision is real geometry, not boxes.** PhysX cannot bake a
+collider from a render mesh the way Jolt does — it wants a *cooked* `.pxmesh`
+asset. Staging therefore writes a PhysX mesh group into every relevant FBX's
+`.assetinfo` sidecar (convex elements → Convex cook, no simple collision →
+Triangle Mesh cook, primitives → none needed), the Asset Processor cooks the
+product, and the importer attaches a mesh collider referencing it — the same
+whole-mesh semantics as Jolt's hull, verified on the saved bytes afterwards
+(`PHYS_MESH_ASSET_MISSING` if a reference did not serialize). Triangle meshes
+also give PhysX imports **walkable terrain**, which the AABB-box era never had.
+Sidecars carry the group only in projects whose `project.json` lists a PhysX
+gem, so Jolt-project sidecars stay byte-identical.
+
+Two PhysX limits keep their reported gaps rather than being papered over: a
+cooked triangle mesh is refused on a **simulated dynamic body**, and refused as
+a **trigger shape** — in both cases the entity is reported
+(`PHYS_SHAPE_APPROXIMATED`, naming the blocker) instead of receiving a collider
+that looks healthy and does nothing. Convex cooks work everywhere.
+
+Knobs:
+
+```
+set UEO3DE_PHYSX_DECOMPOSE=1     rem or a hull cap, e.g. 64 -- V-HACD at cook time
+set UEO3DE_PHYSX_COOK=1          rem force cooking on when PhysX is activated transitively
+```
+
+Decomposition keeps concavities UE decomposed away (better fidelity than
+Jolt's single whole-mesh hull) in exchange for Asset Processor time; it is off
+by default, and anything the parser does not recognise fails loudly rather than
+guessing a direction. `UEO3DE_PHYSX_COOK` exists because O3DE activates gems
+transitively: a project that gets PhysX through another gem's dependency runs
+the PhysX backend while `project.json` never names it, and without the override
+the "restage to fix" advice would loop forever. Existing stagings need one
+restage (`Tests/m2/m2_stage.py`) plus an AP run to pick up the groups —
+`PHYS_MESH_NOT_COOKED` says so when that is the situation.
+
 **Textures UE will not export.** `UTextureExporterTGA` accepts only some source
 formats and refuses others outright, which used to end an export at the first one
 (`No tga exporter found for Texture2D ...`). Measured across one pack's 155

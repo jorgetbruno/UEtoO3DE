@@ -25,11 +25,15 @@ PhysX is NOT a renamed Jolt; three differences shape this adapter:
   * NO RENDER-MESH BAKE. Jolt's Mesh Collider builds collision from the
     entity's own render mesh on activation. PhysX's wants a COOKED asset
     (`Shape Configuration|Asset|PhysX Mesh`), which the Asset Processor
-    produces only when the source FBX carries a PhysX mesh group. Until that
-    pipeline exists this adapter does NOT advertise trimesh/convex, so
-    `physics_build.negotiate` reports the gap up front instead of authoring a
-    collider with no geometry — an empty collider is indistinguishable from a
-    physics bug (constraint 5's whole point).
+    produces only when the source FBX carries a PhysX mesh group. That
+    pipeline exists now: staging writes the group into the sidecar
+    (`assetinfo.physics_for_asset`), the importer waits for the `.pxmesh`
+    product and resolves its asset id, and `add_mesh_collider` receives it as
+    `asset_id`. The adapter therefore advertises CAP_SHAPE_MESH_COOKED — and
+    still NOT trimesh/convex, which promise a bake from the render mesh with
+    no asset. A call without an asset id keeps failing loudly: an empty
+    collider is indistinguishable from a physics bug (constraint 5's whole
+    point).
 
 Also measured: `PhysX Static Rigid Body` has NO configurable properties;
 kinematic is `Configuration|Type` (a Simulated/Kinematic combo) and accepts
@@ -54,6 +58,12 @@ _P_TRIGGER = "Collider Configuration|Trigger"
 _P_OFFSET = "Collider Configuration|Offset"
 _P_ROTATION = "Collider Configuration|Rotation"
 _P_CONTACT_OFFSET = "Collider Configuration|Contact offset"
+
+# The Mesh Collider's cooked-asset slot. Path verified two ways: the engine's
+# own AutomatedTesting scripts set exactly this on "PhysX Mesh Collider", and
+# the segments include ShowChildrenOnly nodes that resolve only because
+# PropertyTreeEditor visibility enforcement defaults off.
+_P_MESH_ASSET = "Shape Configuration|Asset|PhysX Mesh"
 
 # Shape selection + per-shape sub-configs (all present regardless of enum).
 _P_SHAPE = "Shape Configuration|Shape"
@@ -146,15 +156,16 @@ class PhysXBackendAdapter(base.PhysicsBackendAdapter):
         return float(value)
 
     def capabilities(self):
-        # Trimesh/convex are DELIBERATELY absent: PhysX needs a cooked
-        # `.pxmesh` asset and there is no render-mesh fallback (measured).
-        # Advertising them would let physics_build author mesh colliders with
-        # no geometry. Compound-static is absent too -- PhysX ships no
-        # equivalent of Jolt's Static Compound Collider in this build.
+        # Trimesh/convex (render-mesh bake, no asset) are DELIBERATELY absent:
+        # there is no render-mesh fallback in PhysX (measured). What this
+        # backend CAN do is author a Mesh Collider from a cooked `.pxmesh`
+        # the caller resolved -- CAP_SHAPE_MESH_COOKED. Compound-static is
+        # absent too -- PhysX ships no equivalent of Jolt's Static Compound
+        # Collider in this build.
         return {
             base.CAP_SHAPE_BOX, base.CAP_SHAPE_SPHERE, base.CAP_SHAPE_CAPSULE,
-            base.CAP_SHAPE_CYLINDER, base.CAP_TRIGGER, base.CAP_KINEMATIC,
-            base.CAP_CCD,
+            base.CAP_SHAPE_CYLINDER, base.CAP_SHAPE_MESH_COOKED,
+            base.CAP_TRIGGER, base.CAP_KINEMATIC, base.CAP_CCD,
         }
 
     def contact_offset(self):
@@ -308,17 +319,29 @@ class PhysXBackendAdapter(base.PhysicsBackendAdapter):
         self._register_collider(entity_id, pair)
         return pair
 
-    def add_mesh_collider(self, entity_id, convex, material=None, layer=None):
-        # Not advertised in capabilities(), so physics_build should never get
-        # here; if it does, say why rather than authoring an empty collider.
-        raise AdapterError(
-            "PhysX mesh colliders need a COOKED PhysX mesh asset "
-            "(Shape Configuration|Asset|PhysX Mesh) produced by the Asset "
-            "Processor from a source FBX carrying a PhysX mesh group. There "
-            "is no bake-from-render-mesh path as there is on Jolt (measured, "
-            "probe_m3b_physx2). Until that asset pipeline exists this backend "
-            "does not advertise trimesh/convex, and negotiate() reports the "
-            "gap up front.")
+    def add_mesh_collider(self, entity_id, convex, material=None, layer=None,
+                          asset_id=None):
+        if asset_id is None:
+            # The render-mesh route (CAP_SHAPE_CONVEX/TRIMESH) is still not
+            # advertised, so physics_build should never get here without an
+            # asset; if it does, say why rather than authoring an empty
+            # collider -- a Mesh Collider with a null asset simulates as no
+            # geometry while looking healthy in the prefab.
+            raise AdapterError(
+                "PhysX mesh colliders need a COOKED PhysX mesh asset "
+                "(Shape Configuration|Asset|PhysX Mesh) produced by the Asset "
+                "Processor from a source FBX carrying a PhysX mesh group. "
+                "There is no bake-from-render-mesh path as there is on Jolt "
+                "(measured, probe_m3b_physx2); pass the cooked product's "
+                "asset_id (CAP_SHAPE_MESH_COOKED).")
+        # The cooked asset fixes the geometry (convex or triangle mesh), so
+        # `convex` carries no information here. No settle is needed either:
+        # unlike Jolt's tick-time bake, the geometry lives in the product and
+        # the component serializes only the reference.
+        pair = self._add_component(entity_id, _COLLIDER_MESH)
+        self._set(pair, _P_MESH_ASSET, asset_id, "mesh asset")
+        self._register_collider(entity_id, pair)
+        return pair
 
     # -- modifiers ---------------------------------------------------------
 

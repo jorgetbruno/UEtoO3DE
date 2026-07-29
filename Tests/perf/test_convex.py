@@ -73,9 +73,10 @@ HULLING = FakeAdapter(True)      # Jolt: render-mesh hull, element ignored
 BOXING = FakeAdapter(False)      # PhysX: per-element AABB box
 
 
-def collapse(shapes, subject="Thing", adapter=HULLING):
+def collapse(shapes, subject="Thing", adapter=HULLING, cooked=False):
     report = Report()
-    kept = physics_build._collapse_convex(shapes, subject, report, adapter)
+    kept = physics_build._collapse_convex(shapes, subject, report, adapter,
+                                          cooked=cooked)
     codes = [r["code"] for r in report.records()]
     return kept, codes, report
 
@@ -102,6 +103,43 @@ mixed = [shape("box", "b"), shape("convex", 1), shape("sphere", "s"),
 kept, _codes, _ = collapse(mixed, adapter=BOXING)
 check(kept == mixed,
       "the boxing backend's shape list was altered: %r" % kept)
+
+# --- THE COOKED ROUTE: same backend, opposite answer, decided PER ASSET -----
+# A PhysX import carries both worlds at once: an entity whose mesh got a
+# cooked .pxmesh authors ONE whole-mesh collider (N elements identical ->
+# collapse), while an entity whose mesh did not falls back to per-element
+# boxes (collapse would throw the tower away). `cooked` is that per-asset
+# fact, and it must override the capability answer in one direction only.
+many = [shape("convex", i) for i in range(340)]
+kept, codes, _ = collapse(many, adapter=BOXING, cooked=True)
+check(len(kept) == 1,
+      "a cooked whole-mesh asset should collapse 340 identical colliders to "
+      "one, got %d" % len(kept))
+check(codes == ["PHYS_SHAPE_APPROXIMATED"],
+      "the cooked collapse should report exactly one approximation, got %r" % codes)
+
+kept, codes, _ = collapse(many, adapter=BOXING, cooked=False)
+check(kept == many,
+      "cooked=False on the boxing backend must keep every element (the "
+      "per-element boxes are NOT interchangeable); %d of 340 were dropped"
+      % (340 - len(kept)))
+
+# Non-convex shapes survive the cooked collapse exactly as they do Jolt's.
+mixed = [shape("box", 1), shape("convex", "a"), shape("sphere", 2),
+         shape("convex", "b")]
+kept, _codes, _ = collapse(mixed, adapter=BOXING, cooked=True)
+check([s["type"] for s in kept] == ["box", "convex", "sphere"],
+      "the cooked collapse altered non-convex shapes or their order: %r"
+      % [s["type"] for s in kept])
+check(kept[1]["tag"] == "a",
+      "the cooked collapse should keep the FIRST convex element, got %r" % kept[1])
+
+# cooked=True on a backend that already hulls changes nothing and warns once.
+kept, codes, _ = collapse([shape("convex", i) for i in range(5)],
+                          adapter=HULLING, cooked=True)
+check(len(kept) == 1 and codes == ["PHYS_SHAPE_APPROXIMATED"],
+      "cooked=True on the hulling backend should behave exactly as before, "
+      "got %d shapes, %r" % (len(kept), codes))
 
 # --- the pathological case -------------------------------------------------
 kept, codes, _ = collapse([shape("convex", i) for i in range(340)])

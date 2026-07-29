@@ -279,7 +279,10 @@ class JoltBackendAdapter(base.PhysicsBackendAdapter):
         self._register_collider(entity_id, pair)
         return pair
 
-    def add_mesh_collider(self, entity_id, convex, material=None, layer=None):
+    def add_mesh_collider(self, entity_id, convex, material=None, layer=None,
+                          asset_id=None):
+        # `asset_id` is the cooked-asset route (CAP_SHAPE_MESH_COOKED, PhysX);
+        # this backend bakes from the render mesh and ignores it.
         pair = self._add_component(entity_id, _COLLIDER_MESH)
         mesh_type = _MESH_TYPE_CONVEX if convex else _MESH_TYPE_TRIANGLE
         # The bake itself runs on the component's own activation/tick once the

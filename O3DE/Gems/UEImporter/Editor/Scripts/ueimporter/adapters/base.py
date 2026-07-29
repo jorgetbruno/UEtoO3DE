@@ -46,6 +46,14 @@ CAP_COMPOUND_STATIC = "compound.static"
 CAP_TRIGGER = "trigger"
 CAP_KINEMATIC = "kinematic"
 CAP_CCD = "ccd"
+# The backend can author a mesh collider FROM A COOKED PHYSICS MESH ASSET
+# passed as `asset_id` (a `.pxmesh` the Asset Processor produced because the
+# source FBX's sidecar carries a PhysX mesh group). Distinct from
+# CAP_SHAPE_CONVEX / CAP_SHAPE_TRIMESH, which promise a collider from the
+# entity's RENDER mesh with no asset at all -- PhysX has the first and not the
+# second, Jolt the second and not the first, and conflating them is how a
+# backend ends up authoring a fully-configured collider with no geometry.
+CAP_SHAPE_MESH_COOKED = "shape.mesh_cooked"
 
 
 class PhysicsBackendAdapter:
@@ -100,10 +108,21 @@ class PhysicsBackendAdapter:
                               local_rotation=None, material=None, layer=None):
         raise NotImplementedError
 
-    def add_mesh_collider(self, entity_id, convex, material=None, layer=None):
-        """Collision from the entity's own render mesh (the Mesh component must
-        already carry a loaded model). `convex=True` -> convex hull (valid on
-        dynamic bodies); `convex=False` -> triangle mesh (static bodies only)."""
+    def add_mesh_collider(self, entity_id, convex, material=None, layer=None,
+                          asset_id=None):
+        """Collision from a mesh. Two routes, per the two capabilities:
+
+        CAP_SHAPE_CONVEX / CAP_SHAPE_TRIMESH backends (Jolt) build from the
+        entity's own render mesh (the Mesh component must already carry a
+        loaded model) and IGNORE `asset_id`. `convex=True` -> convex hull
+        (valid on dynamic bodies); `convex=False` -> triangle mesh (static and
+        kinematic bodies only).
+
+        CAP_SHAPE_MESH_COOKED backends (PhysX) REQUIRE `asset_id`: the cooked
+        physics mesh product's asset id, resolved through the catalog by the
+        caller. The cooked asset itself fixes the geometry type, so `convex`
+        is advisory there; the static-only restriction on triangle meshes
+        still applies at runtime."""
         raise NotImplementedError
 
     # --- modifiers ---

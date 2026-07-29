@@ -32,6 +32,17 @@ compared against `adapter.capabilities()`, and anything unsupported is
 substituted (convex for cylinder, and so on) with `PHYS_SHAPE_APPROXIMATED`
 in the report -- per-backend geometry differences must be visible, never
 silent (plan M3).
+
+Mesh-shaped collision has two backend routes, and `author_entity_physics`
+picks per entity:
+
+  * CAP_SHAPE_CONVEX / CAP_SHAPE_TRIMESH (Jolt): the collider bakes from the
+    entity's render mesh on its own tick; no asset involved.
+  * CAP_SHAPE_MESH_COOKED (PhysX): the caller passes `cooked_mesh_ids`, a
+    per-asset-guid map to the `.pxmesh` product the Asset Processor cooked
+    because staging wrote a PhysX mesh group into the FBX's sidecar
+    (`assetinfo.physics_for_asset`). No cooked entry -> the old AABB-box
+    substitution, reported.
 """
 
 from .adapters import base
@@ -117,8 +128,56 @@ def _mesh_collider_supported(adapter, convex):
     return needed in adapter.capabilities()
 
 
-def _report_mesh_gap(adapter, report, subject, convex, why):
+def _cooked_usable(cooked, body, physics):
+    """May THIS body carry this cooked mesh, given the backend's own limits?
+
+    A cooked convex hull is usable everywhere. A cooked TRIANGLE MESH is not,
+    and both restrictions are the backend's rather than ours:
+
+      * a simulated dynamic actor rejects triangle-mesh geometry outright
+        (PhysX logs an error and never attaches the shape);
+      * a TRIGGER cannot be a triangle mesh either -- PhysX refuses to raise
+        the trigger flag on trimesh geometry, so the entity keeps a collider
+        that reports healthy and never fires an overlap.
+
+    The trigger half is here because it was missing: the first version of this
+    route gated on `body != "dynamic"` alone, which admits `static+trigger`,
+    and a UE overlap volume over a complex-as-simple mesh would have been
+    authored as a dead trigger. Worse than the box it replaced, and worse than
+    the gap it replaced -- the previous code REPORTED that entity, and this
+    silently claimed success. `Tests/perf/test_pxmesh.py` pins all four
+    combinations.
+    """
+    if cooked.get("method") == "convex":
+        return True
+    return body != "dynamic" and not physics.get("is_trigger")
+
+
+def _cooked_blocker(cooked, body, physics):
+    """Why `_cooked_usable` said no, in words a report can print."""
+    if cooked is None or cooked.get("method") == "convex":
+        return None
+    if physics.get("is_trigger"):
+        return "a trigger (PhysX refuses the trigger flag on trimesh geometry)"
+    if body == "dynamic":
+        return "a simulated dynamic body"
+    return None
+
+
+def _report_mesh_gap(adapter, report, subject, convex, why, cooked=None,
+                     blocker=None):
     """Say what was lost, in the vocabulary the report already uses."""
+    if cooked is not None and cooked.get("method") == "trimesh" and blocker:
+        # Be specific: a cooked mesh EXISTS and was deliberately not used.
+        # "the backend cannot build a collider from a render mesh" would send
+        # the reader looking for a missing asset that is sitting right there.
+        report.warn("PHYS_SHAPE_APPROXIMATED", subject,
+                    "%s, and its cooked physics mesh is a TRIANGLE MESH, which "
+                    "the %r backend cannot use on %s; the body is authored "
+                    "WITHOUT a collider and will not collide. Give the mesh "
+                    "simple collision in UE, or make it a convex cook."
+                    % (why, adapter.name(), blocker))
+        return
     report.warn("PHYS_SHAPE_APPROXIMATED", subject,
                 "%s, and the %r backend cannot build a %s collider from a "
                 "render mesh; the body is authored WITHOUT a collider and "
@@ -129,15 +188,24 @@ def _report_mesh_gap(adapter, report, subject, convex, why):
 def negotiate(adapter, document, report):
     """Compare needs against capabilities; report the gaps once, up front."""
     needed = required_capabilities(document)
-    missing = needed - adapter.capabilities()
+    capabilities = adapter.capabilities()
+    missing = needed - capabilities
     for capability in sorted(missing):
-        report.warn("PHYS_SHAPE_APPROXIMATED", adapter.name(),
-                    "backend lacks %r; affected shapes will be substituted"
-                    % capability)
+        if capability in (base.CAP_SHAPE_CONVEX, base.CAP_SHAPE_TRIMESH) \
+                and base.CAP_SHAPE_MESH_COOKED in capabilities:
+            report.warn("PHYS_SHAPE_APPROXIMATED", adapter.name(),
+                        "backend lacks %r; cooked physics mesh assets are "
+                        "authored where the Asset Processor produced one, "
+                        "AABB boxes elsewhere" % capability)
+        else:
+            report.warn("PHYS_SHAPE_APPROXIMATED", adapter.name(),
+                        "backend lacks %r; affected shapes will be substituted"
+                        % capability)
     return missing
 
 
-def _author_shape(adapter, entity_id, shape, scale, subject, report, missing):
+def _author_shape(adapter, entity_id, shape, scale, subject, report, missing,
+                  cooked=None):
     kind = shape["type"]
     offset = _scaled(shape.get("offset", [0.0, 0.0, 0.0]), scale) \
         if shape.get("offset") else None
@@ -158,11 +226,17 @@ def _author_shape(adapter, entity_id, shape, scale, subject, report, missing):
             offset, rotation)
     elif kind == "convex":
         # The manifest carries the convex element's AABB, not its vertices; the
-        # faithful route is the backend's convex hull of the render mesh. If
-        # the backend cannot, a box over the AABB substitutes.
+        # faithful route is the backend's convex hull of the render mesh --
+        # baked live (Jolt) or cooked into a .pxmesh product at asset-process
+        # time (PhysX + a sidecar mesh group). If neither exists, a box over
+        # the AABB substitutes.
         if base.CAP_SHAPE_CONVEX in adapter.capabilities():
             adapter.add_mesh_collider(entity_id, convex=True)
             report.count("mesh_colliders")
+        elif cooked is not None and cooked.get("method") == "convex":
+            adapter.add_mesh_collider(entity_id, convex=True,
+                                      asset_id=cooked["asset_id"])
+            report.count("mesh_asset_colliders")
         else:
             aabb_min = _scaled(shape["aabb_min"], scale)
             aabb_max = _scaled(shape["aabb_max"], scale)
@@ -177,20 +251,23 @@ def _author_shape(adapter, entity_id, shape, scale, subject, report, missing):
                     "shape %r has no authoring path; skipped" % kind)
 
 
-def _collapse_convex(shapes, subject, report, adapter):
+def _collapse_convex(shapes, subject, report, adapter, cooked=False):
     """N convex elements -> one, but ONLY where they are genuinely identical.
 
-    `_author_shape` has two answers for a `convex` element and they differ in
-    exactly the way that decides this:
+    `_author_shape` has two kinds of answer for a `convex` element and they
+    differ in exactly the way that decides this:
 
-      * a backend that advertises CAP_SHAPE_CONVEX (Jolt) gets
+      * a WHOLE-MESH answer: a backend with CAP_SHAPE_CONVEX (Jolt) gets
         `add_mesh_collider(convex=True)`, which hulls the entity's WHOLE RENDER
         MESH and ignores the element entirely -- its offset, its rotation,
-        which part of the model it covers. N elements produce N byte-identical
-        colliders, and the union of N identical hulls is one hull.
-      * a backend that does not (PhysX) gets a box over THAT ELEMENT'S OWN
-        AABB, at that element's own centre. N elements produce N DIFFERENT
-        boxes that together trace the shape of the decomposition.
+        which part of the model it covers. A cooked `.pxmesh` (PhysX, when
+        `cooked` says one exists for THIS asset) is the same answer arrived at
+        earlier: the Asset Processor cooked the whole render mesh. Either way
+        N elements produce N byte-identical colliders, and the union of N
+        identical hulls is one hull.
+      * a PER-ELEMENT answer: a backend with neither gets a box over THAT
+        ELEMENT'S OWN AABB, at that element's own centre. N elements produce
+        N DIFFERENT boxes that together trace the shape of the decomposition.
 
     So the collapse is free on the first and destructive on the second. An
     earlier version of this function did not check, and it was wrong: a
@@ -199,7 +276,9 @@ def _collapse_convex(shapes, subject, report, adapter):
     carrying distinct geometry. Jolt's suites stayed green because the fixture
     has no multi-convex asset, and the level that exposed it was imported to
     Jolt. Hence the `adapter` argument -- the answer depends on the backend and
-    cannot be decided from the shapes alone.
+    cannot be decided from the shapes alone. `cooked` is per-ASSET, not
+    per-backend: on PhysX the same import collapses entities whose mesh got a
+    cooked product and boxes per element for entities whose mesh did not.
 
     Measured on a 4.27-era siege map: one `Scaf_Tower` carries **340** convex
     elements, five towers like it, 12,147 mesh colliders across the level where
@@ -213,7 +292,7 @@ def _collapse_convex(shapes, subject, report, adapter):
     between them. A tower you could walk inside becomes solid. That is worth a
     warning whether or not it is worth 340 copies.
     """
-    if base.CAP_SHAPE_CONVEX not in adapter.capabilities():
+    if base.CAP_SHAPE_CONVEX not in adapter.capabilities() and not cooked:
         # Every element becomes its own AABB box; they are not interchangeable.
         return shapes
     convex = [shape for shape in shapes if shape.get("type") == "convex"]
@@ -229,15 +308,20 @@ def _collapse_convex(shapes, subject, report, adapter):
         kept.append(shape)
     report.warn("PHYS_SHAPE_APPROXIMATED", subject,
                 "UE decomposes this collision into %d convex pieces; this "
-                "backend hulls the whole render mesh, so all %d would be "
-                "identical and one is authored. Concavities between the pieces "
-                "are filled in." % (len(convex), len(convex)))
+                "backend's convex collider covers the whole render mesh, so "
+                "all %d would be identical and one is authored. Concavities "
+                "between the pieces are filled in." % (len(convex), len(convex)))
     return kept
 
 
 def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
-                          profile_map):
+                          profile_map, cooked_mesh_ids=None):
     """Author one manifest entity's physics through the adapter.
+
+    `cooked_mesh_ids` maps a static-mesh asset guid to
+    `{"asset_id": <catalog id of its .pxmesh product>, "method":
+    "convex"|"trimesh"}` for CAP_SHAPE_MESH_COOKED backends; empty/None on
+    backends that bake from the render mesh.
 
     Returns a summary string for the log, or None when the entity carries no
     physics.
@@ -245,6 +329,7 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
     physics = item.get("physics")
     if physics is None or not physics.get("has_collision"):
         return None
+    cooked_mesh_ids = cooked_mesh_ids or {}
 
     subject = item["name"]
     scale = item["transform"]["world"]["scale"]
@@ -289,10 +374,13 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
     if source_guid:
         asset = assets_by_guid.get(source_guid)
         collision = (asset or {}).get("collision") or {}
+        cooked = cooked_mesh_ids.get(source_guid)
         if collision.get("source") == "simple":
-            for shape in _collapse_convex(collision.get("shapes") or [],
-                                          subject, report, adapter):
-                _author_shape(adapter, entity_id, shape, scale, subject, report, None)
+            for shape in _collapse_convex(
+                    collision.get("shapes") or [], subject, report, adapter,
+                    cooked=bool(cooked and cooked.get("method") == "convex")):
+                _author_shape(adapter, entity_id, shape, scale, subject, report,
+                              None, cooked=cooked)
                 authored += 1
         elif asset is not None:
             # No simple collision: fall back to the render mesh (plan M3:
@@ -307,25 +395,54 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
                             "the render mesh" % (asset["ue_path"],
                                                  "convex" if convex else "triangle-mesh"))
                 authored += 1
+            elif cooked and _cooked_usable(cooked, body, physics):
+                # A cooked triangle mesh is legal on static and kinematic
+                # bodies but NOT on a simulated dynamic one, and NOT as a
+                # trigger; a cooked convex hull is fine everywhere. See
+                # `_cooked_usable` -- the restrictions are the backend's, and
+                # authoring through them produces a collider that looks
+                # healthy and does nothing.
+                convex_cook = cooked.get("method") == "convex"
+                adapter.add_mesh_collider(entity_id, convex=convex_cook,
+                                          asset_id=cooked["asset_id"])
+                report.count("mesh_asset_colliders")
+                report.warn("PHYS_MESH_FROM_RENDER", subject,
+                            "no simple collision on %s; %s collider from the "
+                            "cooked physics mesh asset"
+                            % (asset["ue_path"],
+                               "convex" if convex_cook else "triangle-mesh"))
+                authored += 1
             else:
                 _report_mesh_gap(adapter, report, subject, convex,
-                                 "no simple collision on %s" % asset["ue_path"])
+                                 "no simple collision on %s" % asset["ue_path"],
+                                 cooked=cooked,
+                                 blocker=_cooked_blocker(cooked, body, physics))
 
     if authored == 0:
         # A body with no shape is invisible to the solver -- give it the
         # entity's render mesh if there is one, otherwise report and bail.
-        if item.get("mesh") and _mesh_collider_supported(
-                adapter, body in ("dynamic", "kinematic")):
-            convex = body in ("dynamic", "kinematic")
+        convex = body in ("dynamic", "kinematic")
+        mesh_info = item.get("mesh")
+        cooked = cooked_mesh_ids.get((mesh_info or {}).get("asset_guid"))
+        if mesh_info and _mesh_collider_supported(adapter, convex):
             adapter.add_mesh_collider(entity_id, convex=convex)
             report.count("mesh_colliders")
             report.warn("PHYS_MESH_FROM_RENDER", subject,
                         "no collision shapes anywhere; render mesh used")
             authored += 1
-        elif item.get("mesh"):
-            _report_mesh_gap(adapter, report, subject,
-                             body in ("dynamic", "kinematic"),
-                             "no collision shapes anywhere")
+        elif mesh_info and cooked and _cooked_usable(cooked, body, physics):
+            adapter.add_mesh_collider(
+                entity_id, convex=cooked.get("method") == "convex",
+                asset_id=cooked["asset_id"])
+            report.count("mesh_asset_colliders")
+            report.warn("PHYS_MESH_FROM_RENDER", subject,
+                        "no collision shapes anywhere; cooked physics mesh of "
+                        "the render mesh used")
+            authored += 1
+        elif mesh_info:
+            _report_mesh_gap(adapter, report, subject, convex,
+                             "no collision shapes anywhere", cooked=cooked,
+                             blocker=_cooked_blocker(cooked, body, physics))
         else:
             report.warn("PHYS_SHAPE_APPROXIMATED", subject,
                         "collidable entity has no shapes and no mesh; body "

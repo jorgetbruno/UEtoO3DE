@@ -669,44 +669,84 @@ def create_prefab_in_memory(root_entity_ids, prefab_path):
     return create.GetValue()
 
 
-def unbaked_colliders(prefab_path):
-    """Entity names whose mesh collider reached the file with NO baked geometry.
+def _has_pxmesh_reference(node):
+    """Does this serialized subtree carry a real cooked-physics-mesh reference?
+
+    A real reference is `{"assetId": {"guid": <non-zero>}, "assetHint":
+    "....pxmesh"}`. The hint check is not decoration: a mesh collider's
+    subtree can carry OTHER asset references (physics material slots), and
+    any-non-null-asset would pass on a component whose actual mesh slot is
+    empty.
+    """
+    if isinstance(node, dict):
+        asset_id = node.get("assetId")
+        hint = node.get("assetHint")
+        if (isinstance(asset_id, dict)
+                and isinstance(hint, str) and hint.endswith(".pxmesh")):
+            guid = str(asset_id.get("guid", ""))
+            if guid.strip("{}0-"):
+                return True
+        return any(_has_pxmesh_reference(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_has_pxmesh_reference(value) for value in node)
+    return False
+
+
+def collider_verification(prefab_path):
+    """Entity names whose mesh collider reached the file with NO geometry.
 
     Pure file I/O -- the saved prefab is the only place the truth is visible.
+    ONE parse serves both backends' checks (the Jolt prefab this runs on is
+    hundreds of MB; parsing it twice would double the cost of verification):
 
-    A Jolt mesh collider bakes its geometry on the component's tick and the
-    result is serialized into the prefab as `ShapeConfiguration.CookedData`.
-    Serialize before the bake finishes and the component is still there, fully
-    configured, with no cooked data at all: a collider that collides with
-    nothing, in a file that saved without error.
+      `unbaked` -- Jolt (`EditorJoltMeshColliderComponent`). The collider
+      bakes its geometry on the component's tick and serializes it as
+      `ShapeConfiguration.CookedData`. Serialize before the bake finishes and
+      the component is still there, fully configured, with no cooked data at
+      all: a collider that collides with nothing, in a file that saved
+      without error. Nothing else in the importer can see this. The
+      `mesh_colliders` counter read 2501 on both a run that serialized 2501
+      bakes and a run that serialized 2486 -- measured, not hypothetical.
+      Four probes went looking for a signal to poll instead and found none;
+      the check has to happen after the write, on the bytes.
 
-    Nothing else in the importer can see this. `mesh_colliders` counts what was
-    AUTHORED, and it read 2501 on both a run that serialized 2501 bakes and a
-    run that serialized 2486 -- measured, not hypothetical. Four probes went
-    looking for a signal to poll instead and found none: the bake is not in the
-    component's 17 reflected properties, the physics request buses do not
-    answer for editor entities, and every readable property is identical
-    between a baked collider and an unbaked one. So the check has to happen
-    after the write, and it has to happen on the bytes.
+      `missing_asset` -- PhysX (`$type` contains "MeshCollider" without
+      "Jolt"; the component is `EditorMeshColliderComponent`). No bake is
+      involved -- the geometry lives in the `.pxmesh` product -- but the
+      Shape enum lesson from M3b applies: a property write the editor
+      accepted is not proof of what serialized. A component whose asset
+      reference did not reach the file collides with nothing, silently, so
+      the reference is checked on the bytes too.
     """
     import json
 
+    result = {"unbaked": [], "missing_asset": []}
     if not os.path.isfile(prefab_path):
-        return []
+        return result
     with open(prefab_path, "r") as handle:
         document = json.load(handle)
-    out = []
     for entity in (document.get("Entities") or {}).values():
         for component in (entity.get("Components") or {}).values():
             if not isinstance(component, dict):
                 continue
-            if "MeshCollider" not in str(component.get("$type", "")):
+            type_name = str(component.get("$type", ""))
+            if "MeshCollider" not in type_name:
                 continue
-            shape = component.get("ShapeConfiguration")
-            cooked = shape.get("CookedData") if isinstance(shape, dict) else None
-            if not (isinstance(cooked, str) and cooked):
-                out.append(entity.get("Name"))
-    return sorted(out)
+            if "Jolt" in type_name:
+                shape = component.get("ShapeConfiguration")
+                cooked = shape.get("CookedData") if isinstance(shape, dict) else None
+                if not (isinstance(cooked, str) and cooked):
+                    result["unbaked"].append(entity.get("Name"))
+            elif not _has_pxmesh_reference(component):
+                result["missing_asset"].append(entity.get("Name"))
+    result["unbaked"].sort()
+    result["missing_asset"].sort()
+    return result
+
+
+def unbaked_colliders(prefab_path):
+    """Back-compat wrapper: the Jolt half of `collider_verification`."""
+    return collider_verification(prefab_path)["unbaked"]
 
 
 def flush_template_to_disk(prefab_path, marker_entity_name, log=None):

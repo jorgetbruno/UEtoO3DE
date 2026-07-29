@@ -15,6 +15,7 @@ Product paths follow from where the files land: a source at
 is the scan folder and AP lowercases product paths (observed in S0.1 and S0.2).
 """
 
+import json
 import os
 import shutil
 
@@ -28,6 +29,60 @@ class StagingError(Exception):
 def product_path_for(relative_path, product_prefix):
     """`uetoo3de/a/b.fbx` -> `assets/uetoo3de/a/b.fbx.azmodel` (lowercased)."""
     return ("%s/%s.azmodel" % (product_prefix, relative_path)).lower()
+
+
+def pxmesh_product_path_for(relative_path, product_prefix):
+    """`uetoo3de/a/b.fbx` -> `assets/uetoo3de/a/b.fbx.pxmesh` (lowercased).
+
+    The PhysX scene builder names its product from the FULL source filename,
+    .fbx included, exactly as the azmodel builder does (verified in the
+    UEtoO3DETest-PhysX cache: `sm_rock.fbx.pxmesh` beside `sm_rock.fbx.azmodel`;
+    contrast the EMotionFX builders, which drop the extension).
+    """
+    return ("%s/%s.pxmesh" % (product_prefix, relative_path)).lower()
+
+
+def project_has_physx_gem(project_assets_root):
+    """Does the target project's gem list include a PhysX gem?
+
+    Decides whether sidecars may carry a PhysX mesh group. A project without
+    the gem (UEtoO3DETest-Jolt ships JoltPhysics INSTEAD of PhysX5) has no
+    serializer for the group's $type, so writing one there would at best warn
+    and at worst fail every static mesh's AP job -- and it could never cook
+    the product anyway. Read from `project.json` because staging runs OUTSIDE
+    the editor, where no gem registry is loaded.
+
+    `UEO3DE_PHYSX_COOK` overrides in either direction, and it is not a
+    convenience: O3DE activates gems TRANSITIVELY, so a project listing only a
+    game gem whose `gem.json` depends on PhysX runs the PhysX backend while
+    this literal scan says no. The importer would then report
+    PHYS_MESH_NOT_COOKED per asset and advise a restage that re-runs the same
+    scan and can never fix it. The override is the way out, and
+    PHYS_MESH_NOT_COOKED names it.
+    """
+    override = os.environ.get("UEO3DE_PHYSX_COOK", "").strip().lower()
+    if override in ("0", "off", "false", "no"):
+        return False
+    if override in ("1", "on", "true", "yes"):
+        return True
+    if override:
+        raise StagingError(
+            "UEO3DE_PHYSX_COOK=%r is not understood; use 1/on/true or "
+            "0/off/false" % override)
+    project_json = os.path.join(os.path.dirname(os.path.normpath(project_assets_root)),
+                                "project.json")
+    try:
+        with open(project_json, "r") as handle:
+            gems = json.load(handle).get("gem_names") or []
+    except (OSError, ValueError):
+        return False
+    for gem in gems:
+        name = gem.get("name", "") if isinstance(gem, dict) else gem
+        # "PhysX5" in 26.05; "PhysX" in older engines. Version specifiers
+        # ("PhysX>=2.0") ride on the name in some templates.
+        if str(name).split(">")[0].split("=")[0].strip().startswith("PhysX"):
+            return True
+    return False
 
 
 def skeletal_product_path_for(relative_path, product_prefix, kind):
@@ -64,6 +119,7 @@ def stage(document, source_root, project_assets_root, log=None):
 
     product_prefix = os.path.basename(os.path.normpath(project_assets_root)).lower()
     assets_by_guid = {a["guid"]: a for a in document["assets"]}
+    cook_physics = project_has_physx_gem(project_assets_root)
     records = []
 
     for asset in document["assets"]:
@@ -144,10 +200,11 @@ def stage(document, source_root, project_assets_root, log=None):
                 "%s has no fbx_node_name; the .assetinfo node path cannot be "
                 "built and the Asset Processor job would fail" % asset["ue_path"])
 
+        physics = assetinfo.physics_for_asset(asset) if cook_physics else None
         staged_fbx = os.path.join(project_assets_root, relative_path).replace("\\", "/")
         os.makedirs(os.path.dirname(staged_fbx), exist_ok=True)
         shutil.copyfile(source_fbx, staged_fbx)
-        sidecar = assetinfo.write(staged_fbx, node_name)
+        sidecar = assetinfo.write(staged_fbx, node_name, physics=physics)
 
         record = {
             "kind": "static_mesh",

@@ -129,6 +129,28 @@ def main():
               "the backend silently skipped every render-mesh collider "
               "without reporting PHYS_SHAPE_APPROXIMATED -- a body with no "
               "collider must never be a silent outcome")
+        # The cooked-asset route (CAP_SHAPE_MESH_COOKED): staging wrote PhysX
+        # mesh groups into the fixture's sidecars, run_m3b's AP step cooked
+        # the .pxmesh products, and the import must have attached colliders
+        # referencing them -- the fixture carries one convex asset and three
+        # with no simple collision, so zero here means the route is dead and
+        # every mesh-shaped collider silently degraded to boxes or nothing.
+        cooked_colliders = report.counters.get("mesh_asset_colliders", 0)
+        cooked_meshes = report.counters.get("cooked_physics_meshes", 0)
+        log("  mesh_asset_colliders=%d | cooked_physics_meshes=%d"
+            % (cooked_colliders, cooked_meshes))
+        check(cooked_meshes > 0,
+              "no cooked physics meshes resolved -- the sidecars lack PhysX "
+              "mesh groups or the AP never cooked them")
+        check(cooked_colliders > 0,
+              "cooked physics meshes exist but no mesh collider was authored "
+              "from them")
+        check(cooked_colliders
+              == report.counters.get("mesh_asset_colliders_verified", -1),
+              "authored %d cooked-asset colliders but the saved prefab "
+              "verified %r -- a reference did not serialize"
+              % (cooked_colliders,
+                 report.counters.get("mesh_asset_colliders_verified")))
 
 
 try:

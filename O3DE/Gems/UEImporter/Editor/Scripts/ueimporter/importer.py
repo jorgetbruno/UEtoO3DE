@@ -186,6 +186,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     from . import physics_build
     from . import prefab_build
     from . import reimport as reimport_module
+    from .adapters import base as adapters_base
     from .adapters import detect_in_editor, make_adapter
 
     def emit(message):
@@ -321,10 +322,10 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
 
     # Re-deriving the staged records is cheap and keeps this entry point usable
     # on its own (M10's interactive import does not run a separate stage step).
+    product_prefix = os.path.basename(os.path.normpath(project_assets_root)).lower()
     if restage:
         records = staging.stage(document, source_assets_root, project_assets_root, log=log)
     else:
-        product_prefix = os.path.basename(os.path.normpath(project_assets_root)).lower()
         records = []
         for asset in manifest_io.static_mesh_assets(document):
             relative_path = asset["o3de_relative_path"]
@@ -378,6 +379,62 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     skeletal_asset_ids = {record["guid"]: asset_ids[record["guid"]]
                           for record in waitable
                           if record["kind"] in ("skeletal_mesh", "animation")}
+
+    # --- cooked physics meshes (.pxmesh), CAP_SHAPE_MESH_COOKED backends ---
+    # The SIDECAR ON DISK decides what to wait for, not the manifest: a
+    # sidecar staged before cooked-mesh support (or into a project without the
+    # PhysX gem) never asked the Asset Processor to cook, and waiting on a
+    # product that was never requested burns the timeout once per asset before
+    # falling back anyway.
+    #
+    # The TIMEOUT depends on whether this run just rewrote those sidecars.
+    # `wait_for_asset` polls the catalog for PRESENCE and cannot tell a product
+    # of the current fingerprint from one the previous cook left behind, so on
+    # a restage the azmodel waits above pass INSTANTLY on stale entries and
+    # prove nothing about the scene jobs AP has only just queued. A short cap
+    # there would time out on every mesh AP had not reached yet and blame a
+    # cook failure that never happened -- so restage gets the full budget, and
+    # only the no-restage path (where CI ran AP to completion before the editor
+    # started) keeps the short one.
+    cooked_mesh_ids = {}
+    if adapters_base.CAP_SHAPE_MESH_COOKED in adapter.capabilities():
+        from . import assetinfo
+        cook_timeout = asset_timeout if restage else min(asset_timeout, 30.0)
+        expected = []
+        for asset in manifest_io.static_mesh_assets(document):
+            staged_fbx = os.path.join(
+                project_assets_root, asset["o3de_relative_path"]).replace("\\", "/")
+            plan = assetinfo.physics_in_sidecar(staged_fbx + ".assetinfo")
+            if plan:
+                expected.append((asset, plan, staged_fbx))
+            elif assetinfo.physics_for_asset(asset):
+                report.warn("PHYS_MESH_NOT_COOKED", asset["ue_path"],
+                            "this mesh needs a cooked physics mesh but its "
+                            "staged sidecar carries no PhysX mesh group; AABB "
+                            "boxes substitute. Restage to fix -- and if a "
+                            "restage does not, this project activates PhysX "
+                            "transitively rather than listing it in "
+                            "project.json, so stage it with UEO3DE_PHYSX_COOK=1")
+        emit("waiting for %d cooked physics meshes (timeout %.0fs each)"
+             % (len(expected), cook_timeout))
+        for asset, plan, staged_fbx in expected:
+            product = staging.pxmesh_product_path_for(
+                asset["o3de_relative_path"], product_prefix)
+            try:
+                pxmesh_id = asset_wait.wait_for_asset(
+                    product, timeout_seconds=cook_timeout,
+                    source_path=staged_fbx)
+            except asset_wait.AssetWaitTimeout:
+                report.warn("PHYS_MESH_NOT_COOKED", asset["ue_path"],
+                            "the sidecar asks for a cooked physics mesh but no "
+                            "%s product appeared within %.0fs; AABB boxes "
+                            "substitute -- check the Asset Processor log for "
+                            "the cook error" % (product, cook_timeout))
+                continue
+            cooked_mesh_ids[asset["guid"]] = {"asset_id": pxmesh_id,
+                                              "method": plan["method"]}
+        report.count("cooked_physics_meshes", len(cooked_mesh_ids))
+        mark("wait for cooked physics meshes")
 
     level_root_name = document["level"]["name"]
     emit("creating entities under level root %r" % level_root_name)
@@ -598,7 +655,8 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         if entity_id is None:
             continue
         summary = physics_build.author_entity_physics(
-            adapter, entity_id, item, assets_by_guid, report, profile_map)
+            adapter, entity_id, item, assets_by_guid, report, profile_map,
+            cooked_mesh_ids=cooked_mesh_ids)
         if summary:
             bodies += 1
             emit("  %-22s %s" % (item["name"], summary))
@@ -659,7 +717,8 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # track late bakes, and O3DE refuses a second CreatePrefabInMemory in the
     # same session. So the settle stays a constant, and this is what stops a
     # constant that is one day too small from failing in silence.
-    unbaked = prefab_build.unbaked_colliders(prefab_path)
+    verification = prefab_build.collider_verification(prefab_path)
+    unbaked = verification["unbaked"]
     report.count("colliders_cooked", bake_count - len(unbaked))
     for name in unbaked:
         report.warn("PHYS_COLLIDER_NOT_BAKED", name,
@@ -668,6 +727,21 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     if unbaked:
         emit("  %d of %d mesh collider bakes did NOT reach the prefab"
              % (len(unbaked), bake_count))
+    # The cooked-asset counterpart (PhysX): no bake and no settle involved,
+    # but a mesh collider whose .pxmesh reference did not serialize collides
+    # with nothing just as silently, so the reference is verified on the
+    # bytes the same way.
+    asset_collider_count = report.counters.get("mesh_asset_colliders", 0)
+    missing_asset = verification["missing_asset"]
+    report.count("mesh_asset_colliders_verified",
+                 asset_collider_count - len(missing_asset))
+    for name in missing_asset:
+        report.warn("PHYS_MESH_ASSET_MISSING", name,
+                    "the mesh collider serialized without a cooked physics "
+                    "mesh reference; it collides with nothing")
+    if missing_asset:
+        emit("  %d of %d mesh collider asset references did NOT reach the "
+             "prefab" % (len(missing_asset), asset_collider_count))
     mark("verify collider bakes")
 
     # --- record what this import AUTHORED, then put hand edits back (M10) ---

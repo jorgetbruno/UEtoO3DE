@@ -16,12 +16,52 @@ exists, is a design change recorded here rather than a patch.
 | Resting height | body rests at the analytic contact height | rests at the analytic height in the current gem build — **measured**: a 1 m cube on a flat slab rests at exactly half-extent; earlier gem builds rested ~2 cm (the contact offset) low. Tests read `adapter.contact_offset()` (currently 0.02) and accept the band `[analytic − offset − slop, analytic + slop]` rather than assuming either behaviour | **measured in M3b, and the two backends do NOT agree**: both report a contact offset of 0.02, but PhysX rests bodies at *exactly* the analytic height (sphere r=0.30 → z=0.3000) while Jolt rests them one contact offset LOW (z=0.2800) — reproduced for sphere, box and capsule in the same run. A level ported to both backends therefore sits 2 cm lower on Jolt. This is precisely why every test derives its band from `adapter.contact_offset()` instead of asserting a shared constant; note it also contradicts the Jolt-column claim above, which was measured on an imported 1 m cube rather than on adapter-authored colliders — the discrepancy is unexplained and worth re-measuring before anyone depends on Jolt's exact resting z |
 | Mass without an override | UE derives mass from shape volume × density and shows the value | backend derives its own mass from shape volume × its default density; the two derivations do not match exactly. Reported per body as `MASS_FROM_DENSITY` | same divergence, third derivation — and PhysX needs a WRITE ORDER: `Compute Mass` defaults on and recomputes the value, so a mass written before disabling it is silently discarded (measured: 42 kg reads back 1.0). The adapter always writes `Compute Mass=False` first |
 | Collision channels | 32 channels, per-profile Block/Overlap/Ignore responses | collision layers + collides-with mask; profiles map through `collision_profiles.json`, everything unmapped lands on the fallback layer with `PHYS_PROFILE_FALLBACK`. v1 maps all fixture profiles to `Default` — trigger semantics travel on the sensor flag, not the layer | PhysX ships its own layer/collides-with model; v1 maps every fixture profile to `Default` on both backends, so the semantics are untested beyond that and remain unguaranteed to match Jolt's |
-| Non-uniform scale on colliders | collider shapes inherit the actor's full 3-axis scale | the importer bakes the entity's world scale into collider dimensions at import time (`AZ::Transform` is uniform-only and the non-uniform scale component's interaction with colliders is uncontracted). Spheres/capsules under non-uniform scale take the largest axis → `PHYS_SHAPE_APPROXIMATED` | same (importer-level, backend-neutral) |
+| Non-uniform scale on colliders | collider shapes inherit the actor's full 3-axis scale | the importer bakes the entity's world scale into collider dimensions at import time (`AZ::Transform` is uniform-only and the non-uniform scale component's interaction with colliders is uncontracted). Spheres/capsules under non-uniform scale take the largest axis → `PHYS_SHAPE_APPROXIMATED` | same (importer-level, backend-neutral) — **but see the open defect below: the premise in that parenthesis is now measured, and it is false** |
 | Zero-thickness collision (UE plane meshes) | UE tolerates a 0-thickness box element | clamped to 0.01 m minimum per axis → `PHYS_SHAPE_APPROXIMATED`; solvers misbehave on degenerate shapes | same |
-| Complex-as-simple / no simple collision | per-poly collision against the render mesh | triangle-mesh collider baked from the render mesh (static bodies), convex hull (dynamic) → `PHYS_MESH_FROM_RENDER`. The bake runs in the editor at import; the cooked data is serialized into the prefab | **not supported in v1.** PhysX mesh colliders take a COOKED `.pxmesh` asset (`Shape Configuration\|Asset\|PhysX Mesh`) that the Asset Processor produces only from an FBX carrying a PhysX mesh group; there is no bake-from-render-mesh fallback (measured). The adapter therefore does not advertise trimesh/convex and `negotiate()` reports the gap up front, rather than authoring a collider with no geometry. Feeding the exporter's FBX through a PhysX mesh group is follow-on work |
+| Complex-as-simple / no simple collision | per-poly collision against the render mesh | triangle-mesh collider baked from the render mesh (static bodies), convex hull (dynamic) → `PHYS_MESH_FROM_RENDER`. The bake runs in the editor at import; the cooked data is serialized into the prefab | **supported, by cooking instead of baking.** PhysX mesh colliders take a COOKED `.pxmesh` asset (`Shape Configuration\|Asset\|PhysX Mesh`) that the Asset Processor produces only from an FBX carrying a PhysX mesh group, and there is no bake-from-render-mesh fallback (measured) — so staging writes that group into the sidecar (`assetinfo.physics_for_asset`: convex elements → Convex cook, no simple collision → Triangle Mesh cook) and the importer attaches a collider referencing the product. The adapter advertises `CAP_SHAPE_MESH_COOKED`, still **not** trimesh/convex, which promise a render-mesh bake it cannot do. Two backend restrictions keep their reported gaps: a cooked triangle mesh is refused on a simulated dynamic body, and refused as a trigger shape (see the trigger row) |
 | Friction/restitution combine | per-material combine modes (average/min/max/multiply) | Jolt's built-in rules: friction = geometric mean, restitution = max; combine-mode properties are accepted but ignored (gem DIVERGENCES) | PhysX honours per-material combine modes, so a level tuned on PhysX and re-imported on Jolt loses them |
 | Per-collider settings on multi-collider bodies | per-shape everything | collision layer/group and trigger flag are taken from the FIRST collider only (Jolt GroupFilter is per-body; gem DIVERGENCES). Per-sub-shape friction/restitution are honoured | PhysX carries these per shape, so multi-collider bodies keep per-collider layers and trigger flags that Jolt collapses onto the first |
-| Trigger volumes | overlap events on any collision-enabled component | collider marked as sensor: physically transparent (bodies pass through), raises trigger events. The M3 acceptance asserts the pass-through physically | same model: `Collider Configuration\|Trigger` marks the sensor, and the M3b acceptance asserts the physical pass-through on BOTH backends |
+| Trigger volumes | overlap events on any collision-enabled component | collider marked as sensor: physically transparent (bodies pass through), raises trigger events. The M3 acceptance asserts the pass-through physically | same model: `Collider Configuration\|Trigger` marks the sensor, and the M3b acceptance asserts the physical pass-through on BOTH backends. **A cooked TRIANGLE MESH cannot be a trigger** — PhysX refuses the trigger flag on trimesh geometry — so a UE overlap volume whose mesh has no simple collision is reported as a gap (`PHYS_SHAPE_APPROXIMATED`, naming the blocker) rather than authored as a collider that reports healthy and never fires. Convex cooks are fine as triggers |
+
+### OPEN DEFECT — scaled entities get collision scaled TWICE (both backends)
+
+Not a divergence: a bug, measured and not yet fixed. Recorded here rather than
+quietly patched because the fix changes collision size on every scaled entity
+in every level, which is a bigger change than the cooked-mesh work that
+uncovered it and deserves its own measured round.
+
+`physics_build` multiplies every collider dimension by the entity's world scale
+(`_scaled`), on the stated premise that "collider components live outside the
+transform's scale". **That premise was never measured, and it is false.**
+`Tests/o3de/probe_collider_scale.py` and `Tests/o3de/probe_nonuniform_collider.py`
+drop a ball onto the same collider at scale 1 and scale 2 and read its resting
+height in game mode, on PhysX:
+
+| collider | how the entity is scaled | surface ratio scale2 / scale1 |
+|---|---|---|
+| primitive box | uniform, on the transform | **1.97** (0.6500 → 1.1000, both exactly analytic) |
+| primitive box | non-uniform, on `EditorNonUniformScaleComponent` | **2.00** (0.4500 → 0.9000 surface) |
+| cooked `.pxmesh` | uniform, on the transform | **2.00** (1.4536 → 2.7095, reproduced to 4 decimals across two runs) |
+
+So the engine already applies BOTH kinds of scale to colliders, and the
+importer's baking multiplies a second time: a uniformly 2x-scaled UE actor
+gets **4x** collision. On a 4.27-era siege map, 1,924 of 3,290
+collidable entities are scaled, 849 of them non-uniformly.
+
+Two consequences worth keeping straight:
+
+  * The **cooked-mesh path is correct as written** and must stay that way: it
+    passes no dimensions, so there is nothing doubled, and the measurement
+    above is exactly why it must NOT also set `Asset Scale` (that property
+    works — ratio 2.00 — and setting it on top of the transform would
+    reintroduce the squaring).
+  * The remaining **AABB-box fallback and every primitive path are wrong on
+    scaled entities**, and were before this work. Fixing it means removing the
+    `_scaled` multiplication, which needs: the same measurement on Jolt (its
+    probe run crashed, so Jolt is unmeasured), the cooked-mesh-under-
+    non-uniform-scale case (the reading failed its own settle check), and a
+    re-run of the M3/M3b/M11 acceptances whose fixtures are all at scale 1 and
+    therefore cannot currently see the difference either way.
 
 ## Transforms (M2, recorded here for completeness)
 

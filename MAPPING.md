@@ -235,6 +235,8 @@ separate because they are fixed in different places.
 | `PHYS_PROFILE_FALLBACK` | warn | UE collision profile absent from `collision_profiles.json`; the named fallback layer was used. Channel semantics are lossy by design. |
 | `PHYS_MESH_FROM_RENDER` | info | No simple primitives; a mesh collider was baked from the render geometry (triangle mesh static, convex hull dynamic). |
 | `PHYS_COLLIDER_NOT_BAKED` | error | A mesh collider reached the saved prefab with no baked geometry, so it collides with nothing. The bake runs on the component's tick and had not finished when the prefab was serialized. Re-import with a larger `UEO3DE_SETTLE_FRAMES`; it cannot be recovered afterwards. |
+| `PHYS_MESH_NOT_COOKED` | warn | The mesh needs a cooked physics mesh (`.pxmesh`) on this backend but the Asset Processor produced none — the staged sidecar predates cooked-mesh support (restage to fix) or the cook failed (check the AP log). Affected entities fall back to AABB boxes, or to no collider where a triangle mesh was needed. |
+| `PHYS_MESH_ASSET_MISSING` | error | A PhysX mesh collider serialized without its cooked-mesh reference, so it collides with nothing. The asset-route sibling of `PHYS_COLLIDER_NOT_BAKED`: the editor accepted the property write, and the saved bytes are checked anyway. |
 | `MASS_FROM_DENSITY` | info | No explicit UE mass override; the backend derives mass from volume × its default density, which will not match UE's figure. |
 | `REIMPORT_ENTITY_ADDED` | info | The actor is new since the previous import of this prefab. |
 | `REIMPORT_ENTITY_REMOVED` | info | The actor was in the previous import and is gone from this manifest; its entity is not recreated. |
@@ -405,6 +407,33 @@ required shapes against `adapter.capabilities()` before authoring.
 `adapter.contact_offset()` (read live from a scratch collider, currently
 0.02 m) supplies every rest-height tolerance — never hard-coded. Divergences:
 [DIVERGENCES.md](DIVERGENCES.md).
+
+**PhysX mesh collision is cooked, not baked** (`CAP_SHAPE_MESH_COOKED`).
+PhysX has no bake-from-render-mesh path, so staging writes a PhysX mesh group
+into the FBX's `.assetinfo` sidecar
+([assetinfo.physics_for_asset](O3DE/Gems/UEImporter/Editor/Scripts/ueimporter/assetinfo.py)):
+convex elements → a Convex cook of the whole render mesh, no simple collision
+→ a Triangle Mesh cook. The Asset Processor produces `<fbx>.pxmesh`, the
+importer waits for it and attaches a `PhysX Mesh Collider` referencing it —
+one collider per entity regardless of UE's element count (same whole-mesh
+semantics as Jolt's hull, reported the same way). Triangle meshes attach to
+static and kinematic bodies only; PhysX rejects them on simulated dynamic
+actors at runtime, so those entities keep the reported gap. Sidecars gain the
+group **only in projects whose `project.json` lists a PhysX gem** — the Jolt
+test project's sidecars stay byte-identical, and `UEO3DE_PHYSX_COOK=1/0`
+overrides the gate for projects that activate PhysX transitively.
+`UEO3DE_PHYSX_DECOMPOSE=1` (or a hull cap number) enables V-HACD decomposition
+at cook time for multi-element meshes, trading Asset Processor time for
+concavity-preserving collision that Jolt cannot match.
+
+Two cooked-trimesh restrictions are the backend's, and both stay reported
+rather than authored: PhysX refuses triangle-mesh geometry on a **simulated
+dynamic body** and refuses it as a **trigger shape**. Those entities get
+`PHYS_SHAPE_APPROXIMATED` naming the blocker; a convex cook is valid in both
+cases. Scaled entities: the cooked collider follows the entity's scale from the
+engine side and the importer deliberately passes no dimensions and does not set
+Asset Scale — see the open scale defect in
+[DIVERGENCES.md](DIVERGENCES.md#open-defect--scaled-entities-get-collision-scaled-twice-both-backends).
 
 ## Materials (M4) — graph subset → StandardPBR
 

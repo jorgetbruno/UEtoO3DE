@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "UE", "UEtoO3DEFixture", "Plugins",
                                 "UEO3DEExporter", "Content", "Python"))
 
 import fbx_reader  # noqa: E402
-from ueimporter import assetinfo, manifest_io  # noqa: E402
+from ueimporter import assetinfo, manifest_io, staging  # noqa: E402
 
 MANIFEST_PATH = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "manifest.json")
 EXPORT_ASSETS = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "Assets")
@@ -308,8 +308,18 @@ def test_one_fbx_per_unique_mesh_guid(document):
 
 def test_assetinfo_sidecars(document, project):
     """Every staged FBX has the sidecar contract: node selection + LodRule +
-    MaterialRule, and NO CoordinateSystemRule (SceneAPI owns both conversions)."""
+    MaterialRule, and NO CoordinateSystemRule (SceneAPI owns both conversions).
+
+    Sidecars in a PhysX-gem project additionally carry a PhysX mesh group for
+    assets with convex or absent simple collision; the check is a CONSISTENCY
+    check against the same decision function staging used (physics_for_asset
+    itself is pinned by Tests/perf/test_pxmesh.py), so what it catches is a
+    write path that dropped, duplicated, or misfiled the group -- and any
+    drift of the render group, whose azmodel product sub-id must not churn.
+    """
     project_assets = os.path.join(project, "Assets")
+    cook_physics = staging.project_has_physx_gem(project_assets)
+    physx_groups = 0
     for asset in manifest_io.static_mesh_assets(document):
         relative_path = asset["o3de_relative_path"]
         sidecar = os.path.join(project_assets, relative_path + ".assetinfo")
@@ -318,8 +328,12 @@ def test_assetinfo_sidecars(document, project):
         with open(sidecar, "r") as handle:
             document_json = json.load(handle)
 
+        physics = assetinfo.physics_for_asset(asset) if cook_physics else None
+        expected_groups = 2 if physics else 1
         values = document_json.get("values") or []
-        if not check(len(values) == 1, "%s: expected one mesh group" % relative_path):
+        if not check(len(values) == expected_groups,
+                     "%s: expected %d group(s), found %d"
+                     % (relative_path, expected_groups, len(values))):
             continue
         group = values[0]
 
@@ -336,7 +350,38 @@ def test_assetinfo_sidecars(document, project):
         check(assetinfo.LOD_RULE_TYPE in rules,
               "%s: the LodRule is missing; the AP job fails without it" % relative_path)
         check("MaterialRule" in rules, "%s: the MaterialRule is missing" % relative_path)
-    print("  %d sidecars verified" % len(manifest_io.static_mesh_assets(document)))
+        check("id" not in group,
+              "%s: the render group gained an id; the azmodel sub-id derives "
+              "from the AP-assigned one, so this churns every model reference"
+              % relative_path)
+
+        if physics:
+            physx_groups += 1
+            pxgroup = values[1]
+            check(pxgroup.get("$type") == assetinfo.PHYSX_MESH_GROUP_TYPE,
+                  "%s: second group $type is %r, not the PhysX mesh group"
+                  % (relative_path, pxgroup.get("$type")))
+            expected_method = (assetinfo.PHYSX_EXPORT_CONVEX
+                               if physics["method"] == "convex"
+                               else assetinfo.PHYSX_EXPORT_TRIMESH)
+            check(pxgroup.get("export method") == expected_method,
+                  "%s: 'export method' is %r, expected %r (%s)"
+                  % (relative_path, pxgroup.get("export method"),
+                     expected_method, physics["method"]))
+            check(pxgroup.get("NodeSelectionList", {}).get("selectedNodes")
+                  == [expected_node],
+                  "%s: physx group selects %r, expected %r"
+                  % (relative_path,
+                     pxgroup.get("NodeSelectionList", {}).get("selectedNodes"),
+                     [expected_node]))
+            check(pxgroup.get("id") == assetinfo.physx_group_id(
+                      assetinfo.group_name_for(relative_path)),
+                  "%s: physx group id %r does not match the stable derivation; "
+                  "a churned id changes the .pxmesh sub-id and orphans every "
+                  "collider reference" % (relative_path, pxgroup.get("id")))
+    print("  %d sidecars verified (%d with a PhysX mesh group; project cooks "
+          "physics: %s)" % (len(manifest_io.static_mesh_assets(document)),
+                            physx_groups, cook_physics))
 
 
 def test_stale_instance_removal():

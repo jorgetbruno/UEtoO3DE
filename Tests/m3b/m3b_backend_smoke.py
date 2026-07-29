@@ -163,6 +163,12 @@ def main():
         check(base.CAP_SHAPE_CONVEX not in caps,
               "PhysX advertises convex, but convex hulls come from the same "
               "cooked-asset path it cannot build")
+        # What it CAN do is author from a cooked .pxmesh the caller resolved;
+        # losing this capability silently reverts every convex asset to AABB
+        # boxes and every no-simple-collision static mesh to no collider.
+        check(base.CAP_SHAPE_MESH_COOKED in caps,
+              "PhysX must advertise %s -- the cooked-asset mesh collider "
+              "route" % base.CAP_SHAPE_MESH_COOKED)
         raised = False
         try:
             scratch = editor.ToolsApplicationRequestBus(

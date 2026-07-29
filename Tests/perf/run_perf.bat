@@ -30,6 +30,10 @@ if "%UEO3DE_EXPORT%"=="" set "UEO3DE_EXPORT=%REPO%\Exports\L_Showcase"
 echo === 0/1  unit: bake detector, settle constant, prefab comparator ===
 %PY% "%REPO%\Tests\perf\test_settle.py"
 if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_convex.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_pxmesh.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
 
 echo === 1/1  live: a real level, every authored bake accounted for ===
 if not exist "%UEO3DE_EXPORT%\manifest.json" (
