@@ -343,10 +343,23 @@ def _terrain_grid(actor, log):
                 return component
         return None
 
+    # OUTSIDE and FAILED are different things and must never be added together.
+    # The grid spans the landscape's BOUNDING BOX, so a landscape that is not a
+    # filled rectangle has samples in the gaps where no component exists --
+    # nothing is broken, there is simply no terrain there. A trace that finds
+    # nothing INSIDE a component is the broken case the guard below exists for.
+    #
+    # Conflating them made the exporter refuse a perfectly good level: measured
+    # on a 4.27-era sample map, 3,040 of 30,210 samples missed and every single
+    # one was outside the footprint (Tests/ue/probe_terrain_misses.py). Its 27
+    # components cover 90.0% of the bounding box and the misses were 10.1% --
+    # the same number twice.
+    OUTSIDE = object()
+
     def height(x, y):
         component = component_for(x, y)
         if component is None:
-            return None
+            return OUTSIDE
         return _trace_component_height(component, x, y, z_top, z_bottom)
 
     min_x, max_x = origin.x - extent.x, origin.x + extent.x
@@ -357,14 +370,18 @@ def _terrain_grid(actor, log):
     ys = [min_y + (max_y - min_y) * j / ny for j in range(ny + 1)]
 
     zs = []
-    misses = 0
+    outside = 0
+    failed = 0
     last_good = origin.z
     for y in ys:
         row = []
         for x in xs:
             z = height(x, y)
-            if z is None:
-                misses += 1
+            if z is OUTSIDE:
+                outside += 1
+                z = last_good     # no terrain here: keep the surface C0
+            elif z is None:
+                failed += 1
                 z = last_good     # landscape holes / edge texels: keep C0
             else:
                 last_good = z
@@ -372,13 +389,24 @@ def _terrain_grid(actor, log):
         zs.append(row)
     total = (nx + 1) * (ny + 1)
     if log is not None:
-        log("  terrain grid %dx%d (%.0f cm spacing), %d samples, %d misses"
-            % (nx + 1, ny + 1, TERRAIN_SPACING_CM, total, misses))
-    if misses > total * 0.05:
+        log("  terrain grid %dx%d (%.0f cm spacing), %d samples, "
+            "%d outside the footprint, %d failed traces"
+            % (nx + 1, ny + 1, TERRAIN_SPACING_CM, total, outside, failed))
+    if outside and log is not None:
+        # Not an error, but the user is getting geometry UE does not have: the
+        # baked mesh is the full bounding box, so the gaps come out as a flat
+        # skirt at the last sampled height. Say so rather than let it be
+        # discovered in the viewport.
+        log("  NOTE: this Landscape is not a filled rectangle -- %.1f%% of the "
+            "baked terrain is outside it and is filled flat (see DIVERGENCES.md)"
+            % (100.0 * outside / total))
+    if failed > total * 0.05:
         raise MeshExportError(
-            "terrain sampling missed %d of %d points (>5%%); the collision "
-            "lookup or trace is broken, refusing to ship a guessed surface"
-            % (misses, total))
+            "terrain sampling failed on %d of %d points INSIDE the landscape's "
+            "own collision components (>5%%); the trace is broken, refusing to "
+            "ship a guessed surface. (%d further points were outside the "
+            "footprint, which is normal for a non-rectangular landscape and is "
+            "not counted here.)" % (failed, total, outside))
 
     # Verification points sit EXACTLY on grid nodes, so the baked mesh's
     # height there equals the grid value with no interpolation term -- the
@@ -389,11 +417,34 @@ def _terrain_grid(actor, log):
     for fx, fy in ((0.5, 0.5), (0.2, 0.2), (0.8, 0.8), (0.2, 0.8), (0.8, 0.2)):
         i = min(nx, max(0, int(round(nx * fx))))
         j = min(ny, max(0, int(round(ny * fy))))
-        x, y = xs[i], ys[j]
-        z = height(x, y)
-        if z is None:
+        # A verification point that lands in a gap verifies nothing -- its grid
+        # value is filler, not a traced height. Walk to the nearest node that is
+        # actually on the landscape rather than failing the export or, worse,
+        # "verifying" the filler against itself.
+        found = None
+        for radius in range(0, max(nx, ny) + 1):
+            for dj in range(-radius, radius + 1):
+                for di in range(-radius, radius + 1):
+                    if radius and max(abs(di), abs(dj)) != radius:
+                        continue
+                    ii, jj = i + di, j + dj
+                    if not (0 <= ii <= nx and 0 <= jj <= ny):
+                        continue
+                    z = height(xs[ii], ys[jj])
+                    if z is not OUTSIDE and z is not None:
+                        found = (ii, jj, z)
+                        break
+                if found:
+                    break
+            if found:
+                break
+        if found is None:
             raise MeshExportError(
-                "terrain verification point (%.0f, %.0f) did not trace" % (x, y))
+                "no terrain verification point near node (%d, %d) traced at "
+                "all -- the landscape has collision components but none of "
+                "them answers a trace" % (i, j))
+        i, j, z = found
+        x, y = xs[i], ys[j]
         if abs(z - zs[j][i]) > TERRAIN_TOLERANCE_CM:
             raise MeshExportError(
                 "terrain self-check failed at node (%d, %d): re-trace z=%.2f "

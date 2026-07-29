@@ -177,6 +177,47 @@ def _author_shape(adapter, entity_id, shape, scale, subject, report, missing):
                     "shape %r has no authoring path; skipped" % kind)
 
 
+def _collapse_convex(shapes, subject, report):
+    """N convex elements -> one. Returns the shape list to author.
+
+    `_author_shape` answers a `convex` element with
+    `add_mesh_collider(convex=True)`, which hulls the entity's WHOLE RENDER MESH
+    and ignores the element entirely -- its offset, its rotation, which part of
+    the model it covers. So N convex elements produce N byte-identical
+    colliders. The union of N identical hulls is one hull: authoring the other
+    N-1 changes no collision whatsoever and costs a full hull bake each.
+
+    Measured on a 4.27-era siege map: one `Scaf_Tower` carries **340** convex
+    elements, five towers like it, 12,147 mesh colliders across the level where
+    3,425 do exactly the same job. The import peaked at 24 GB for 3,677
+    entities -- five times what a 3,709-entity slice of a modern city needed --
+    and died inside `idle_wait_frames`.
+
+    The approximation this reports was ALREADY happening; it just happened
+    silently. UE decomposes concave collision into convex pieces, and replacing
+    that decomposition with a single whole-mesh hull fills every concavity
+    between them. A tower you could walk inside becomes solid. That is worth a
+    warning whether or not it is worth 340 copies.
+    """
+    convex = [shape for shape in shapes if shape.get("type") == "convex"]
+    if len(convex) <= 1:
+        return shapes
+    kept = []
+    seen = False
+    for shape in shapes:
+        if shape.get("type") == "convex":
+            if seen:
+                continue
+            seen = True
+        kept.append(shape)
+    report.warn("PHYS_SHAPE_APPROXIMATED", subject,
+                "UE decomposes this collision into %d convex pieces; this "
+                "backend hulls the whole render mesh, so all %d would be "
+                "identical and one is authored. Concavities between the pieces "
+                "are filled in." % (len(convex), len(convex)))
+    return kept
+
+
 def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
                           profile_map):
     """Author one manifest entity's physics through the adapter.
@@ -222,7 +263,7 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
 
     # --- shapes ---
     authored = 0
-    for shape in physics.get("shapes") or []:
+    for shape in _collapse_convex(physics.get("shapes") or [], subject, report):
         _author_shape(adapter, entity_id, shape, scale, subject, report, None)
         authored += 1
 
@@ -231,7 +272,8 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
         asset = assets_by_guid.get(source_guid)
         collision = (asset or {}).get("collision") or {}
         if collision.get("source") == "simple":
-            for shape in collision.get("shapes") or []:
+            for shape in _collapse_convex(collision.get("shapes") or [],
+                                          subject, report):
                 _author_shape(adapter, entity_id, shape, scale, subject, report, None)
                 authored += 1
         elif asset is not None:
