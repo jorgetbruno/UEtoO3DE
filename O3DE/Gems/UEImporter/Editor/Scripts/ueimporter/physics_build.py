@@ -177,15 +177,29 @@ def _author_shape(adapter, entity_id, shape, scale, subject, report, missing):
                     "shape %r has no authoring path; skipped" % kind)
 
 
-def _collapse_convex(shapes, subject, report):
-    """N convex elements -> one. Returns the shape list to author.
+def _collapse_convex(shapes, subject, report, adapter):
+    """N convex elements -> one, but ONLY where they are genuinely identical.
 
-    `_author_shape` answers a `convex` element with
-    `add_mesh_collider(convex=True)`, which hulls the entity's WHOLE RENDER MESH
-    and ignores the element entirely -- its offset, its rotation, which part of
-    the model it covers. So N convex elements produce N byte-identical
-    colliders. The union of N identical hulls is one hull: authoring the other
-    N-1 changes no collision whatsoever and costs a full hull bake each.
+    `_author_shape` has two answers for a `convex` element and they differ in
+    exactly the way that decides this:
+
+      * a backend that advertises CAP_SHAPE_CONVEX (Jolt) gets
+        `add_mesh_collider(convex=True)`, which hulls the entity's WHOLE RENDER
+        MESH and ignores the element entirely -- its offset, its rotation,
+        which part of the model it covers. N elements produce N byte-identical
+        colliders, and the union of N identical hulls is one hull.
+      * a backend that does not (PhysX) gets a box over THAT ELEMENT'S OWN
+        AABB, at that element's own centre. N elements produce N DIFFERENT
+        boxes that together trace the shape of the decomposition.
+
+    So the collapse is free on the first and destructive on the second. An
+    earlier version of this function did not check, and it was wrong: a
+    scaffold tower's 340 convex pieces would have become a single small box
+    covering only the first one, on a backend where each of the 340 was
+    carrying distinct geometry. Jolt's suites stayed green because the fixture
+    has no multi-convex asset, and the level that exposed it was imported to
+    Jolt. Hence the `adapter` argument -- the answer depends on the backend and
+    cannot be decided from the shapes alone.
 
     Measured on a 4.27-era siege map: one `Scaf_Tower` carries **340** convex
     elements, five towers like it, 12,147 mesh colliders across the level where
@@ -199,6 +213,9 @@ def _collapse_convex(shapes, subject, report):
     between them. A tower you could walk inside becomes solid. That is worth a
     warning whether or not it is worth 340 copies.
     """
+    if base.CAP_SHAPE_CONVEX not in adapter.capabilities():
+        # Every element becomes its own AABB box; they are not interchangeable.
+        return shapes
     convex = [shape for shape in shapes if shape.get("type") == "convex"]
     if len(convex) <= 1:
         return shapes
@@ -263,7 +280,8 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
 
     # --- shapes ---
     authored = 0
-    for shape in _collapse_convex(physics.get("shapes") or [], subject, report):
+    for shape in _collapse_convex(physics.get("shapes") or [], subject, report,
+                                  adapter):
         _author_shape(adapter, entity_id, shape, scale, subject, report, None)
         authored += 1
 
@@ -273,7 +291,7 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
         collision = (asset or {}).get("collision") or {}
         if collision.get("source") == "simple":
             for shape in _collapse_convex(collision.get("shapes") or [],
-                                          subject, report):
+                                          subject, report, adapter):
                 _author_shape(adapter, entity_id, shape, scale, subject, report, None)
                 authored += 1
         elif asset is not None:

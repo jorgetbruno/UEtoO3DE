@@ -49,12 +49,59 @@ def shape(kind, tag=None):
     return out
 
 
-def collapse(shapes, subject="Thing"):
+class FakeAdapter(object):
+    """Just enough adapter to answer the one question the collapse asks.
+
+    CAP_SHAPE_CONVEX is the whole decision: a backend that advertises it hulls
+    the render mesh and ignores the element, so N elements are interchangeable;
+    a backend that does not gives each element its own AABB box, so they are
+    not. Jolt is the first, PhysX the second.
+    """
+
+    def __init__(self, convex):
+        self._convex = convex
+
+    def name(self):
+        return "jolt" if self._convex else "physx"
+
+    def capabilities(self):
+        from ueimporter.adapters import base
+        return {base.CAP_SHAPE_CONVEX} if self._convex else set()
+
+
+HULLING = FakeAdapter(True)      # Jolt: render-mesh hull, element ignored
+BOXING = FakeAdapter(False)      # PhysX: per-element AABB box
+
+
+def collapse(shapes, subject="Thing", adapter=HULLING):
     report = Report()
-    kept = physics_build._collapse_convex(shapes, subject, report)
+    kept = physics_build._collapse_convex(shapes, subject, report, adapter)
     codes = [r["code"] for r in report.records()]
     return kept, codes, report
 
+
+# --- THE BACKEND THAT MUST NOT COLLAPSE ------------------------------------
+# On a backend without CAP_SHAPE_CONVEX every element becomes a box over ITS
+# OWN aabb, at its own centre -- 340 boxes tracing the shape of the
+# decomposition. Collapsing them keeps one small box and throws the tower away.
+# This is not hypothetical: the first version of _collapse_convex did exactly
+# that, shipped, and every Jolt suite stayed green because the fixture has no
+# multi-convex asset.
+many = [shape("convex", i) for i in range(340)]
+kept, codes, _ = collapse(many, adapter=BOXING)
+check(kept == many,
+      "a backend that boxes each convex element had %d of 340 elements "
+      "collapsed away -- its collision would be one small box" % (340 - len(kept)))
+check(codes == [],
+      "collapsing nothing should report nothing on the boxing backend, got %r"
+      % codes)
+
+# Mixed shapes on the boxing backend: still untouched, order still intact.
+mixed = [shape("box", "b"), shape("convex", 1), shape("sphere", "s"),
+         shape("convex", 2)]
+kept, _codes, _ = collapse(mixed, adapter=BOXING)
+check(kept == mixed,
+      "the boxing backend's shape list was altered: %r" % kept)
 
 # --- the pathological case -------------------------------------------------
 kept, codes, _ = collapse([shape("convex", i) for i in range(340)])
