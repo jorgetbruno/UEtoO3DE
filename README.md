@@ -197,17 +197,23 @@ from its parent (`Tests/perf/test_chunk.py`).
 That city converted in twelve chunks: 44,504 entities, 42,088 mesh colliders with
 every bake verified present, 715 MB of prefabs, ~24 minutes, no errors.
 
-**PhysX mesh collision is real geometry, not boxes.** PhysX cannot bake a
-collider from a render mesh the way Jolt does — it wants a *cooked* `.pxmesh`
-asset. Staging therefore writes a PhysX mesh group into every relevant FBX's
-`.assetinfo` sidecar (convex elements → Convex cook, no simple collision →
-Triangle Mesh cook, primitives → none needed), the Asset Processor cooks the
-product, and the importer attaches a mesh collider referencing it — the same
-whole-mesh semantics as Jolt's hull, verified on the saved bytes afterwards
-(`PHYS_MESH_ASSET_MISSING` if a reference did not serialize). Triangle meshes
-also give PhysX imports **walkable terrain**, which the AABB-box era never had.
-Sidecars carry the group only in projects whose `project.json` lists a PhysX
-gem, so Jolt-project sidecars stay byte-identical.
+**Mesh collision is cooked into assets on both backends.** A cooked physics
+mesh (`.pxmesh` on PhysX, `.joltmesh` on Jolt) is produced by the Asset
+Processor and referenced by the collider, instead of geometry being baked
+per-entity and copied into the prefab. Staging writes the backend's mesh group
+into every relevant FBX's `.assetinfo` sidecar (convex elements → Convex cook,
+no simple collision → Triangle Mesh cook, primitives → none needed), and the
+importer waits for the product and attaches a collider referencing it —
+verified on the saved bytes afterwards (`PHYS_MESH_ASSET_MISSING` if a
+reference did not serialize). Triangle-mesh cooks are also what give an import
+**walkable terrain**, which the AABB-box era never had.
+
+Sidecars carry a group only for backends whose gem the project actually lists,
+so a Jolt-only project never gets a PhysX group or vice versa; a project with
+both gems gets both. Where a backend can do both (Jolt keeps its render-mesh
+bake as `Jolt Baked Mesh Collider`), the cooked asset wins and the bake is the
+fallback for meshes with no product — which also means those imports need no
+settle for collider bakes at all.
 
 Two PhysX limits keep their reported gaps rather than being papered over: a
 cooked triangle mesh is refused on a **simulated dynamic body**, and refused as

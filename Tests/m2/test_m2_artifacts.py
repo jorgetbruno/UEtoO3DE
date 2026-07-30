@@ -318,7 +318,7 @@ def test_assetinfo_sidecars(document, project):
     drift of the render group, whose azmodel product sub-id must not churn.
     """
     project_assets = os.path.join(project, "Assets")
-    cook_physics = staging.project_has_physx_gem(project_assets)
+    cook_backends = staging.project_physics_backends(project_assets)
     physx_groups = 0
     for asset in manifest_io.static_mesh_assets(document):
         relative_path = asset["o3de_relative_path"]
@@ -328,8 +328,11 @@ def test_assetinfo_sidecars(document, project):
         with open(sidecar, "r") as handle:
             document_json = json.load(handle)
 
-        physics = assetinfo.physics_for_asset(asset) if cook_physics else None
-        expected_groups = 2 if physics else 1
+        physics = assetinfo.physics_for_asset(asset) if cook_backends else None
+        # One render group, plus one physics group per backend whose gem this
+        # project carries -- a project with both cooks both products, because
+        # which backend the level is imported with is not staging's call.
+        expected_groups = 1 + (len(cook_backends) if physics else 0)
         values = document_json.get("values") or []
         if not check(len(values) == expected_groups,
                      "%s: expected %d group(s), found %d"
@@ -357,31 +360,41 @@ def test_assetinfo_sidecars(document, project):
 
         if physics:
             physx_groups += 1
-            pxgroup = values[1]
-            check(pxgroup.get("$type") == assetinfo.PHYSX_MESH_GROUP_TYPE,
-                  "%s: second group $type is %r, not the PhysX mesh group"
-                  % (relative_path, pxgroup.get("$type")))
-            expected_method = (assetinfo.PHYSX_EXPORT_CONVEX
-                               if physics["method"] == "convex"
-                               else assetinfo.PHYSX_EXPORT_TRIMESH)
-            check(pxgroup.get("export method") == expected_method,
-                  "%s: 'export method' is %r, expected %r (%s)"
-                  % (relative_path, pxgroup.get("export method"),
-                     expected_method, physics["method"]))
-            check(pxgroup.get("NodeSelectionList", {}).get("selectedNodes")
-                  == [expected_node],
-                  "%s: physx group selects %r, expected %r"
-                  % (relative_path,
-                     pxgroup.get("NodeSelectionList", {}).get("selectedNodes"),
-                     [expected_node]))
-            check(pxgroup.get("id") == assetinfo.physx_group_id(
-                      assetinfo.group_name_for(relative_path)),
-                  "%s: physx group id %r does not match the stable derivation; "
-                  "a churned id changes the .pxmesh sub-id and orphans every "
-                  "collider reference" % (relative_path, pxgroup.get("id")))
-    print("  %d sidecars verified (%d with a PhysX mesh group; project cooks "
-          "physics: %s)" % (len(manifest_io.static_mesh_assets(document)),
-                            physx_groups, cook_physics))
+            expected_types = {
+                "physx": assetinfo.PHYSX_MESH_GROUP_TYPE,
+                "jolt": assetinfo.JOLT_MESH_GROUP_TYPE,
+            }
+            expected_convex = {"physx": assetinfo.PHYSX_EXPORT_CONVEX,
+                               "jolt": assetinfo.JOLT_EXPORT_CONVEX}
+            expected_trimesh = {"physx": assetinfo.PHYSX_EXPORT_TRIMESH,
+                                "jolt": assetinfo.JOLT_EXPORT_TRIMESH}
+            for index, backend in enumerate(cook_backends):
+                pxgroup = values[1 + index]
+                check(pxgroup.get("$type") == expected_types[backend],
+                      "%s: group %d $type is %r, not the %s mesh group"
+                      % (relative_path, 1 + index, pxgroup.get("$type"), backend))
+                expected_method = (expected_convex[backend]
+                                   if physics["method"] == "convex"
+                                   else expected_trimesh[backend])
+                check(pxgroup.get("export method") == expected_method,
+                      "%s: %s 'export method' is %r, expected %r (%s)"
+                      % (relative_path, backend, pxgroup.get("export method"),
+                         expected_method, physics["method"]))
+                check(pxgroup.get("NodeSelectionList", {}).get("selectedNodes")
+                      == [expected_node],
+                      "%s: %s group selects %r, expected %r"
+                      % (relative_path, backend,
+                         pxgroup.get("NodeSelectionList", {}).get("selectedNodes"),
+                         [expected_node]))
+                check(pxgroup.get("id") == assetinfo.group_id(
+                          assetinfo.group_name_for(relative_path), backend),
+                      "%s: %s group id %r does not match the stable derivation; "
+                      "a churned id changes the cooked product's sub-id and "
+                      "orphans every collider reference"
+                      % (relative_path, backend, pxgroup.get("id")))
+    print("  %d sidecars verified (%d with a physics mesh group; project cooks "
+          "for: %s)" % (len(manifest_io.static_mesh_assets(document)),
+                        physx_groups, ", ".join(cook_backends) or "nothing"))
 
 
 def test_stale_instance_removal():

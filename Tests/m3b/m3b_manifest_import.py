@@ -117,10 +117,17 @@ def main():
         "PHYS_SHAPE_APPROXIMATED=%d" % (trimesh_ok, mesh_colliders, approximated))
 
     if trimesh_ok:
-        check(mesh_colliders > 0,
-              "this backend bakes colliders from render meshes, but the import "
-              "authored none -- the PhysX assertion below would then be "
-              "vacuous, since nothing in this fixture needs one")
+        # Either route counts: this backend can bake from the render mesh, and
+        # once its mesh colliders moved to cooked assets it prefers those --
+        # so what must be true is that the fixture's mesh-shaped collision was
+        # authored SOMEHOW. Zero of both would make the PhysX assertion below
+        # vacuous, since nothing in this fixture would then need a collider.
+        cooked_here = report.counters.get("mesh_asset_colliders", 0)
+        check(mesh_colliders + cooked_here > 0,
+              "this backend can author mesh-shaped collision, but the import "
+              "produced neither a bake nor a cooked-asset collider")
+        log("  (mesh route on this gem: %d baked, %d cooked-asset)"
+            % (mesh_colliders, cooked_here))
     else:
         check(mesh_colliders == 0,
               "backend cannot bake render-mesh colliders yet %d were authored"

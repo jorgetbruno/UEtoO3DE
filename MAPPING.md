@@ -408,23 +408,33 @@ required shapes against `adapter.capabilities()` before authoring.
 0.02 m) supplies every rest-height tolerance — never hard-coded. Divergences:
 [DIVERGENCES.md](DIVERGENCES.md).
 
-**PhysX mesh collision is cooked, not baked** (`CAP_SHAPE_MESH_COOKED`).
-PhysX has no bake-from-render-mesh path, so staging writes a PhysX mesh group
-into the FBX's `.assetinfo` sidecar
+**Mesh collision is cooked, not baked** (`CAP_SHAPE_MESH_COOKED`) — on both
+backends, once the Jolt gem moved its mesh colliders onto `.joltmesh` assets.
+Staging writes that backend's mesh group into the FBX's `.assetinfo` sidecar
 ([assetinfo.physics_for_asset](O3DE/Gems/UEImporter/Editor/Scripts/ueimporter/assetinfo.py)):
 convex elements → a Convex cook of the whole render mesh, no simple collision
-→ a Triangle Mesh cook. The Asset Processor produces `<fbx>.pxmesh`, the
-importer waits for it and attaches a `PhysX Mesh Collider` referencing it —
-one collider per entity regardless of UE's element count (same whole-mesh
-semantics as Jolt's hull, reported the same way). Triangle meshes attach to
-static and kinematic bodies only; PhysX rejects them on simulated dynamic
-actors at runtime, so those entities keep the reported gap. Sidecars gain the
-group **only in projects whose `project.json` lists a PhysX gem** — the Jolt
-test project's sidecars stay byte-identical, and `UEO3DE_PHYSX_COOK=1/0`
-overrides the gate for projects that activate PhysX transitively.
+→ a Triangle Mesh cook. The Asset Processor produces `<fbx>.pxmesh` /
+`<fbx>.joltmesh`, and the importer waits for it and attaches a mesh collider
+referencing it — one collider per entity regardless of UE's element count.
+
+| | PhysX | Jolt |
+|---|---|---|
+| Group `$type` | `{5B03C8E6-…} MeshGroup` — the UUID is required, the name collides with Atom's render group | `JoltMeshGroup`, bare, as the editor itself writes it |
+| `export method` default | Triangle Mesh | **Convex** — opposite, so the importer always writes it explicitly |
+| Decomposition params | PhysX v2 block | Jolt's own; only `MaxConvexHulls` is shared |
+| Render-mesh bake | none | still available, as `Jolt Baked Mesh Collider` |
+
+Sidecars gain a group **only for backends whose gem the project lists**
+(`UEO3DE_PHYSX_COOK` / `UEO3DE_JOLT_COOK` override, for gems activated
+transitively); a project carrying both gets both groups, because which backend
+a level is imported with is not staging's decision to make. Where a backend
+offers both routes the **cooked asset wins** — nothing bakes on a tick, so
+there is no settle to get wrong, and every instance references one shared
+asset instead of carrying its own copy of the geometry — with the bake kept as
+the fallback for meshes that got no product.
 `UEO3DE_PHYSX_DECOMPOSE=1` (or a hull cap number) enables V-HACD decomposition
 at cook time for multi-element meshes, trading Asset Processor time for
-concavity-preserving collision that Jolt cannot match.
+collision that keeps the concavities UE decomposed away.
 
 Two cooked-trimesh restrictions are the backend's, and both stay reported
 rather than authored: PhysX refuses triangle-mesh geometry on a **simulated

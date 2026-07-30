@@ -137,6 +137,15 @@ def settle_frames(bake_count, skeletal_authored):
 
     The 10-per-skeletal term is unchanged and remains UNMEASURED: L_Showcase
     has no skeletal entities.
+
+    `bake_count` counts RENDER-MESH BAKES only (`mesh_colliders`), never
+    cooked-asset colliders (`mesh_asset_colliders`): an asset collider's
+    geometry lives in the `.pxmesh`/`.joltmesh` product and the component
+    serializes a reference, so there is no tick to wait for. A level imported
+    entirely through cooked assets therefore lands on the 300-frame floor,
+    which at that point is insurance against nothing measured -- worth
+    re-measuring once a Jolt gem with asset-based mesh colliders is built,
+    since it is the last reason this phase exists at all.
     """
     override = os.environ.get("UEO3DE_SETTLE_FRAMES", "").strip()
     if override:
@@ -380,7 +389,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                           for record in waitable
                           if record["kind"] in ("skeletal_mesh", "animation")}
 
-    # --- cooked physics meshes (.pxmesh), CAP_SHAPE_MESH_COOKED backends ---
+    # --- cooked physics meshes (.pxmesh / .joltmesh), CAP_SHAPE_MESH_COOKED ---
     # The SIDECAR ON DISK decides what to wait for, not the manifest: a
     # sidecar staged before cooked-mesh support (or into a project without the
     # PhysX gem) never asked the Asset Processor to cook, and waiting on a
@@ -404,7 +413,8 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         for asset in manifest_io.static_mesh_assets(document):
             staged_fbx = os.path.join(
                 project_assets_root, asset["o3de_relative_path"]).replace("\\", "/")
-            plan = assetinfo.physics_in_sidecar(staged_fbx + ".assetinfo")
+            plan = assetinfo.physics_in_sidecar(staged_fbx + ".assetinfo",
+                                                backend=adapter.name())
             if plan:
                 expected.append((asset, plan, staged_fbx))
             elif assetinfo.physics_for_asset(asset):
@@ -418,8 +428,8 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         emit("waiting for %d cooked physics meshes (timeout %.0fs each)"
              % (len(expected), cook_timeout))
         for asset, plan, staged_fbx in expected:
-            product = staging.pxmesh_product_path_for(
-                asset["o3de_relative_path"], product_prefix)
+            product = staging.physics_product_path_for(
+                asset["o3de_relative_path"], product_prefix, adapter.name())
             try:
                 pxmesh_id = asset_wait.wait_for_asset(
                     product, timeout_seconds=cook_timeout,
@@ -717,7 +727,10 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # track late bakes, and O3DE refuses a second CreatePrefabInMemory in the
     # same session. So the settle stays a constant, and this is what stops a
     # constant that is one day too small from failing in silence.
-    verification = prefab_build.collider_verification(prefab_path)
+    verification = prefab_build.collider_verification(
+        prefab_path,
+        jolt_mesh_is_asset_based=bool(
+            getattr(adapter, "mesh_is_asset_based", lambda: False)()))
     unbaked = verification["unbaked"]
     report.count("colliders_cooked", bake_count - len(unbaked))
     for name in unbaked:

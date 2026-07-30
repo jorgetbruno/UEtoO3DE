@@ -45,6 +45,27 @@ PHYSX_MESH_GROUP_TYPE = "{5B03C8E6-8CEE-4DA0-A7FA-CD88689DD45B} MeshGroup"
 PHYSX_EXPORT_TRIMESH = 0   # static-only at runtime; a dynamic body rejects it
 PHYSX_EXPORT_CONVEX = 1
 
+# JoltPhysics::Pipeline::JoltMeshGroup, the Jolt gem's equivalent, cooking a
+# `.joltmesh` product. Written WITHOUT the type UUID because that is what the
+# editor itself writes (verified against a hand-saved sm_carriage sidecar):
+# unlike "MeshGroup", the name "JoltMeshGroup" is unambiguous, so SceneAPI
+# resolves the bare form. The schema mirrors PhysX's field for field --
+# "NodeSelectionList", the space in "export method", numeric export mode --
+# with two differences that matter:
+#
+#   * the export mode DEFAULTS TO CONVEX here (PhysX defaults to triangle
+#     mesh), so an omitted field does not mean the same thing on both. This
+#     writer always emits it rather than relying on either default.
+#   * `DecomposeMeshes` only takes effect on a convex export (the gem's
+#     GetDecomposeMeshes() is `GetExportAsConvex() && m_decomposeMeshes`), and
+#     its parameter block is Jolt's own -- MaxConvexHulls / Resolution /
+#     MaxNumVerticesPerConvexHull / Concavity, NOT PhysX's v2 field set.
+JOLT_MESH_GROUP_TYPE = "JoltMeshGroup"
+JOLT_EXPORT_TRIMESH = 0
+JOLT_EXPORT_CONVEX = 1
+
+BACKENDS = ("physx", "jolt")
+
 
 def physx_group_id(group_name):
     """A stable per-file id for the PhysX mesh group.
@@ -58,6 +79,27 @@ def physx_group_id(group_name):
     """
     return "{%s}" % str(uuid.uuid5(uuid.NAMESPACE_URL,
                                    "ueimporter:pxmesh:" + group_name)).upper()
+
+
+def jolt_group_id(group_name):
+    """The same, for the Jolt group -- and deliberately a DIFFERENT namespace.
+
+    `JoltMeshExporter` derives its product uuid exactly as PhysX does
+    (`AZ::Uuid::CreateName(group.GetId().ToString())`), so the same stability
+    rule applies. A distinct namespace string keeps the two groups' ids apart
+    in a project that carries both gems, where one sidecar can hold both
+    groups and two products would otherwise be asked to share a sub-id.
+    """
+    return "{%s}" % str(uuid.uuid5(uuid.NAMESPACE_URL,
+                                   "ueimporter:joltmesh:" + group_name)).upper()
+
+
+def group_id(group_name, backend):
+    if backend == "physx":
+        return physx_group_id(group_name)
+    if backend == "jolt":
+        return jolt_group_id(group_name)
+    raise ValueError("unknown physics backend %r" % (backend,))
 
 
 _DECOMPOSE_OFF = ("0", "off", "false", "no", "none", "disabled")
@@ -142,15 +184,67 @@ def physics_for_asset(asset, decompose=None):
     return None
 
 
-def build(group_name, fbx_node_name, physics=None):
+def _physics_group(group_name, fbx_node_name, physics, backend):
+    """One backend's physics mesh group for `build`.
+
+    The two gems' groups are the same shape -- node list, numeric
+    `export method`, optional decomposition -- but not the same schema, and
+    the differences are the kind that fail silently: PhysX's group is
+    identified by UUID (its display name collides with Atom's render group)
+    while Jolt's is written bare, PhysX's export mode defaults to triangle
+    mesh while Jolt's defaults to convex, and the decomposition parameter
+    blocks share only one field name. So each backend gets its literals from
+    its own gem, and neither inherits the other's defaults by omission.
+    """
+    method = physics["method"]
+    if method not in ("convex", "trimesh"):
+        raise ValueError("unknown physics method %r" % (method,))
+    convex = method == "convex"
+    group = {
+        "$type": PHYSX_MESH_GROUP_TYPE if backend == "physx" else JOLT_MESH_GROUP_TYPE,
+        "id": group_id(group_name, backend),
+        "name": group_name,
+        "NodeSelectionList": {
+            "selectedNodes": ["RootNode." + fbx_node_name],
+            "unselectedNodes": ["RootNode"],
+        },
+        # Always explicit: omitting it would mean triangle mesh on PhysX and
+        # convex on Jolt.
+        "export method": ((PHYSX_EXPORT_CONVEX if convex else PHYSX_EXPORT_TRIMESH)
+                          if backend == "physx"
+                          else (JOLT_EXPORT_CONVEX if convex else JOLT_EXPORT_TRIMESH)),
+    }
+    if physics.get("decompose_hulls"):
+        group["DecomposeMeshes"] = True
+        if backend == "physx":
+            # ConvexDecompositionParams v2 field names (26.05). The engine's
+            # own scene_data.py sample writes stale V-HACD-3 keys that are
+            # silently dropped on load -- do not copy from it.
+            group["ConvexDecompositionParams"] = {
+                "MaxConvexHulls": int(physics["decompose_hulls"]),
+            }
+        else:
+            # Jolt's own params (JoltConvexDecompositionParams): the only
+            # field name shared with PhysX's block is MaxConvexHulls.
+            group["ConvexDecompositionParams"] = {
+                "MaxConvexHulls": int(physics["decompose_hulls"]),
+            }
+    return group
+
+
+def build(group_name, fbx_node_name, physics=None, backends=("physx",)):
     """The `.assetinfo` document for a single-mesh FBX.
 
-    `physics` is None or a `physics_for_asset` plan; when present, a PhysX
-    mesh group rides along and the Asset Processor cooks a `.pxmesh` product
-    beside the azmodel. The render group stays byte-identical either way --
-    in particular it keeps its OMITTED id (the AP assigns one), because
-    adding an id now would change the azmodel product's sub-id and break
-    every existing model reference.
+    `physics` is None or a `physics_for_asset` plan; when present, one physics
+    mesh group per entry in `backends` rides along and the Asset Processor
+    cooks a `.pxmesh` / `.joltmesh` product beside the azmodel. A project
+    carrying both gems gets both groups -- which backend the level is
+    eventually imported with is not staging's decision to make, and writing
+    only one would silently decide it.
+
+    The render group stays byte-identical either way -- in particular it keeps
+    its OMITTED id (the AP assigns one), because adding an id now would change
+    the azmodel product's sub-id and break every existing model reference.
     """
     if not group_name:
         raise ValueError("group_name is required")
@@ -172,29 +266,11 @@ def build(group_name, fbx_node_name, physics=None):
         },
     }]
     if physics is not None:
-        method = physics["method"]
-        if method not in ("convex", "trimesh"):
-            raise ValueError("unknown physics method %r" % (method,))
-        group = {
-            "$type": PHYSX_MESH_GROUP_TYPE,
-            "id": physx_group_id(group_name),
-            "name": group_name,
-            "NodeSelectionList": {
-                "selectedNodes": ["RootNode." + fbx_node_name],
-                "unselectedNodes": ["RootNode"],
-            },
-            "export method": (PHYSX_EXPORT_CONVEX if method == "convex"
-                              else PHYSX_EXPORT_TRIMESH),
-        }
-        if physics.get("decompose_hulls"):
-            # ConvexDecompositionParams v2 field names (26.05). The engine's
-            # own scene_data.py sample writes stale V-HACD-3 keys that are
-            # silently dropped on load -- do not copy from it.
-            group["DecomposeMeshes"] = True
-            group["ConvexDecompositionParams"] = {
-                "MaxConvexHulls": int(physics["decompose_hulls"]),
-            }
-        values.append(group)
+        for backend in backends:
+            if backend not in BACKENDS:
+                raise ValueError("unknown physics backend %r" % (backend,))
+            values.append(_physics_group(group_name, fbx_node_name, physics,
+                                         backend))
     return {"values": values}
 
 
@@ -208,17 +284,24 @@ def group_name_for(relative_path):
     return stem
 
 
-def physics_in_sidecar(sidecar_path):
-    """What PhysX mesh group the sidecar ON DISK actually carries.
+def physics_in_sidecar(sidecar_path, backend="physx"):
+    """What physics mesh group the sidecar ON DISK actually carries.
 
-    The importer decides whether to wait for a `.pxmesh` product from THIS,
-    never from `physics_for_asset` alone: the sidecar may predate cooked-mesh
-    support, or have been staged into a project without the PhysX gem, and in
-    both cases the Asset Processor was never asked to cook -- waiting would
+    The importer decides whether to wait for a cooked product from THIS, never
+    from `physics_for_asset` alone: the sidecar may predate cooked-mesh
+    support, or have been staged into a project without the backend's gem, and
+    in both cases the Asset Processor was never asked to cook -- waiting would
     burn the timeout once per asset and then fall back anyway.
+
+    `backend` selects which group is being asked about, because a sidecar can
+    legitimately carry both and they can disagree (a mesh whose Jolt group is
+    convex and whose PhysX group is convex still cooks two different products).
 
     Returns None or `{"method": "convex"|"trimesh"}`.
     """
+    wanted = PHYSX_MESH_GROUP_TYPE if backend == "physx" else JOLT_MESH_GROUP_TYPE
+    convex_value = PHYSX_EXPORT_CONVEX if backend == "physx" else JOLT_EXPORT_CONVEX
+    trimesh_value = PHYSX_EXPORT_TRIMESH if backend == "physx" else JOLT_EXPORT_TRIMESH
     try:
         with open(sidecar_path, "r") as handle:
             document = json.load(handle)
@@ -227,20 +310,21 @@ def physics_in_sidecar(sidecar_path):
     for group in document.get("values") or []:
         if not isinstance(group, dict):
             continue
-        if group.get("$type") != PHYSX_MESH_GROUP_TYPE:
+        if group.get("$type") != wanted:
             continue
         method = group.get("export method")
-        if method == PHYSX_EXPORT_CONVEX:
+        if method == convex_value:
             return {"method": "convex"}
-        if method == PHYSX_EXPORT_TRIMESH:
+        if method == trimesh_value:
             return {"method": "trimesh"}
         return None
     return None
 
 
-def write(fbx_path, fbx_node_name, physics=None):
+def write(fbx_path, fbx_node_name, physics=None, backends=("physx",)):
     """Write `<fbx_path>.assetinfo` next to the FBX. Returns the sidecar path."""
-    document = build(group_name_for(fbx_path), fbx_node_name, physics=physics)
+    document = build(group_name_for(fbx_path), fbx_node_name, physics=physics,
+                     backends=backends)
     sidecar_path = fbx_path + ".assetinfo"
     directory = os.path.dirname(sidecar_path)
     if directory:

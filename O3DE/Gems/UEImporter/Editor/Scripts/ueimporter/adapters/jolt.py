@@ -43,12 +43,22 @@ _COLLIDER_CAPSULE = "Jolt Capsule Collider"
 _COLLIDER_CYLINDER = "Jolt Cylinder Collider"
 _COLLIDER_MESH = "Jolt Mesh Collider"
 _COLLIDER_COMPOUND = "Jolt Static Compound Collider"
+# The gem moved its mesh colliders to the PhysX layout: `Jolt Mesh Collider`
+# now REFERENCES a cooked `.joltmesh` asset and the bake-from-render-mesh
+# component became `Jolt Baked Mesh Collider`. The same display name therefore
+# means DIFFERENT THINGS across gem builds, which no amount of care at the call
+# site can resolve -- so the adapter decides at resolve time, by asking whether
+# the baked component exists (see `resolve_components`), and reports its
+# capabilities from what it found rather than from what it hoped for.
+_COLLIDER_MESH_BAKED = "Jolt Baked Mesh Collider"
 
 _ALL_COMPONENTS = (
     _BODY_DYNAMIC, _BODY_STATIC,
     _COLLIDER_BOX, _COLLIDER_SPHERE, _COLLIDER_CAPSULE,
     _COLLIDER_CYLINDER, _COLLIDER_MESH, _COLLIDER_COMPOUND,
 )
+# Resolved when present, absent on older gems; never fatal.
+_OPTIONAL_COMPONENTS = (_COLLIDER_MESH_BAKED,)
 
 # Verified property paths (probe_m3_jolt). A miss at set time raises.
 _P_TRIGGER = "Collider Configuration|Trigger"
@@ -73,6 +83,18 @@ _P_MESH_TYPE_CANDIDATES = ("Shape Configuration|Mesh Type", "Mesh Type",
 _MESH_TYPE_TRIANGLE = 0
 _MESH_TYPE_CONVEX = 1
 
+# The asset slot on the asset-based mesh collider. The gem nests it one level
+# less deeply than PhysX does (its proxy IS the shape configuration, where
+# PhysX puts an extra "Asset" node in between), and the intermediate nodes are
+# ShowChildrenOnly, so the exact spelling depends on how the property tree
+# flattens them. Candidates, resolve-or-fail: a miss raises with the
+# component's full property list rather than leaving a collider with no
+# geometry.
+_P_MESH_ASSET_CANDIDATES = ("Shape Configuration|Jolt Mesh",
+                            "Shape Configuration|Asset|Jolt Mesh",
+                            "Shape Configuration|Asset",
+                            "Jolt Mesh")
+
 
 class JoltBackendAdapter(base.PhysicsBackendAdapter):
 
@@ -82,6 +104,9 @@ class JoltBackendAdapter(base.PhysicsBackendAdapter):
         # Collider component pairs added per entity, so make_trigger can reach
         # them without re-querying by name.
         self._colliders_by_entity = {}
+        # Set by resolve_components: does `Jolt Mesh Collider` reference a
+        # cooked asset (new gem) or bake from the render mesh (old gem)?
+        self._mesh_is_asset_based = False
 
     # -- infrastructure ----------------------------------------------------
 
@@ -114,8 +139,30 @@ class JoltBackendAdapter(base.PhysicsBackendAdapter):
                 "produce a prefab with no physics, so this is fatal." % misses)
         self._type_ids = dict(zip(names, type_ids))
 
+        # WHICH MESH COLLIDER IS THIS GEM'S? The rename that moved Jolt to the
+        # PhysX layout kept the display name `Jolt Mesh Collider` and changed
+        # what it does: it referenced the entity's render mesh before and a
+        # cooked `.joltmesh` asset after. Nothing in the name says which, and
+        # authoring the wrong one produces a fully-configured collider with no
+        # geometry -- the failure this project refuses to allow to be silent.
+        # The presence of the NEW baked component is the discriminator, because
+        # it only exists in builds where the rename happened.
+        optional = list(_OPTIONAL_COMPONENTS)
+        optional_ids = editor.EditorComponentAPIBus(
+            bus.Broadcast, 'FindComponentTypeIdsByEntityType', optional, game_type)
+        for name, type_id in zip(optional, optional_ids or []):
+            if type_id is not None and not type_id.IsNull():
+                self._type_ids[name] = type_id
+        self._mesh_is_asset_based = _COLLIDER_MESH_BAKED in self._type_ids
+
         # Read the backend's contact offset from a real collider's default.
         self._contact_offset = self._read_contact_offset()
+
+    def mesh_is_asset_based(self):
+        """True when `Jolt Mesh Collider` takes a cooked `.joltmesh` asset."""
+        if self._contact_offset is None:
+            raise AdapterError("resolve_components() has not run")
+        return self._mesh_is_asset_based
 
     def _read_contact_offset(self):
         import azlmbr.bus as bus
@@ -137,12 +184,22 @@ class JoltBackendAdapter(base.PhysicsBackendAdapter):
         return float(value)
 
     def capabilities(self):
-        return {
+        # Both mesh routes are advertised on a gem that has both, and that is
+        # deliberate: the render-mesh bake still works and is the only answer
+        # for an entity whose mesh got no cooked product (a source staged
+        # before the group existed, or a cook that failed). `physics_build`
+        # PREFERS the cooked asset wherever one exists -- no bake, no settle,
+        # no per-entity geometry duplicated into the prefab -- and falls back
+        # to the bake only when it does not.
+        capabilities = {
             base.CAP_SHAPE_BOX, base.CAP_SHAPE_SPHERE, base.CAP_SHAPE_CAPSULE,
             base.CAP_SHAPE_CYLINDER, base.CAP_SHAPE_CONVEX, base.CAP_SHAPE_TRIMESH,
             base.CAP_COMPOUND_STATIC, base.CAP_TRIGGER, base.CAP_KINEMATIC,
             base.CAP_CCD,
         }
+        if self._mesh_is_asset_based:
+            capabilities.add(base.CAP_SHAPE_MESH_COOKED)
+        return capabilities
 
     def contact_offset(self):
         if self._contact_offset is None:
@@ -281,9 +338,28 @@ class JoltBackendAdapter(base.PhysicsBackendAdapter):
 
     def add_mesh_collider(self, entity_id, convex, material=None, layer=None,
                           asset_id=None):
-        # `asset_id` is the cooked-asset route (CAP_SHAPE_MESH_COOKED, PhysX);
-        # this backend bakes from the render mesh and ignores it.
-        pair = self._add_component(entity_id, _COLLIDER_MESH)
+        if asset_id is not None:
+            if not self._mesh_is_asset_based:
+                raise AdapterError(
+                    "a cooked .joltmesh asset was passed, but this gem build's "
+                    "'%s' bakes from the render mesh and has no asset slot "
+                    "(no '%s' component present). Rebuild the Jolt gem, or "
+                    "stage without the Jolt mesh group."
+                    % (_COLLIDER_MESH, _COLLIDER_MESH_BAKED))
+            # The cooked asset fixes the geometry, so `convex` carries no
+            # information here -- and nothing bakes on a tick, so this
+            # collider needs no settle before serialization.
+            pair = self._add_component(entity_id, _COLLIDER_MESH)
+            self._set_first(pair, _P_MESH_ASSET_CANDIDATES, asset_id, "mesh asset")
+            self._register_collider(entity_id, pair)
+            return pair
+
+        # The render-mesh bake. On a gem that has both, that is the component
+        # the rename moved aside; on an older one it is still `Jolt Mesh
+        # Collider` itself.
+        component = (_COLLIDER_MESH_BAKED if self._mesh_is_asset_based
+                     else _COLLIDER_MESH)
+        pair = self._add_component(entity_id, component)
         mesh_type = _MESH_TYPE_CONVEX if convex else _MESH_TYPE_TRIANGLE
         # The bake itself runs on the component's own activation/tick once the
         # entity's render model is loaded; sequencing is the caller's job

@@ -169,6 +169,47 @@ check(verification["missing_asset"] == ["HintOnly", "NullRef"],
       "references (physics materials) are present or when the assetHint alone "
       "looks right, and a real reference must not be: %r" % verification)
 
+# --- THE SAME TYPE NAME, TWO MEANINGS ---------------------------------------
+# The Jolt gem moved its mesh colliders to cooked .joltmesh assets and kept the
+# component name, so `EditorJoltMeshColliderComponent` is a BAKE in prefabs
+# written before that and an ASSET REFERENCE after. HEALTH is judged from
+# evidence and needs no version knowledge; only classifying a FAILURE does,
+# which is why the caller passes what its adapter detected.
+jolt_asset_healthy = {"$type": "EditorJoltMeshColliderComponent", "Id": 1,
+                      "ShapeConfiguration": {"Asset": {
+                          "assetId": {"guid": "{9A7B6C5D-4E3F-2A1B-0C9D-8E7F6A5B4C3D}",
+                                      "subId": 12345},
+                          "assetHint": "assets/things/sm_rock.fbx.joltmesh"}}}
+path = write_prefab([("JoltAssetOk", [jolt_asset_healthy])])
+paths.append(path)
+for asset_based in (False, True):
+    verification = prefab_build.collider_verification(
+        path, jolt_mesh_is_asset_based=asset_based)
+    check(verification == {"unbaked": [], "missing_asset": []},
+          "a Jolt collider carrying a real .joltmesh reference is healthy "
+          "whichever gem world the caller declares (asset_based=%s): %r"
+          % (asset_based, verification))
+
+# The empty case is the one that needs the flag: identical bytes, and the
+# failure belongs in a different bucket depending on the gem.
+jolt_empty = {"$type": "EditorJoltMeshColliderComponent", "Id": 1}
+path = write_prefab([("JoltEmpty", [jolt_empty])])
+paths.append(path)
+check(prefab_build.collider_verification(path)["unbaked"] == ["JoltEmpty"],
+      "on a baking gem an empty Jolt mesh collider is an unbaked collider")
+check(prefab_build.collider_verification(
+          path, jolt_mesh_is_asset_based=True)["missing_asset"] == ["JoltEmpty"],
+      "on an asset-based gem the same bytes are a missing asset reference")
+
+# The renamed bake component is unambiguous by name, so it never needs the flag.
+baked_empty = {"$type": "EditorJoltBakedMeshColliderComponent", "Id": 1,
+               "ShapeConfiguration": {}}
+path = write_prefab([("BakedEmpty", [baked_empty])])
+paths.append(path)
+check(prefab_build.collider_verification(
+          path, jolt_mesh_is_asset_based=True)["unbaked"] == ["BakedEmpty"],
+      "the renamed bake component must always be judged as a bake")
+
 path = write_prefab([("Zebra", [collider("")]),
                      ("Alpha", [collider(cooked=None)]),
                      ("Fine", [collider("DATA")])])

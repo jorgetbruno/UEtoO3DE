@@ -31,58 +31,89 @@ def product_path_for(relative_path, product_prefix):
     return ("%s/%s.azmodel" % (product_prefix, relative_path)).lower()
 
 
+# Cooked physics-mesh product extension per backend. BOTH scene builders name
+# their product from the FULL source filename, .fbx included, exactly as the
+# azmodel builder does -- verified in both caches (`sm_rock.fbx.pxmesh`,
+# `sm_carriage.fbx.joltmesh`), and contrast the EMotionFX builders, which drop
+# the extension.
+PHYSICS_PRODUCT_EXTENSION = {"physx": "pxmesh", "jolt": "joltmesh"}
+
+
+def physics_product_path_for(relative_path, product_prefix, backend):
+    """`uetoo3de/a/b.fbx` -> `assets/uetoo3de/a/b.fbx.<ext>` (lowercased)."""
+    try:
+        extension = PHYSICS_PRODUCT_EXTENSION[backend]
+    except KeyError:
+        raise StagingError("unknown physics backend %r" % (backend,))
+    return ("%s/%s.%s" % (product_prefix, relative_path, extension)).lower()
+
+
 def pxmesh_product_path_for(relative_path, product_prefix):
-    """`uetoo3de/a/b.fbx` -> `assets/uetoo3de/a/b.fbx.pxmesh` (lowercased).
-
-    The PhysX scene builder names its product from the FULL source filename,
-    .fbx included, exactly as the azmodel builder does (verified in the
-    UEtoO3DETest-PhysX cache: `sm_rock.fbx.pxmesh` beside `sm_rock.fbx.azmodel`;
-    contrast the EMotionFX builders, which drop the extension).
-    """
-    return ("%s/%s.pxmesh" % (product_prefix, relative_path)).lower()
+    """Back-compat alias for the PhysX product path."""
+    return physics_product_path_for(relative_path, product_prefix, "physx")
 
 
-def project_has_physx_gem(project_assets_root):
-    """Does the target project's gem list include a PhysX gem?
+# Which gem name prefix proves a backend's scene builder is present. Matched
+# against `project.json` gem_names: "PhysX5" in 26.05 ("PhysX" in older
+# engines), "JoltPhysics" for the Jolt gem.
+_BACKEND_GEM_PREFIX = {"physx": "PhysX", "jolt": "JoltPhysics"}
+_BACKEND_COOK_ENV = {"physx": "UEO3DE_PHYSX_COOK", "jolt": "UEO3DE_JOLT_COOK"}
 
-    Decides whether sidecars may carry a PhysX mesh group. A project without
-    the gem (UEtoO3DETest-Jolt ships JoltPhysics INSTEAD of PhysX5) has no
-    serializer for the group's $type, so writing one there would at best warn
-    and at worst fail every static mesh's AP job -- and it could never cook
-    the product anyway. Read from `project.json` because staging runs OUTSIDE
-    the editor, where no gem registry is loaded.
 
-    `UEO3DE_PHYSX_COOK` overrides in either direction, and it is not a
-    convenience: O3DE activates gems TRANSITIVELY, so a project listing only a
-    game gem whose `gem.json` depends on PhysX runs the PhysX backend while
-    this literal scan says no. The importer would then report
+def project_physics_backends(project_assets_root):
+    """Which physics backends' mesh groups this project's AP can cook.
+
+    Decides which physics mesh groups a sidecar may carry. A project without a
+    backend's gem has no serializer for that group's `$type`, so writing one
+    would at best warn and at worst fail every static mesh's AP job -- and it
+    could never cook the product anyway. Read from `project.json` because
+    staging runs OUTSIDE the editor, where no gem registry is loaded.
+
+    Returns a tuple in `assetinfo.BACKENDS` order, so sidecar bytes do not
+    depend on the order gems happen to be listed in.
+
+    `UEO3DE_PHYSX_COOK` / `UEO3DE_JOLT_COOK` override per backend, and they are
+    not conveniences: O3DE activates gems TRANSITIVELY, so a project listing
+    only a game gem whose `gem.json` depends on a physics gem runs that backend
+    while this literal scan says no. The importer would then report
     PHYS_MESH_NOT_COOKED per asset and advise a restage that re-runs the same
-    scan and can never fix it. The override is the way out, and
-    PHYS_MESH_NOT_COOKED names it.
+    scan and can never fix it. The overrides are the way out, and
+    PHYS_MESH_NOT_COOKED names them.
     """
-    override = os.environ.get("UEO3DE_PHYSX_COOK", "").strip().lower()
-    if override in ("0", "off", "false", "no"):
-        return False
-    if override in ("1", "on", "true", "yes"):
-        return True
-    if override:
-        raise StagingError(
-            "UEO3DE_PHYSX_COOK=%r is not understood; use 1/on/true or "
-            "0/off/false" % override)
     project_json = os.path.join(os.path.dirname(os.path.normpath(project_assets_root)),
                                 "project.json")
     try:
         with open(project_json, "r") as handle:
             gems = json.load(handle).get("gem_names") or []
     except (OSError, ValueError):
-        return False
+        gems = []
+    listed = []
     for gem in gems:
         name = gem.get("name", "") if isinstance(gem, dict) else gem
-        # "PhysX5" in 26.05; "PhysX" in older engines. Version specifiers
-        # ("PhysX>=2.0") ride on the name in some templates.
-        if str(name).split(">")[0].split("=")[0].strip().startswith("PhysX"):
-            return True
-    return False
+        # Version specifiers ("PhysX>=2.0") ride on the name in some templates.
+        listed.append(str(name).split(">")[0].split("=")[0].strip())
+
+    out = []
+    for backend in ("physx", "jolt"):
+        override = os.environ.get(_BACKEND_COOK_ENV[backend], "").strip().lower()
+        if override in ("1", "on", "true", "yes"):
+            out.append(backend)
+            continue
+        if override in ("0", "off", "false", "no"):
+            continue
+        if override:
+            raise StagingError(
+                "%s=%r is not understood; use 1/on/true or 0/off/false"
+                % (_BACKEND_COOK_ENV[backend], override))
+        prefix = _BACKEND_GEM_PREFIX[backend]
+        if any(name.startswith(prefix) for name in listed):
+            out.append(backend)
+    return tuple(out)
+
+
+def project_has_physx_gem(project_assets_root):
+    """Back-compat: does the project cook PhysX physics meshes?"""
+    return "physx" in project_physics_backends(project_assets_root)
 
 
 def skeletal_product_path_for(relative_path, product_prefix, kind):
@@ -119,7 +150,7 @@ def stage(document, source_root, project_assets_root, log=None):
 
     product_prefix = os.path.basename(os.path.normpath(project_assets_root)).lower()
     assets_by_guid = {a["guid"]: a for a in document["assets"]}
-    cook_physics = project_has_physx_gem(project_assets_root)
+    cook_backends = project_physics_backends(project_assets_root)
     records = []
 
     for asset in document["assets"]:
@@ -200,11 +231,12 @@ def stage(document, source_root, project_assets_root, log=None):
                 "%s has no fbx_node_name; the .assetinfo node path cannot be "
                 "built and the Asset Processor job would fail" % asset["ue_path"])
 
-        physics = assetinfo.physics_for_asset(asset) if cook_physics else None
+        physics = assetinfo.physics_for_asset(asset) if cook_backends else None
         staged_fbx = os.path.join(project_assets_root, relative_path).replace("\\", "/")
         os.makedirs(os.path.dirname(staged_fbx), exist_ok=True)
         shutil.copyfile(source_fbx, staged_fbx)
-        sidecar = assetinfo.write(staged_fbx, node_name, physics=physics)
+        sidecar = assetinfo.write(staged_fbx, node_name, physics=physics,
+                                  backends=cook_backends)
 
         record = {
             "kind": "static_mesh",

@@ -669,30 +669,37 @@ def create_prefab_in_memory(root_entity_ids, prefab_path):
     return create.GetValue()
 
 
-def _has_pxmesh_reference(node):
+COOKED_MESH_EXTENSIONS = (".pxmesh", ".joltmesh")
+
+
+def _has_cooked_mesh_reference(node):
     """Does this serialized subtree carry a real cooked-physics-mesh reference?
 
     A real reference is `{"assetId": {"guid": <non-zero>}, "assetHint":
-    "....pxmesh"}`. The hint check is not decoration: a mesh collider's
-    subtree can carry OTHER asset references (physics material slots), and
-    any-non-null-asset would pass on a component whose actual mesh slot is
-    empty.
+    "....pxmesh"/"....joltmesh"}`. The hint check is not decoration: a mesh
+    collider's subtree can carry OTHER asset references (physics material
+    slots), and any-non-null-asset would pass on a component whose actual mesh
+    slot is empty.
     """
     if isinstance(node, dict):
         asset_id = node.get("assetId")
         hint = node.get("assetHint")
-        if (isinstance(asset_id, dict)
-                and isinstance(hint, str) and hint.endswith(".pxmesh")):
+        if (isinstance(asset_id, dict) and isinstance(hint, str)
+                and hint.endswith(COOKED_MESH_EXTENSIONS)):
             guid = str(asset_id.get("guid", ""))
             if guid.strip("{}0-"):
                 return True
-        return any(_has_pxmesh_reference(value) for value in node.values())
+        return any(_has_cooked_mesh_reference(value) for value in node.values())
     if isinstance(node, list):
-        return any(_has_pxmesh_reference(value) for value in node)
+        return any(_has_cooked_mesh_reference(value) for value in node)
     return False
 
 
-def collider_verification(prefab_path):
+# Back-compat alias; the check is no longer PhysX-only.
+_has_pxmesh_reference = _has_cooked_mesh_reference
+
+
+def collider_verification(prefab_path, jolt_mesh_is_asset_based=False):
     """Entity names whose mesh collider reached the file with NO geometry.
 
     Pure file I/O -- the saved prefab is the only place the truth is visible.
@@ -710,13 +717,29 @@ def collider_verification(prefab_path):
       Four probes went looking for a signal to poll instead and found none;
       the check has to happen after the write, on the bytes.
 
-      `missing_asset` -- PhysX (`$type` contains "MeshCollider" without
-      "Jolt"; the component is `EditorMeshColliderComponent`). No bake is
-      involved -- the geometry lives in the `.pxmesh` product -- but the
-      Shape enum lesson from M3b applies: a property write the editor
-      accepted is not proof of what serialized. A component whose asset
-      reference did not reach the file collides with nothing, silently, so
-      the reference is checked on the bytes too.
+      `missing_asset` -- the ASSET-BASED colliders on either backend
+      (`EditorMeshColliderComponent` on PhysX, `EditorJoltMeshColliderComponent`
+      once the Jolt gem moved its mesh colliders to `.joltmesh` products). No
+      bake is involved -- the geometry lives in the product -- but the Shape
+      enum lesson from M3b applies: a property write the editor accepted is
+      not proof of what serialized. A component whose asset reference did not
+      reach the file collides with nothing, silently, so the reference is
+      checked on the bytes too.
+
+    HEALTH is judged from evidence, and either kind of evidence counts: a
+    non-empty `CookedData` or a real cooked-mesh asset reference means the
+    collider has geometry, whichever component it came from. That part needs
+    no version knowledge and cannot be fooled by the rename.
+
+    CLASSIFYING A FAILURE does need it, and cannot be recovered from the bytes:
+    the gem's rename moved `EditorJoltMeshColliderComponent` from baking to
+    referencing while keeping the name, and a collider that has neither
+    geometry nor an asset serializes the same either way (AZ JSON omits
+    defaults, so the empty case is an absent `ShapeConfiguration` in both).
+    So the caller says which world it authored in -- `jolt_mesh_is_asset_based`
+    comes straight from the adapter's own resolve-time detection -- and the
+    default is the pre-rename behaviour, which is what every prefab written
+    before the gem changed actually contains.
     """
     import json
 
@@ -732,13 +755,20 @@ def collider_verification(prefab_path):
             type_name = str(component.get("$type", ""))
             if "MeshCollider" not in type_name:
                 continue
-            if "Jolt" in type_name:
-                shape = component.get("ShapeConfiguration")
-                cooked = shape.get("CookedData") if isinstance(shape, dict) else None
-                if not (isinstance(cooked, str) and cooked):
-                    result["unbaked"].append(entity.get("Name"))
-            elif not _has_pxmesh_reference(component):
-                result["missing_asset"].append(entity.get("Name"))
+            shape = component.get("ShapeConfiguration")
+            cooked = shape.get("CookedData") if isinstance(shape, dict) else None
+            if isinstance(cooked, str) and cooked:
+                continue                       # a bake that reached the file
+            if _has_cooked_mesh_reference(component):
+                continue                       # an asset reference that did
+            if "Jolt" not in type_name:
+                bakes = False                  # PhysX: asset-based, always
+            elif "Baked" in type_name:
+                bakes = True                   # the renamed bake component
+            else:
+                bakes = not jolt_mesh_is_asset_based
+            (result["unbaked"] if bakes else result["missing_asset"]).append(
+                entity.get("Name"))
     result["unbaked"].sort()
     result["missing_asset"].sort()
     return result

@@ -118,6 +118,52 @@ try:
 except ValueError:
     pass
 
+# --- 1b-bis. the JOLT group, whose schema differs in ways that fail quietly --
+# Same shape as PhysX's group, three differences that a copy-paste would get
+# wrong and no test would notice: the $type is written WITHOUT the type uuid
+# (that is what the editor itself writes, and unlike "MeshGroup" the name
+# "JoltMeshGroup" is unambiguous), the export mode DEFAULTS TO CONVEX rather
+# than triangle mesh (so an omitted field means opposite things per backend),
+# and the group id comes from a different namespace so the two products cannot
+# collide in a project carrying both gems.
+jolt_doc = assetinfo.build("sm_thing", "SM_Thing", physics=convex_plan,
+                           backends=("jolt",))
+jolt_group = jolt_doc["values"][1]
+check(jolt_group.get("$type") == "JoltMeshGroup",
+      "the Jolt group $type must be the bare class name as the editor writes "
+      "it, got %r" % jolt_group.get("$type"))
+check(jolt_group.get("export method") == 1,
+      "a Jolt convex cook must serialize 'export method': 1, got %r"
+      % jolt_group.get("export method"))
+check(assetinfo.build("sm_thing", "SM_Thing",
+                      physics={"method": "trimesh", "elements": 0,
+                               "decompose_hulls": None},
+                      backends=("jolt",))["values"][1]["export method"] == 0,
+      "a Jolt trimesh cook must serialize 'export method': 0 -- omitting it "
+      "would mean CONVEX on this backend")
+check(jolt_group.get("NodeSelectionList", {}).get("selectedNodes")
+      == ["RootNode.SM_Thing"],
+      "the Jolt group's node selection is wrong: %r" % jolt_group.get("NodeSelectionList"))
+check(jolt_group.get("id") != group.get("id"),
+      "the Jolt and PhysX groups share an id; in a project with both gems "
+      "their products would be asked to share a sub-id")
+
+# Both gems present -> both groups, in a fixed order so sidecar bytes do not
+# depend on how project.json happens to list them.
+both = assetinfo.build("sm_thing", "SM_Thing", physics=convex_plan,
+                       backends=("physx", "jolt"))
+check([v.get("$type") for v in both["values"]]
+      == [assetinfo.MESH_GROUP_TYPE, assetinfo.PHYSX_MESH_GROUP_TYPE,
+          assetinfo.JOLT_MESH_GROUP_TYPE],
+      "a two-gem project's sidecar should carry render + physx + jolt in that "
+      "order, got %r" % [v.get("$type") for v in both["values"]])
+try:
+    assetinfo.build("sm_thing", "SM_Thing", physics=convex_plan,
+                    backends=("bullet",))
+    check(False, "an unknown backend must raise rather than emit nothing")
+except ValueError:
+    pass
+
 # --- 1c. the group id: present, well-formed, STABLE -------------------------
 # THE LITERAL PIN, and it is the only assertion here that can catch the one
 # forbidden change. Everything else in this section (regex, build-vs-build
@@ -273,11 +319,22 @@ with open(broken, "w") as handle:
 check(assetinfo.physics_in_sidecar(broken) is None,
       "a malformed sidecar must read back as None, not raise")
 
-# --- 3a. product path -------------------------------------------------------
+# --- 3a. product paths ------------------------------------------------------
+# Both builders name the product from the FULL source filename, .fbx included
+# (verified in both caches: sm_rock.fbx.pxmesh, sm_carriage.fbx.joltmesh).
 check(staging.pxmesh_product_path_for("uetoo3de/a/B.fbx", "assets")
       == "assets/uetoo3de/a/b.fbx.pxmesh",
       "pxmesh product path: got %r"
       % staging.pxmesh_product_path_for("uetoo3de/a/B.fbx", "assets"))
+check(staging.physics_product_path_for("uetoo3de/a/B.fbx", "assets", "jolt")
+      == "assets/uetoo3de/a/b.fbx.joltmesh",
+      "joltmesh product path: got %r"
+      % staging.physics_product_path_for("uetoo3de/a/B.fbx", "assets", "jolt"))
+try:
+    staging.physics_product_path_for("a/b.fbx", "assets", "bullet")
+    check(False, "an unknown backend must raise rather than invent an extension")
+except staging.StagingError:
+    pass
 
 # --- 3b. project gating -----------------------------------------------------
 def project_with_gems(gems):
@@ -295,8 +352,22 @@ check(staging.project_has_physx_gem(project_with_gems(["PhysX"])),
 check(staging.project_has_physx_gem(project_with_gems([{"name": "PhysX5"}])),
       "dict-shaped gem entries must be handled")
 check(not staging.project_has_physx_gem(project_with_gems(["JoltPhysics"])),
-      "the Jolt test project must gate OFF -- its AP has no serializer for "
-      "the physx group $type and could never cook the product")
+      "a Jolt-only project must gate PhysX OFF -- its AP has no serializer "
+      "for the physx group $type and could never cook the product")
+
+# Per-backend gating: each gem enables its own group and only its own.
+check(staging.project_physics_backends(project_with_gems(["JoltPhysics"]))
+      == ("jolt",),
+      "a JoltPhysics project must cook jolt groups only, got %r"
+      % (staging.project_physics_backends(project_with_gems(["JoltPhysics"])),))
+check(staging.project_physics_backends(project_with_gems(["PhysX5"]))
+      == ("physx",),
+      "a PhysX5 project must cook physx groups only")
+check(staging.project_physics_backends(
+          project_with_gems(["PhysX5", "JoltPhysics"])) == ("physx", "jolt"),
+      "a project with both gems must cook both, in a fixed order")
+check(staging.project_physics_backends(project_with_gems(["Atom"])) == (),
+      "a project with neither physics gem must cook nothing")
 check(not staging.project_has_physx_gem(
           os.path.join(tempfile.mkdtemp(prefix="ueo3de_none_"), "Assets")),
       "a missing project.json must gate OFF, not raise")
@@ -459,12 +530,38 @@ check([c for c in adapter.calls if c[0] == "box"] and
       not [c for c in adapter.calls if c[0] == "mesh"],
       "a trimesh cook must not be attached to convex elements; boxes substitute")
 
-# The render-mesh-baking backend (Jolt) is untouched by cooked ids.
+# --- COOKED BEATS BAKED, on a backend that can do both -----------------------
+# Jolt's mesh colliders moved to cooked .joltmesh assets while keeping the
+# render-mesh bake available under a second component, so it advertises BOTH
+# routes. The cooked one must win wherever a product exists: it needs no
+# tick-time bake (so no settle, and no PHYS_COLLIDER_NOT_BAKED risk) and it
+# references one shared asset instead of copying geometry into every instance
+# -- 315.7 MB of baked Jolt prefab versus 22.0 MB of PhysX asset references on
+# the same level.
+adapter = RecordingAdapter(BAKING_CAPS | {base.CAP_SHAPE_MESH_COOKED})
+_s, _codes = author(adapter, entity(physics_block(shapes_from_asset="g1")),
+                    ASSETS, {"g1": {"asset_id": "AID-1", "method": "convex"}})
+check([c for c in adapter.calls if c[0] == "mesh"] == [("mesh", True, "AID-1")],
+      "a backend with BOTH routes must prefer the cooked asset, got %r"
+      % adapter.calls)
+
+# ...and must still bake when there is no cooked product for that mesh, which
+# is the case for anything staged before the group existed or whose cook
+# failed. Losing this fallback would silently drop those entities to boxes.
+adapter = RecordingAdapter(BAKING_CAPS | {base.CAP_SHAPE_MESH_COOKED})
+_s, _codes = author(adapter, entity(physics_block(shapes_from_asset="g1")),
+                    ASSETS, {})
+check([c for c in adapter.calls if c[0] == "mesh"] == [("mesh", True, None)],
+      "with no cooked product the render-mesh bake must still happen, got %r"
+      % adapter.calls)
+
+# A bake-only backend (an older Jolt gem) is untouched by cooked ids reaching
+# it -- it cannot use them, and physics_build must not hand them over.
 adapter = RecordingAdapter(BAKING_CAPS)
 _s, _codes = author(adapter, entity(physics_block(shapes_from_asset="g1")),
                     ASSETS, {"g1": {"asset_id": "AID-1", "method": "convex"}})
 check([c for c in adapter.calls if c[0] == "mesh"] == [("mesh", True, None)],
-      "a CAP_SHAPE_CONVEX backend must keep baking from the render mesh "
+      "a bake-only backend must keep baking from the render mesh "
       "(no asset id), got %r" % adapter.calls)
 
 # source 'none' + static body + cooked trimesh -> triangle-mesh collider.
