@@ -248,9 +248,27 @@ check(showcase >= 30 * 20,
       "the settle for a 2501-collider level fell to %d frames, under 20x the "
       "measured need -- if that is deliberate, move this test with it" % showcase)
 
+# No bakes -> nothing to settle FOR. An import that took the cooked-asset
+# route everywhere has no tick-time work whose result must reach the prefab,
+# and paying the floor anyway is ~7 s per import of pure waiting. Measured
+# EQUIVALENT (prefab_diff, including every cooked-mesh asset id) between
+# settle=0 and the full settle on a 3,677-entity level.
+check(importer.settle_frames(bake_count=0, skeletal_authored=0) == 0,
+      "with no render-mesh bakes the settle should be zero, got %r"
+      % importer.settle_frames(0, 0))
+check(importer.settle_frames(bake_count=0, skeletal_authored=4) == 40,
+      "the (unmeasured) skeletal term must survive the no-bake case, got %r"
+      % importer.settle_frames(0, 4))
+# One bake is still a bake: the floor protects the case this guard exists for.
+check(importer.settle_frames(bake_count=1, skeletal_authored=0) >= 300,
+      "a single bake must still get the full floor, got %r"
+      % importer.settle_frames(1, 0))
+
 os.environ["UEO3DE_SETTLE_FRAMES"] = "4321"
 check(importer.settle_frames(100, 3) == 4321,
       "UEO3DE_SETTLE_FRAMES did not override the formula")
+check(importer.settle_frames(0, 0) == 4321,
+      "the override must win even when the formula would say zero")
 
 # The trap: "0" is a perfectly good override and must not be read as "unset".
 # Every measurement in PERFORMANCE.md that establishes the settle is
