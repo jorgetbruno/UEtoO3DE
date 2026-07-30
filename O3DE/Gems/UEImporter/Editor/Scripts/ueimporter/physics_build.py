@@ -14,15 +14,25 @@ Body classification (the plan's M3 mapping table, backend-neutral):
     no collision                       -> no physics components at all
 
 Collision shapes come from the mesh ASSET's simple collision (cached per GUID
-in the manifest), scaled by the entity's world scale because the collider
-components live outside the transform's scale:
+in the manifest). WHO applies the entity's scale to them is a per-backend
+question with a measured answer, not an assumption:
 
-  * `AZ::Transform` scale is uniform-only, and non-uniform scale sits on a
-    separate component whose interaction with collider components is not a
-    contract anywhere -- so the importer bakes the entity's scale into the
-    collider dimensions itself. Deterministic, and identical across backends.
-  * A sphere under non-uniform scale has no exact image; the largest axis
-    wins and `PHYS_SHAPE_APPROXIMATED` is reported.
+  * A backend advertising `CAP_SCALE_ENGINE_APPLIED` scales its own colliders
+    -- dimensions and offsets, primitives and cooked mesh assets -- from the
+    entity's world uniform scale times any non-uniform scale component. The
+    importer then authors UNSCALED numbers, because multiplying them by the
+    same scale again would square the collision (a 2x actor colliding at 4x).
+    Both shipped backends do this today; `probe_scale_matrix.py` measures it
+    by reading each collider's world AABB and reporting the scaled/unscaled
+    ratio, and every cell reads 2.000.
+  * A backend that does NOT advertise it gets the scale baked in here instead,
+    which is what this module did unconditionally until the Jolt gem started
+    honouring entity scale. `UEO3DE_BAKE_SCALE=1` forces that older behaviour
+    back on for a gem build that predates it -- nothing in the component set
+    distinguishes the two, so it cannot be detected.
+  * When the scale IS baked here: a sphere under non-uniform scale has no
+    exact image, so the largest axis wins and `PHYS_SHAPE_APPROXIMATED` is
+    reported. Left to the engine, both backends handle it natively.
   * UE's zero-thickness planes produce boxes with a zero dimension; solvers
     reject or misbehave on degenerate shapes, so those are clamped to
     `MIN_DIMENSION` and reported.
@@ -53,9 +63,49 @@ level measured 315.7 MB of baked Jolt prefab against 22.0 MB of PhysX asset
 references. The bake remains the fallback for meshes that got no product.
 """
 
+import os
+
 from .adapters import base
 
 MIN_DIMENSION = 0.01  # meters; clamp for degenerate collider dimensions
+IDENTITY_SCALE = [1.0, 1.0, 1.0]
+
+_BAKE_SCALE_ON = ("1", "on", "true", "yes", "enabled")
+_BAKE_SCALE_OFF = ("0", "off", "false", "no", "none", "disabled")
+
+
+def bake_scale_override(value=None):
+    """UEO3DE_BAKE_SCALE -> True (force baking), False (forbid), or None.
+
+    Unrecognised values RAISE rather than defaulting: `UEO3DE_PHYSX_DECOMPOSE`
+    once mapped every unparseable string onto "on", so "off" turned the feature
+    ON. A knob that silently means its opposite is worse than no knob.
+    """
+    if value is None:
+        value = os.environ.get("UEO3DE_BAKE_SCALE", "")
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in _BAKE_SCALE_ON:
+        return True
+    if text in _BAKE_SCALE_OFF:
+        return False
+    raise ValueError(
+        "UEO3DE_BAKE_SCALE=%r is not one of %s"
+        % (value, ", ".join(_BAKE_SCALE_ON + _BAKE_SCALE_OFF)))
+
+
+def collider_scale(adapter, world_scale, override=None):
+    """The scale to MULTIPLY authored collider dimensions by.
+
+    Identity when the backend scales its own colliders, because then the
+    entity's scale is applied twice otherwise -- see CAP_SCALE_ENGINE_APPLIED.
+    """
+    if override is None:
+        override = bake_scale_override()
+    if override is None:
+        override = base.CAP_SCALE_ENGINE_APPLIED not in adapter.capabilities()
+    return list(world_scale) if override else list(IDENTITY_SCALE)
 
 
 def _scaled(vector, scale):
@@ -361,7 +411,9 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
     cooked_mesh_ids = cooked_mesh_ids or {}
 
     subject = item["name"]
-    scale = item["transform"]["world"]["scale"]
+    # NOT the entity's world scale unless this backend leaves collider scaling
+    # to the importer. Both shipped backends apply it themselves.
+    scale = collider_scale(adapter, item["transform"]["world"]["scale"])
 
     profile = physics.get("collision_profile") or ""
     if profile and profile not in profile_map:

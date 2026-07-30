@@ -54,6 +54,15 @@ CAP_CCD = "ccd"
 # second, Jolt the second and not the first, and conflating them is how a
 # backend ends up authoring a fully-configured collider with no geometry.
 CAP_SHAPE_MESH_COOKED = "shape.mesh_cooked"
+# The backend applies the ENTITY'S OWN SCALE to its colliders -- world uniform
+# scale times any EditorNonUniformScaleComponent -- to collider dimensions AND
+# to collider offsets, for primitives and for cooked mesh assets alike. A
+# caller that also multiplies the authored dimensions by that scale SQUARES the
+# collision on every scaled entity, so `physics_build` authors unscaled numbers
+# whenever this is advertised. Measured, not assumed: `probe_scale_matrix.py`
+# reads each collider's world AABB in game mode and reports the ratio between
+# the scaled and unscaled subject -- 2.000 on every cell, both backends.
+CAP_SCALE_ENGINE_APPLIED = "scale.engine_applied"
 
 
 class PhysicsBackendAdapter:

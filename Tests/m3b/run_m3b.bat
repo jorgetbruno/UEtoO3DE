@@ -72,6 +72,26 @@ if errorlevel 1 (
   goto :failed
 )
 
+rem A SCALED entity, on both backends. Every other fixture in the repo sits at
+rem scale 1, where scale and scale-squared are the same number -- which is why
+rem the importer squared collision on every scaled entity for months with every
+rem suite green. This step is the one that fails when that returns.
+echo === 5/6  Jolt project: scaled entity authored and measured ===
+set "UEO3DE_EXPECT_BACKEND=jolt"
+call "%REPO%\Tests\o3de\run_o3de_python.bat" "%REPO%\Tests\m3b\m3b_scale_acceptance.py" "%REPO%\Tests\m3b\results\m3b_jolt_scale_result.txt" "%JOLT%"
+if errorlevel 1 (
+  echo   see Tests\m3b\results\m3b_jolt_scale_result.txt
+  goto :failed
+)
+
+echo === 6/6  PhysX project: scaled entity authored and measured ===
+set "UEO3DE_EXPECT_BACKEND=physx"
+call "%REPO%\Tests\o3de\run_o3de_python.bat" "%REPO%\Tests\m3b\m3b_scale_acceptance.py" "%REPO%\Tests\m3b\results\m3b_physx_scale_result.txt" "%PHYSX%"
+if errorlevel 1 (
+  echo   see Tests\m3b\results\m3b_physx_scale_result.txt
+  goto :failed
+)
+
 echo.
 echo RESULT: PASS
 endlocal & exit /b 0

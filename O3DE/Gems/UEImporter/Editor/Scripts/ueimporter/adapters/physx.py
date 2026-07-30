@@ -166,6 +166,7 @@ class PhysXBackendAdapter(base.PhysicsBackendAdapter):
             base.CAP_SHAPE_BOX, base.CAP_SHAPE_SPHERE, base.CAP_SHAPE_CAPSULE,
             base.CAP_SHAPE_CYLINDER, base.CAP_SHAPE_MESH_COOKED,
             base.CAP_TRIGGER, base.CAP_KINEMATIC, base.CAP_CCD,
+            base.CAP_SCALE_ENGINE_APPLIED,
         }
 
     def contact_offset(self):

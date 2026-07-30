@@ -400,9 +400,19 @@ authoring for the inactive backend yields a level with no physics).
 | Collision profile | `collision_profiles.json` lookup; unmapped → `PHYS_PROFILE_FALLBACK` | Collision Layer |
 | Mass override off | `mass=None` + `MASS_FROM_DENSITY` | gem's density-derived default |
 
-Entity world scale is baked into collider dimensions by the importer
-(backend-neutral); shapes without a per-axis image take the largest axis with
-`PHYS_SHAPE_APPROXIMATED`. Capability negotiation compares the manifest's
+**Entity scale is the engine's job, not the importer's.** Both backends apply
+the entity's world uniform scale times any non-uniform scale component to their
+own colliders — dimensions, offsets, primitives and cooked mesh assets alike
+(measured: every ratio is exactly 2.000, `Tests/o3de/probe_scale_matrix.py`).
+So an adapter advertising `CAP_SCALE_ENGINE_APPLIED` is handed the manifest's
+own numbers and nothing is multiplied; multiplying as well would square the
+collision on every scaled entity. A backend without the capability gets the
+scale baked in here instead, and only then can a shape without a per-axis image
+(sphere, capsule) take the largest axis with `PHYS_SHAPE_APPROXIMATED`.
+`UEO3DE_BAKE_SCALE=1` forces baking back on for a Jolt gem build predating
+`ApplyOverallScale` — nothing in the component set distinguishes it. Guarded
+by `Tests/perf/test_scale.py` and `Tests/m3b/m3b_scale_acceptance.py`.
+Capability negotiation compares the manifest's
 required shapes against `adapter.capabilities()` before authoring.
 `adapter.contact_offset()` (read live from a scratch collider, currently
 0.02 m) supplies every rest-height tolerance — never hard-coded. Divergences:
@@ -441,9 +451,8 @@ rather than authored: PhysX refuses triangle-mesh geometry on a **simulated
 dynamic body** and refuses it as a **trigger shape**. Those entities get
 `PHYS_SHAPE_APPROXIMATED` naming the blocker; a convex cook is valid in both
 cases. Scaled entities: the cooked collider follows the entity's scale from the
-engine side and the importer deliberately passes no dimensions and does not set
-Asset Scale — see the open scale defect in
-[DIVERGENCES.md](DIVERGENCES.md#open-defect--scaled-entities-get-collision-scaled-twice-both-backends).
+engine side (measured at exactly 2.000 on both backends), and the importer
+passes no dimensions and deliberately does not set Asset Scale on top of it.
 
 ## Materials (M4) — graph subset → StandardPBR
 

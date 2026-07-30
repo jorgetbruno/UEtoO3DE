@@ -1,8 +1,9 @@
 @echo off
 rem run_perf.bat - the settle / collider-bake guard.
 rem
-rem   0  unit    the bake detector, the settle constant and its override, and
-rem              the prefab content comparator -- pure Python, no editor
+rem   0  unit    the bake detector, the settle constant and its override, the
+rem              prefab content comparator, and WHO scales colliders (the
+rem              scale-squaring guard) -- pure Python, no editor
 rem   1  live    a real level imported and CHECKED: every mesh collider that
 rem              was authored must have reached the prefab with baked geometry
 rem
@@ -33,6 +34,8 @@ if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_convex.py"
 if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_pxmesh.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_scale.py"
 if %ERRORLEVEL% NEQ 0 goto :failed
 
 echo === 1/1  live: a real level, every authored bake accounted for ===

@@ -196,6 +196,16 @@ class JoltBackendAdapter(base.PhysicsBackendAdapter):
             base.CAP_SHAPE_CYLINDER, base.CAP_SHAPE_CONVEX, base.CAP_SHAPE_TRIMESH,
             base.CAP_COMPOUND_STATIC, base.CAP_TRIGGER, base.CAP_KINEMATIC,
             base.CAP_CCD,
+            # Advertised UNCONDITIONALLY, unlike CAP_SHAPE_MESH_COOKED below,
+            # because nothing in the gem's component set distinguishes a build
+            # that scales colliders from one that does not: the behaviour
+            # arrived in JoltColliderComponentBase::ApplyOverallScale, AFTER
+            # the mesh collider rename this adapter already detects, and it
+            # added no component, property or type id to look for. Measured
+            # 2.000 on every cell of `probe_scale_matrix.py`, same as PhysX.
+            # An older gem ignores entity scale on primitives, and the escape
+            # hatch for that is UEO3DE_BAKE_SCALE=1 (see physics_build).
+            base.CAP_SCALE_ENGINE_APPLIED,
         }
         if self._mesh_is_asset_based:
             capabilities.add(base.CAP_SHAPE_MESH_COOKED)
