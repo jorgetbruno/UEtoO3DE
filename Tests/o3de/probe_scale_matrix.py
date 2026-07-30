@@ -50,6 +50,12 @@ RESULT_PATH = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].strip()
 BOX_HALF = [1.0, 0.75, 0.45]     # deliberately unequal: a per-axis error shows up
 OFFSET_HALF = [0.5, 0.5, 0.5]
 COLLIDER_OFFSET = [0.0, 0.0, 1.0]
+# 90 degrees about X, xyzw. An axis-PERMUTING rotation, so a non-uniform scale
+# composes with it exactly in either convention -- and the two conventions give
+# different answers, which is what makes it a discriminator rather than a
+# tolerance question.
+ROT_X90 = [0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+ROT_SCALE = [1.0, 1.0, 3.0]
 SPACING = float(os.environ.get('UEO3DE_PROBE_SPACING', '40'))
 ASSET_LOAD_FRAMES = int(os.environ.get('UEO3DE_PROBE_LOAD_FRAMES', '300'))
 
@@ -113,6 +119,34 @@ def aabb_of(entity_id):
                   (maximum.z + minimum.z) * 0.5]
         return size, centre, name
     return None, None, ', '.join(tried) or 'no candidate bus exists'
+
+
+def _quat_matrix(quat):
+    """xyzw -> 3x3 rotation matrix."""
+    x, y, z, w = quat
+    return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+
+
+def _aabb_size(matrix, half):
+    """World AABB of a box with `half` extents under a 3x3 transform."""
+    return [2.0 * sum(abs(matrix[i][j]) * half[j] for j in range(3))
+            for i in range(3)]
+
+
+def _predicted_rotated(half, quat, scale):
+    """(entity-space prediction, shape-space prediction).
+
+    ENTITY space: the scale is applied OUTSIDE the collider's rotation, the way
+    the render mesh transforms -- diag(scale) . R.
+    SHAPE space: the scale is applied INSIDE it, in the shape's own frame --
+    R . diag(scale). The two agree only when the scale is uniform.
+    """
+    rotation = _quat_matrix(quat)
+    outside = [[scale[i] * rotation[i][j] for j in range(3)] for i in range(3)]
+    inside = [[rotation[i][j] * scale[j] for j in range(3)] for i in range(3)]
+    return _aabb_size(outside, half), _aabb_size(inside, half)
 
 
 def _ratio_verdict(value, base_value):
@@ -183,7 +217,9 @@ def main():
             ("box_uniform", {"uniform": 2.0}, "box"),
             ("box_nonuni", {"nonuniform": (1.0, 1.0, 2.0)}, "box"),
             ("off_plain", {}, "offset"),
-            ("off_uniform", {"uniform": 2.0}, "offset")]
+            ("off_uniform", {"uniform": 2.0}, "offset"),
+            ("rot_plain", {}, "rotated"),
+            ("rot_nonuni", {"nonuniform": tuple(ROT_SCALE)}, "rotated")]
     if asset_id is not None:
         plan += [("mesh_plain", {}, "mesh"),
                  ("mesh_uniform", {"uniform": 2.0}, "mesh"),
@@ -201,6 +237,8 @@ def main():
             adapter.add_box_collider(target, BOX_HALF)
         elif kind == "offset":
             adapter.add_box_collider(target, OFFSET_HALF, COLLIDER_OFFSET, None)
+        elif kind == "rotated":
+            adapter.add_box_collider(target, BOX_HALF, None, ROT_X90)
         else:
             adapter.add_mesh_collider(target, convex=True, asset_id=asset_id)
         log("  %-14s x=%-7.0f %-7s %s" % (label, x, kind, scaling or "scale 1"))
@@ -286,6 +324,35 @@ def main():
             log("  %-42s %.3f / %.3f = %.3f  %s"
                 % ("offset box centre, transform scale", this[1][2], that[1][2],
                    ratio, verdict))
+
+    log("")
+    log("=== verdicts: a ROTATED collider under NON-UNIFORM scale ===")
+    log("  (which frame does the engine apply the scale in? the two predictions")
+    log("   below differ, so the reading picks one -- it is not a tolerance call)")
+    rot_plain, rot_nonuni = readings.get("rot_plain"), readings.get("rot_nonuni")
+    if rot_plain is None or rot_nonuni is None:
+        log("  NO READING")
+    else:
+        unrotated = [2.0 * half for half in BOX_HALF]
+        turned = _aabb_size(_quat_matrix(ROT_X90), BOX_HALF)
+        log("  unscaled+rotated  measured %r vs predicted %r"
+            % ([round(v, 3) for v in rot_plain[0]], [round(v, 3) for v in turned]))
+        if max(abs(rot_plain[0][i] - turned[i]) for i in range(3)) > 0.05:
+            log("    the rotation itself did not take; the scaled reading below "
+                "says nothing (unrotated would be %r)"
+                % [round(v, 3) for v in unrotated])
+        outside, inside = _predicted_rotated(BOX_HALF, ROT_X90, ROT_SCALE)
+        measured = rot_nonuni[0]
+        matches_outside = max(abs(measured[i] - outside[i]) for i in range(3)) < 0.05
+        matches_inside = max(abs(measured[i] - inside[i]) for i in range(3)) < 0.05
+        log("  scaled+rotated    measured %r" % [round(v, 3) for v in measured])
+        log("    ENTITY space (scale outside the rotation) predicts %r  %s"
+            % ([round(v, 3) for v in outside], "<== MATCH" if matches_outside else ""))
+        log("    SHAPE space  (scale inside the rotation)  predicts %r  %s"
+            % ([round(v, 3) for v in inside], "<== MATCH" if matches_inside else ""))
+        if not (matches_outside or matches_inside):
+            log("    neither -- the engine is doing something this probe does "
+                "not model, and that is the interesting result")
 
     log("")
     log("Reading it: a ratio of ~2 means the engine already applies that scale, "

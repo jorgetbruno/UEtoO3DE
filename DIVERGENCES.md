@@ -48,6 +48,17 @@ between the scaled and unscaled subject. Every cell, both backends:
 | cooked mesh asset, non-uniform component | 2.000 | 2.000 |
 | **collider OFFSET**, transform scale | 2.000 | 2.000 |
 
+**Which frame the scale multiplies in** is a second question, and it only has
+an answer when the collider is rotated — which UE collision elements routinely
+are. Both backends apply it in ENTITY space, outside the collider's rotation,
+the way the render mesh transforms. Measured with a box rotated 90° about X on
+an entity scaled (1, 1, 3): the AABB reads **(2.0, 0.9, 4.5)** on both, where
+applying the scale inside the shape's own frame predicts (2.0, 2.7, 1.5). The
+two disagree by more than any tolerance, so the reading picks one outright.
+Jolt only started doing this at `6fa7f32` (2026-07-30): before it, the scale
+went inside the rotation and a rotated collider on a scaled entity came out
+squashed along whichever axis the rotation mapped the scale onto.
+
 Jolt did not always do this. Until `JoltColliderComponentBase::ApplyOverallScale`
 (2026-07-30) only its mesh-asset collider scaled anything, and this probe
 measured Jolt at ratio 1.0 — the importer's baking was what made a scaled
@@ -68,8 +79,12 @@ directly — a 1.015 x 1.014 x 1.265 m barrel sitting on its entity — so the
 route is confirmed working, not merely serialized.
 
 Guarded by `Tests/perf/test_scale.py` (both directions of the capability, no
-editor) and `Tests/m3b/m3b_scale_acceptance.py` (a scaled entity authored
-through the real adapter and measured, on both backends).
+editor) and `Tests/m3b/m3b_scale_acceptance.py` (scaled entities authored
+through the real adapter and measured, on both backends — including a rotated
+collider under non-uniform scale, which is the case that distinguishes the two
+frames). `Tests/m3/test_gem_binaries_fresh.py` keeps M3's gem-regression step
+from asserting on a stale binary, which is how the gem's newest tests went
+three days without running while M3 reported PASS.
 
 Why nothing caught it for months is worth being precise about, because "the
 fixtures are all at scale 1" is the easy answer and it is false. Fixture_01

@@ -38,7 +38,16 @@ if errorlevel 1 (
   goto :failed
 )
 
+rem AzTestRunner asserts on the BINARIES, so a stale DLL passes while the gem's
+rem current tests never run. That is not hypothetical: JoltPhysics.Tests.dll sat
+rem three days old because the gem's test sources had stopped compiling, and
+rem this step reported PASS the whole time.
 echo === 4/4  JoltPhysics gem regression ===
+%PY% "%REPO%\Tests\m3\test_gem_binaries_fresh.py" "%GEMBIN%"
+if errorlevel 1 (
+  echo   the gem test binaries are stale; rebuild the test targets before trusting this step
+  goto :failed
+)
 "%RUNNER%" "%GEMBIN%\JoltPhysics.Tests.dll" AzRunUnitTests >nul 2>&1
 if errorlevel 1 (
   echo   JoltPhysics.Tests.dll failed

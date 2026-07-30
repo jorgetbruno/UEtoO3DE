@@ -49,6 +49,14 @@ RESULT_PATH = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].strip()
 
 HALF_EXTENTS = [1.0, 0.5, 0.25]   # unequal on purpose: a per-axis error shows
 COLLIDER_OFFSET = [0.0, 0.0, 2.0]
+# 90 degrees about X, xyzw. UE collision elements carry rotations, so this is
+# the shape the importer actually authors -- and it is the case where "who
+# applies the scale" splits into "in which FRAME": entity space (outside the
+# rotation, the way the render mesh transforms) or the shape's own frame. The
+# two disagree unless the scale is uniform. Measured on both backends: entity
+# space, exactly.
+ROTATION = [0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
+ROTATED_SCALE = [1.0, 1.0, 3.0]
 SPACING = 40.0
 TOLERANCE = 0.02                  # meters; the readings are exact to 1e-3
 
@@ -70,6 +78,29 @@ def check(condition, message):
     if not condition:
         fail(message)
     return condition
+
+
+def rotation_matrix(quat):
+    """xyzw -> 3x3."""
+    x, y, z, w = quat
+    return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+
+
+def rotated_aabb(half, quat, scale, half_already_scaled=False):
+    """World AABB size of a box rotated by `quat` on an entity scaled `scale`.
+
+    The scale multiplies in ENTITY space, outside the rotation: M = diag(s).R,
+    and the AABB of a box under M is sum_j |M[i][j]| * half[j]. Passing
+    `half_already_scaled` models the defect -- the importer having multiplied
+    the half extents in the shape's own frame before the engine scales again.
+    """
+    matrix = rotation_matrix(quat)
+    extents = [half[j] * (scale[j] if half_already_scaled else 1.0)
+               for j in range(3)]
+    return [2.0 * sum(abs(scale[i] * matrix[i][j]) * extents[j] for j in range(3))
+            for i in range(3)]
 
 
 def _corners(aabb):
@@ -143,15 +174,17 @@ def main():
     report = Report()
     prefix = "SA_"
 
-    # (label, world scale, non-uniform component or None)
-    subjects = [("plain", [1.0, 1.0, 1.0], None),
-                ("uniform", [2.0, 2.0, 2.0], None),
-                ("nonuni", [1.0, 1.0, 3.0], (1.0, 1.0, 3.0))]
+    # (label, world scale, non-uniform component or None, collider rotation)
+    subjects = [("plain", [1.0, 1.0, 1.0], None, None),
+                ("uniform", [2.0, 2.0, 2.0], None, None),
+                ("nonuni", [1.0, 1.0, 3.0], (1.0, 1.0, 3.0), None),
+                ("rot_plain", [1.0, 1.0, 1.0], None, ROTATION),
+                ("rot_nonuni", list(ROTATED_SCALE), tuple(ROTATED_SCALE), ROTATION)]
 
     log("")
     log("=== authored subjects (manifest half extents %r, collider offset %r) ==="
         % (HALF_EXTENTS, COLLIDER_OFFSET))
-    for index, (label, scale, nonuniform) in enumerate(subjects):
+    for index, (label, scale, nonuniform, rotation) in enumerate(subjects):
         x = index * SPACING
         entity_id = editor.ToolsApplicationRequestBus(
             bus.Broadcast, 'CreateNewEntity', entity_module.EntityId())
@@ -173,7 +206,14 @@ def main():
                                     entity_id, float(scale[0]))
 
         # The manifest the importer would have produced for this entity, with
-        # the SAME world scale the transform above carries.
+        # the SAME world scale the transform above carries. A rotated subject
+        # carries no collider offset: the offset and the rotation are separate
+        # questions and mixing them would make a failure ambiguous.
+        shape = {"type": "box", "half_extents": list(HALF_EXTENTS)}
+        if rotation is None:
+            shape["offset"] = list(COLLIDER_OFFSET)
+        else:
+            shape["rotation"] = list(rotation)
         item = {"name": prefix + label,
                 "transform": {"world": {"scale": list(scale)}},
                 "physics": {"has_collision": True, "is_trigger": False,
@@ -182,11 +222,10 @@ def main():
                             "enable_gravity": True, "linear_damping": 0.0,
                             "angular_damping": 0.0, "mass_override": False,
                             "mass_kg": None, "shapes_from_asset": None,
-                            "shapes": [{"type": "box",
-                                        "half_extents": list(HALF_EXTENTS),
-                                        "offset": list(COLLIDER_OFFSET)}]}}
+                            "shapes": [shape]}}
         physics_build.author_entity_physics(adapter, entity_id, item, {}, report, {})
-        log("  %-9s world scale %r" % (label, scale))
+        log("  %-11s world scale %-16r %s"
+            % (label, scale, "rotated" if rotation else "axis-aligned"))
 
     general.idle_wait_frames(30)
     general.enter_game_mode()
@@ -195,7 +234,7 @@ def main():
         return
 
     readings = {}
-    for index, (label, _scale, _nonuniform) in enumerate(subjects):
+    for index, (label, _scale, _nonuniform, _rotation) in enumerate(subjects):
         game_id = general.find_game_entity(prefix + label)
         if game_id is None or not game_id.IsValid():
             readings[label] = None
@@ -207,13 +246,13 @@ def main():
 
     log("")
     log("=== measured world AABBs ===")
-    for label, _scale, _nonuniform in subjects:
+    for label, _scale, _nonuniform, _rotation in subjects:
         reading = readings.get(label)
         if reading is None:
-            log("  %-9s NO BODY" % label)
+            log("  %-11s NO BODY" % label)
             continue
         size, centre, origin_x = reading
-        log("  %-9s size (%.3f, %.3f, %.3f)  centre (%.3f, %.3f, %.3f)"
+        log("  %-11s size (%.3f, %.3f, %.3f)  centre (%.3f, %.3f, %.3f)"
             % (label, size[0], size[1], size[2],
                centre[0] - origin_x, centre[1], centre[2]))
 
@@ -240,12 +279,34 @@ def main():
 
     log("")
     log("=== verdicts (expected = manifest x scale, applied ONCE) ===")
-    for label, scale, _nonuniform in subjects[1:]:
+    for label, scale, _nonuniform, rotation in subjects[1:]:
         reading = readings.get(label)
         if not check(reading is not None,
                      "%s produced no simulated body" % label):
             continue
         size, centre, origin_x = reading
+
+        if rotation is not None:
+            # A rotated collider answers a second question: in WHICH FRAME does
+            # the scale multiply. Entity space (outside the rotation) is what
+            # both backends do -- measured, and the two conventions disagree by
+            # more than any tolerance, so this reading picks one.
+            want = rotated_aabb(HALF_EXTENTS, rotation, scale)
+            baked = rotated_aabb(HALF_EXTENTS, rotation, scale,
+                                 half_already_scaled=True)
+            looks_baked = max(abs(size[i] - baked[i]) for i in range(3)) <= TOLERANCE
+            if check(max(abs(size[i] - want[i]) for i in range(3)) <= TOLERANCE,
+                     "%s: rotated collider size %r, expected %r%s"
+                     % (label, [round(s, 3) for s in size],
+                        [round(s, 3) for s in want],
+                        " -- this is what you get when the importer scales the "
+                        "half extents in the SHAPE's frame and the engine then "
+                        "scales again in entity space (%r)"
+                        % [round(s, 3) for s in baked] if looks_baked else "")):
+                log("  %-11s size %r (rotated)  OK"
+                    % (label, [round(s, 3) for s in size]))
+            continue
+
         want_size = [2.0 * HALF_EXTENTS[i] * scale[i] for i in range(3)]
         squared = [2.0 * HALF_EXTENTS[i] * scale[i] * scale[i] for i in range(3)]
         want_centre = COLLIDER_OFFSET[2] * scale[2]
@@ -266,7 +327,7 @@ def main():
                " -- that is the offset scaled TWICE (%.3f)" % squared_centre
                if abs(centre[2] - squared_centre) <= TOLERANCE else ""))
         if sized and centred:
-            log("  %-9s size %r centre z=%.3f  OK"
+            log("  %-11s size %r centre z=%.3f  OK"
                 % (label, [round(s, 3) for s in size], centre[2]))
 
     # Nothing above was approximated: the engine applies non-uniform scale to a
