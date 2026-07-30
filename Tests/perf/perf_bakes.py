@@ -88,13 +88,40 @@ def main():
         log=lambda m: None)
 
     authored = report.counters.get("mesh_colliders", 0)
+    asset_authored = report.counters.get("mesh_asset_colliders", 0)
     cooked = report.counters.get("colliders_cooked", None)
     settle = report.counters.get("settle_frames", None)
-    log("  settled %r frames; authored %d mesh colliders" % (settle, authored))
+    log("  settled %r frames; authored %d baked + %d cooked-asset mesh colliders"
+        % (settle, authored, asset_authored))
 
-    check(authored > 0,
-          "the level authored no mesh colliders at all, so this guard tested "
-          "nothing -- point it at content with baked collision")
+    # WHICH ROUTE IS UNDER TEST. Both backends now prefer a cooked
+    # `.pxmesh`/`.joltmesh` asset where one exists, and an asset collider has
+    # no bake to lose -- so on a project whose sidecars carry a physics mesh
+    # group this level produces ZERO bakes and the settle assertions below
+    # would pass by testing nothing at all.
+    #
+    # The bake path still exists (Jolt keeps it for meshes with no cooked
+    # product) and its failure is still silent, so it still needs this guard.
+    # Stage with UEO3DE_JOLT_COOK=0 / UEO3DE_PHYSX_COOK=0 to get it back.
+    check(authored > 0 or asset_authored > 0,
+          "the level authored no mesh colliders of either kind, so this guard "
+          "tested nothing -- point it at content with mesh collision")
+    if authored == 0:
+        log("  NOTE: every mesh collider on this level took the COOKED-ASSET "
+            "route, so the settle/bake assertions below are vacuous here. "
+            "Restage with UEO3DE_JOLT_COOK=0 (or UEO3DE_PHYSX_COOK=0) to "
+            "exercise the bake path this guard exists for.")
+        check(report.counters.get("mesh_asset_colliders_verified", -1)
+              == asset_authored,
+              "%d cooked-asset collider(s) were authored but only %r carried a "
+              "reference into the saved prefab"
+              % (asset_authored,
+                 report.counters.get("mesh_asset_colliders_verified")))
+        if report.has_errors():
+            errors = [r["code"] for r in report.records()
+                      if r["severity"] == "error"]
+            check(False, "import reported errors: %s" % ", ".join(sorted(set(errors))))
+        return
 
     unbaked = prefab_build.unbaked_colliders(prefab_path)
     log("  %d authored, %d reached the prefab with baked geometry, %d without"

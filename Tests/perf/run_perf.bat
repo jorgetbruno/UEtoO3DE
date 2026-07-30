@@ -42,6 +42,19 @@ if not exist "%UEO3DE_EXPORT%\manifest.json" (
   echo     python Tests\m2\m2_stage.py --project "%JOLT%" --manifest "%UEO3DE_EXPORT%\manifest.json" --source-assets "%UEO3DE_EXPORT%\Assets" 1>&2
   goto :failed
 )
+rem The BAKE path is what this step guards, and both backends now prefer a
+rem cooked asset wherever the sidecar asked for one -- so the level is staged
+rem with cooking switched off, or the import would take the asset route and
+rem the settle assertions would pass by testing nothing.
+set "UEO3DE_JOLT_COOK=0"
+set "UEO3DE_PHYSX_COOK=0"
+%PY% "%REPO%\Tests\m2\m2_stage.py" --project "%JOLT%" --manifest "%UEO3DE_EXPORT%\manifest.json" --source-assets "%UEO3DE_EXPORT%\Assets" >nul
+if %ERRORLEVEL% NEQ 0 (
+  echo   staging %UEO3DE_EXPORT% into %JOLT% failed 1>&2
+  goto :failed
+)
+"%O3DE_BIN%\AssetProcessorBatch.exe" --project-path="%JOLT%" --platforms=pc >nul 2>&1
+if %ERRORLEVEL% NEQ 0 goto :failed
 call "%REPO%\Tests\o3de\run_o3de_python.bat" "%REPO%\Tests\perf\perf_bakes.py" "%REPO%\Tests\perf\results\perf_bakes_result.txt" "%JOLT%"
 if %ERRORLEVEL% NEQ 0 (
   echo   see Tests\perf\results\perf_bakes_result.txt
