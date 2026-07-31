@@ -198,10 +198,18 @@ Until then no sidecar is written for glTF: the importer is unchanged on this
 branch, because a format branch that silently emits a sidecar the AP rejects
 is worse than none.
 
-## What has not been attempted
+## What is left: the exporter, and only the exporter
 
-**The exporter still writes FBX.** Switching it is not just a file-format
-swap:
+Node addressing, the container, and the basis are all measured and implemented.
+**The one remaining piece is that the exporter still writes FBX** — and it is
+now a bounded job with no unknowns in it, because the two things that used to
+make it risky have both been answered:
+
+* **which container** — `.glb`, settled by measurement above;
+* **what basis correction** — one `Rz180`, settled by measurement above, and
+  `skel_build.compose_rz180` already implements it.
+
+What the exporter change involves:
 
 * UE's per-asset glTF export emits a companion `.bin` and material PNGs, and
   `staging.stage()` copies exactly the one file at `o3de_relative_path`. **That
@@ -214,14 +222,78 @@ swap:
   has the knobs (`bake_material_inputs`, `export_preview_mesh`, …) and they are
   unmeasured. Note the `.glb` above did emit its own `.azmaterial`, so this
   duplication is real and not hypothetical.
+* the manifest must record `.glb` paths, and `manifest_io` pins the Lane B rule
+  (`units.lane_b_rule`) and refuses a mismatch — so a glTF manifest needs its
+  own rule value rather than reusing `negate_y_scene_rz180`, which describes a
+  chain glTF does not go through.
+* **the `Rz180` must be applied for glTF and NOT for FBX.** Both formats in one
+  project is the dangerous case: get this per-format and every static mesh is
+  either right or 180° wrong, with no error anywhere.
 
-**The basis is a fresh measurement, not an adaptation.** glTF is Y-up
-right-handed in **metres**. The FBX path's correctness rests on a measured
-three-step chain (exporter bakes `scale_mesh(-1,-1,1)`, UE's writer negates Y,
-SceneAPI applies a 180° yaw — see [LANE_B.md](LANE_B.md)). **None of it carries
-over.** `SM_LetterF` is in the fixture precisely because its asymmetry makes an
-orientation error visible, and that is how this should be verified — by
-measuring an imported letter F, not by reasoning about handedness.
+## SOLVED: the basis is one 180° yaw
+
+glTF is Y-up right-handed in metres, and the FBX path's correctness rests on a
+measured three-step chain (exporter bakes `scale_mesh(-1,-1,1)`, UE's writer
+negates Y, SceneAPI applies a 180° yaw — [LANE_B.md](LANE_B.md)). None of that
+carries over, so the basis was **measured, not adapted**. `SM_LetterF` is the
+instrument because its asymmetry makes an orientation error visible.
+
+### Step 1 — the cooked physics AABB (`Tests/o3de/probe_gltf_basis.py`)
+
+`BoundsRequestBus.GetEntityLocalBoundsUnion`, which `lane_b_measure.py` used,
+**does not exist in this build**: `probe_bounds_api.py` scanned every `azlmbr`
+module and found only `MeshComponentNotificationBus`, with `BoundsRequestBus`
+bound to `None` in `components`, `entity` and `framework` alike. The physics
+AABB is a working instrument here and measures the geometry the *collider*
+pipeline gets, so that is what was used — box control first, all three bodies
+in one game-mode session:
+
+| | extents (m) | AABB centre, relative to the entity |
+|---|---|---|
+| UE asset space | 1.0, 0.5, 2.0 | 0, **+0.125**, 1.0 |
+| glTF product | 1.0, 0.5, 2.0 | 0, **+0.125**, 1.0 |
+| FBX product | 1.0, 0.5, 2.0 | 0, **−0.125**, 1.0 |
+
+So: **metres, cm→m applied, Z-up, no axis permutation, in both formats.**
+
+### Step 2 — why the AABB could not finish the job
+
+SM_LetterF's bounds are **symmetric in X** (−50…+50 cm), so an X mirror — which
+flips winding and would ship silently as a backwards level — is *invisible* to
+an AABB. The Y asymmetry it sees; the X mirror it cannot.
+
+So `Tests/o3de/probe_gltf_vertices.py` reads the actual vertex positions out of
+the `.azbuffer` products (no editor needed — plain floats on disk, located by
+extent shape rather than a hard-coded header offset). **93 vertices in UE, 93 in
+the glTF file, 93 in every product**, so the comparison is exact and not a
+resample:
+
+| | centroid (m) | vs UE |
+|---|---|---|
+| UE asset space | (−0.2097, +0.0659, +1.4452) | — |
+| FBX product | (−0.2097, **−0.0659**, +1.4452) | `diag(1,−1,1)` |
+| glTF product | (**+0.2097**, +0.0659, +1.4452) | `diag(−1,1,1)` |
+
+And there the X mirror shows up — the AABB had reported the glTF as matching UE
+exactly, and at vertex level it does not.
+
+### The answer
+
+Checked over **all 93 vertices as sets, with zero deviation**, and against seven
+candidate maps of which **exactly one** fits:
+
+```
+glTF product  ==  Rz180 · FBX product        diag(-1,-1,1),  det +1
+```
+
+**A proper rotation.** The two formats differ by a lossless 180° yaw — no
+mirror, no winding flip, so **none of Lane B's `#mx` mirrored-variant machinery
+is needed for glTF**. The compensation is one `Rz180`, and the codebase already
+has that operation as `skel_build.compose_rz180`, proven as a matrix identity in
+`Tests/m8/test_skel_build.py`.
+
+That is the good outcome. Had it come out `det −1`, glTF would have needed the
+whole mirrored-variant path built for `#mx`.
 
 ## Files added on this branch
 
@@ -229,4 +301,8 @@ measuring an imported letter F, not by reasoning about handedness.
 |---|---|
 | `Tests/o3de/probe_gltf_ingest.py` | stages UE's glTF output, processes it, reports products |
 | `Tests/o3de/probe_scene_graph.py` | asks the editor which scene APIs exist; records that no loader is exposed |
-| `Tests/o3de/gltf_manifest_script.py` | the ScriptProcessorRule script — ready to use once the rule can be made to wire up; logs at import so "did it run at all" is answerable |
+| `Tests/o3de/gltf_manifest_script.py` | the ScriptProcessorRule script that dumped the graph and settled node addressing |
+| `Tests/o3de/probe_bounds_api.py` | scans `azlmbr` for a bounds bus; records that this build has none |
+| `Tests/o3de/probe_gltf_basis.py` | cooked-physics AABB per format, box control first (editor) |
+| `Tests/o3de/probe_gltf_vertices.py` | vertex-level basis, the one that catches an X mirror (no editor) |
+| `Tests/ue/data/SM_LetterF.glb` | UE's real `.glb`, **tracked** — `Tests/**/results/` is ignored, and a suite whose only fixture is ignored output fails on a fresh clone |
