@@ -87,19 +87,44 @@ def body_extents(entity_id, min_extent=DEFAULT_MIN_EXTENT,
                  max_extent=DEFAULT_MAX_EXTENT):
     """(size, centre) of a real simulated body, or None when there is none.
 
-    "Real" means the AABB is non-degenerate and finite. An entity with no
-    collision still answers the bus; it answers with a null box.
+    "Real" means the AABB is finite and describes at least a SURFACE. An entity
+    with no collision still answers the bus; it answers with a null box, whose
+    min exceeds its max and so reads as a negative extent.
+
+    A FLAT BODY IS A REAL BODY. This used to require every axis to be
+    non-degenerate, which is wrong: a triangle-mesh collider cooked from a flat
+    render mesh has zero thickness and collides perfectly well -- it is a
+    surface, not an absence. Measured on SiegeOfPonthus, where `SM_Floor` is a
+    genuinely flat 5.0 x 5.0 x 0.0 m plane in BOTH the FBX and glb exports:
+    three floors were reported as "a body with no geometry" when the bodies
+    were there and correct. Requiring two solid axes keeps the guard that
+    matters (a null box, a point, a line) and stops calling a plane an absence.
     """
     minimum, maximum = body_aabb(entity_id)
     if minimum is None:
         return None
     size = [maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z]
-    if min(size) < min_extent or max(size) > max_extent:
+    # A null AABB is min > max, so it shows up here as a NEGATIVE extent --
+    # that, not "small", is what distinguishes no-collision from thin geometry.
+    if min(size) < -min_extent or max(size) > max_extent:
         return None
+    if sum(1 for extent in size if extent >= min_extent) < 2:
+        return None                      # a point or a line is not a surface
     centre = [(maximum.x + minimum.x) * 0.5,
               (maximum.y + minimum.y) * 0.5,
               (maximum.z + minimum.z) * 0.5]
     return size, centre
+
+
+def is_flat(size, min_extent=DEFAULT_MIN_EXTENT):
+    """Does this body's size describe a zero-thickness surface?
+
+    Worth reporting separately: a flat collider is legitimate geometry, but it
+    is also what a solid shape collapses to when the importer had to fall back
+    from a convex to the cooked RENDER mesh -- so it is a fidelity signal even
+    though it is not a failure.
+    """
+    return sum(1 for extent in size if extent < min_extent) == 1
 
 
 def quaternion_matrix(quat):

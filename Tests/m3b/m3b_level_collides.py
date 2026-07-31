@@ -298,6 +298,7 @@ def main():
     log("")
     log("=== collidable entities ===")
     bad = 0
+    flat = []
     for name, problem, position, measured in results:
         if problem:
             bad += 1
@@ -305,10 +306,16 @@ def main():
                  "a body, so the file says it collides and the running world "
                  "does not agree" % (name, problem))
             continue
-        # Degenerate and runaway extents were already rejected by
+        # Null, point and line extents were already rejected by
         # `body_extents`, and arrive above as a named problem. What is left to
         # check is placement.
         size, centre, drift = measured
+        if editor_physics.is_flat(size):
+            # NOT a failure: a zero-thickness triangle mesh is a surface and
+            # collides. It is reported because it is also what a solid shape
+            # collapses to when the importer fell back from a convex to the
+            # cooked RENDER mesh -- fidelity worth seeing, not a defect.
+            flat.append((name, size))
         largest = max(size)
         if drift > max(largest, 1.0):
             bad += 1
@@ -320,6 +327,21 @@ def main():
             continue
     log("  %d of %d checked entities have real collision in the running world"
         % (len(results) - bad, len(results)))
+    if flat:
+        # Reported, never failed. A flat collider is a real surface, but it is
+        # also the shape a solid convex collapses to when the importer had to
+        # fall back to the cooked RENDER mesh (UE's convex vertices are not
+        # reachable from Python -- DIVERGENCES.md). Measured on SiegeOfPonthus:
+        # SM_Floor is a genuinely flat 5.0 x 5.0 x 0.0 m plane in BOTH the FBX
+        # and glb exports, so its floors collide as surfaces and nothing is
+        # wrong with them.
+        log("  %d of them are FLAT (zero thickness on one axis) -- real "
+            "surfaces that collide, but also what a convex collapses to when "
+            "the collider came from the render mesh:" % len(flat))
+        for name, size in flat[:5]:
+            log("      %-42s %r" % (name, [round(v, 3) for v in size]))
+        if len(flat) > 5:
+            log("      ... and %d more" % (len(flat) - 5))
     if bad == 0 and results:
         widest = max(max(m[0]) for _n, p, _pos, m in results if not p)
         log("  (largest collider AABB extent seen: %.2f m)" % widest)
