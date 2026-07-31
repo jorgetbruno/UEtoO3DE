@@ -39,7 +39,53 @@ So `staging.product_path_for`, `physics_product_path_for` and the whole
 staging layer need **no change at all**: they append to whatever relative path
 the manifest gives them. Every `.fbx` in `ueimporter/` is prose, not logic.
 
-## What blocks it
+## SOLVED: how to address a glTF node
+
+**A glTF scene graph has no `RootNode`.** That single fact explains every
+failure below it. Dumped from inside the Scene Builder
+(`Tests/o3de/gltf_manifest_script.py`):
+
+```
+node                                content=False   <- the root, EMPTY path
+node nodes[0]                       content=True    <- the mesh node
+node nodes[0].nodes[0]_2            content=True
+```
+
+An FBX graph is rooted at a node literally called `RootNode`, so
+`RootNode.<node>` is right there — and names nothing here. Selecting a bare
+`RootNode` failed for the same reason: no such node exists.
+
+So the rule is two steps, and with both applied a UE-exported glTF produced
+**`sm_letterf.gltf.azmodel` AND `sm_letterf.gltf.joltmesh`** with zero AP
+errors — render and cooked physics, the whole collider pipeline:
+
+1. **name the mesh node** (UE leaves it unnamed; `gltf_source.name_mesh_nodes`
+   does it on the STAGED copy, so the file the sidecar describes is the file
+   the AP reads);
+2. **drop the `RootNode.` prefix** from the selection, and unselect nothing
+   (`gltf_source.node_path` / `root_path`).
+
+Implemented in `ueimporter/gltf_source.py`, applied by `assetinfo.build` when
+given a `source_path`, and pinned by `Tests/perf/test_gltf.py`. Omitting
+`source_path` still produces the exact FBX document, because every existing
+caller means FBX and `test_pxmesh.py` byte-pins those bytes.
+
+### Three traps found on the way, each worth a cycle to someone else
+
+* **An unrecognised `.assetinfo` entry is silently dropped** — no warning, no
+  failed job. A `ScriptProcessorRule` with a bare `"$type": "ScriptProcessorRule"`
+  reported *zero errors* and simply did nothing. Read silence as "ignored",
+  never "accepted".
+* **`ScriptProcessorRule` needs the UUID `$type` AND a project-relative
+  `scriptFilename`.** A filename beside the source is ignored.
+* **The engine does not call bare module functions.** The script must connect a
+  handler to `azlmbr.scene.ScriptBuildingNotificationBus` and
+  `add_callback("OnUpdateManifest", …)`. And **`scene_api` is not importable
+  inside the builder** (it is in the editor), so the raw
+  `GetRoot`/`GetNodeName`/`GetNodeChild` calls are required — code copied from
+  an O3DE scene-scripting sample will fail here.
+
+## What blocked it, before the graph was read
 
 **Our `.assetinfo` cannot address a glTF node.** The importer writes an
 explicit `NodeSelectionList` so the mesh group's name — and therefore the
@@ -71,20 +117,43 @@ What was learned along the way, all measured:
   `SM_LetterF_mesh0` while the node stayed `SM_LetterF` still produced
   `SM_LetterF_2`.
 
-**The next step is to read the graph, not to guess it again.** Three guesses
-in a row were wrong. `azlmbr.scene` exposes SceneAPI *data types*
-(`MeshData`, `BoneData`, …) but no scene loader
-(`Tests/o3de/probe_scene_graph.py`), so the paths are not reachable from the
-editor's Python. The two routes that remain:
+**The next step is to read the graph, not to guess it again.** Four guesses
+were wrong. `azlmbr.scene` exposes SceneAPI *data types* (`MeshData`,
+`BoneData`, …) but no scene loader (`Tests/o3de/probe_scene_graph.py`), so the
+paths are not reachable from the editor's Python.
 
-1. O3DE's **scene-manifest Python callback** (`scene_api`, run inside the
-   Scene Builder), where the loaded scene and its graph are in hand; or
-2. open the file in **Scene Settings** and save — the tool writes a full
-   `.assetinfo` including the exact `selectedNodes`, which can then be read.
+### The ScriptProcessorRule route was tried and did not wire up
 
-Either yields the rule in one shot. Until then no sidecar is written for glTF:
-the importer is unchanged on this branch, because a format branch that
-silently emits a sidecar the AP rejects is worse than none.
+O3DE has exactly the right mechanism: a `ScriptProcessorRule` names a Python
+script that the **Scene Builder** runs with the loaded scene in hand, and
+`scene_api.scene_data.SceneGraph` walks it (`get_root`, `get_node_child`,
+`get_node_sibling`, `get_node_name`). `Tests/o3de/gltf_manifest_script.py` is
+that script: it logs at import, defines both plausible entry points
+(`OnUpdateManifest`, `OnPrepareForExport`) and dumps every node path.
+
+It never ran. Two sidecar forms were tried:
+
+| `$type` | `scriptFilename` | result |
+|---|---|---|
+| `ScriptProcessorRule` | `gltf_manifest_script.py` | ignored |
+| `{E61EDCBC-…} ScriptProcessorRule` | same, then project-relative | ignored |
+
+**And both runs reported zero errors.** That is the finding worth carrying
+forward: *an `.assetinfo` entry the engine does not recognise is silently
+dropped* — no warning, no failed job, just absent behaviour. The same class of
+trap as the `NodeSelectionList` capital-N quirk, and it is why the first of
+these runs looked like a success. Anything hand-authoring sidecars should
+assume silence means "ignored", never "accepted".
+
+What is left untried: the entry-point name is not knowable from the installed
+engine (headers only, no `.cpp`, no samples), and the rule may need registering
+some other way. The remaining route with no unknowns is to open the file in
+**Scene Settings** and save — the tool writes a full `.assetinfo` including the
+exact `selectedNodes`, which can then simply be read.
+
+Until then no sidecar is written for glTF: the importer is unchanged on this
+branch, because a format branch that silently emits a sidecar the AP rejects
+is worse than none.
 
 ## What has not been attempted
 
@@ -115,3 +184,4 @@ measuring an imported letter F, not by reasoning about handedness.
 |---|---|
 | `Tests/o3de/probe_gltf_ingest.py` | stages UE's glTF output, processes it, reports products |
 | `Tests/o3de/probe_scene_graph.py` | asks the editor which scene APIs exist; records that no loader is exposed |
+| `Tests/o3de/gltf_manifest_script.py` | the ScriptProcessorRule script — ready to use once the rule can be made to wire up; logs at import so "did it run at all" is answerable |

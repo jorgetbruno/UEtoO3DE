@@ -20,6 +20,7 @@ import os
 import shutil
 
 from . import assetinfo
+from . import gltf_source
 
 
 class StagingError(Exception):
@@ -235,6 +236,22 @@ def stage(document, source_root, project_assets_root, log=None):
         staged_fbx = os.path.join(project_assets_root, relative_path).replace("\\", "/")
         os.makedirs(os.path.dirname(staged_fbx), exist_ok=True)
         shutil.copyfile(source_fbx, staged_fbx)
+
+        # A glTF's mesh node arrives UNNAMED from UE, and SceneAPI selects by
+        # node -- so the sidecar written below would address nothing and the
+        # AP job would fail with "wasn't found in the list of selected nodes".
+        # Name it on the STAGED copy (never the export), so the file the sidecar
+        # describes is the file the Asset Processor reads.
+        if gltf_source.is_gltf(staged_fbx):
+            meshes = gltf_source.mesh_node_count(staged_fbx)
+            if meshes > 1:
+                raise StagingError(
+                    "%s has %d mesh nodes; this staging path names them all "
+                    "%r, which would make the sidecar's selection ambiguous. "
+                    "One mesh per file is the exporter's contract."
+                    % (relative_path, meshes, node_name))
+            gltf_source.name_mesh_nodes(staged_fbx, node_name)
+
         sidecar = assetinfo.write(staged_fbx, node_name, physics=physics,
                                   backends=cook_backends)
 

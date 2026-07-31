@@ -30,6 +30,8 @@ import json
 import os
 import uuid
 
+from . import gltf_source
+
 MESH_GROUP_TYPE = "{07B356B7-3635-40B5-878A-FAC4EFD5AD86} MeshGroup"
 LOD_RULE_TYPE = "{6E796AC8-1484-4909-860A-6D3F22A7346F} LodRule"
 
@@ -201,7 +203,8 @@ def physics_for_asset(asset, decompose=None):
     return None
 
 
-def _physics_group(group_name, fbx_node_name, physics, backend):
+def _physics_group(group_name, fbx_node_name, physics, backend,
+                   source_path=None):
     """One backend's physics mesh group for `build`.
 
     The two gems' groups are the same shape -- node list, numeric
@@ -221,9 +224,13 @@ def _physics_group(group_name, fbx_node_name, physics, backend):
         "$type": PHYSX_MESH_GROUP_TYPE if backend == "physx" else JOLT_MESH_GROUP_TYPE,
         "id": group_id(group_name, backend),
         "name": group_name,
+        # Capital N here, lowercase in the render group -- both gems spell it
+        # this way and the other spelling is silently ignored. The PATH shape
+        # is source-format dependent: an FBX graph is rooted at `RootNode`, a
+        # glTF graph's root is unnamed (measured, see gltf_source).
         "NodeSelectionList": {
-            "selectedNodes": ["RootNode." + fbx_node_name],
-            "unselectedNodes": ["RootNode"],
+            "selectedNodes": [gltf_source.node_path(fbx_node_name, source_path)],
+            "unselectedNodes": gltf_source.root_path(source_path),
         },
         # Always explicit: omitting it would mean triangle mesh on PhysX and
         # convex on Jolt.
@@ -249,7 +256,8 @@ def _physics_group(group_name, fbx_node_name, physics, backend):
     return group
 
 
-def build(group_name, fbx_node_name, physics=None, backends=("physx",)):
+def build(group_name, fbx_node_name, physics=None, backends=("physx",),
+          source_path=None):
     """The `.assetinfo` document for a single-mesh FBX.
 
     `physics` is None or a `physics_for_asset` plan; when present, one physics
@@ -272,7 +280,7 @@ def build(group_name, fbx_node_name, physics=None, backends=("physx",)):
         "$type": MESH_GROUP_TYPE,
         "name": group_name,
         "nodeSelectionList": {
-            "selectedNodes": ["RootNode." + fbx_node_name],
+            "selectedNodes": [gltf_source.node_path(fbx_node_name, source_path)],
             "unselectedNodes": [],
         },
         "rules": {
@@ -287,7 +295,7 @@ def build(group_name, fbx_node_name, physics=None, backends=("physx",)):
             if backend not in BACKENDS:
                 raise ValueError("unknown physics backend %r" % (backend,))
             values.append(_physics_group(group_name, fbx_node_name, physics,
-                                         backend))
+                                         backend, source_path=source_path))
     return {"values": values}
 
 
@@ -341,7 +349,7 @@ def physics_in_sidecar(sidecar_path, backend="physx"):
 def write(fbx_path, fbx_node_name, physics=None, backends=("physx",)):
     """Write `<fbx_path>.assetinfo` next to the FBX. Returns the sidecar path."""
     document = build(group_name_for(fbx_path), fbx_node_name, physics=physics,
-                     backends=backends)
+                     backends=backends, source_path=fbx_path)
     sidecar_path = fbx_path + ".assetinfo"
     directory = os.path.dirname(sidecar_path)
     if directory:
