@@ -70,6 +70,49 @@ given a `source_path`, and pinned by `Tests/perf/test_gltf.py`. Omitting
 `source_path` still produces the exact FBX document, because every existing
 caller means FBX and `test_pxmesh.py` byte-pins those bytes.
 
+### SOLVED: `.glb` too — the single-file container works
+
+`.glb` is the same scene graph with the JSON as chunk 0 of a binary container,
+so naming its node means rewriting that chunk. `gltf_source` now does it, and
+**UE's own `SM_LetterF.glb` staged with our sidecar produced the identical
+product set with zero AP errors**:
+
+| product | `.gltf` | `.glb` |
+|---|---|---|
+| `sm_letterf.<ext>.azmodel` | 552 B | **552 B** |
+| `sm_letterf.<ext>.joltmesh` | 2369 B | **2369 B** |
+
+Same bytes, same count, plus the `.azlod`, six `.azbuffer`s and the
+`.azmaterial`. **This is the container the exporter should target**: one file,
+so `staging.stage()`'s copy-exactly-one-file behaviour needs no change at all.
+
+The container layout is measured, not transcribed from the spec — it is what UE
+5.8 actually wrote:
+
+```
+header  b'glTF' | version 2 | totalLength 143188
+chunk 0 b'JSON' | len 1804    padded with SPACES  -> {"nodes":[{"mesh":0}]}
+chunk 1 b'BIN\0' | len 141356  padded with a NUL   buffers[0] byteLength 141355
+```
+
+Three details there are load-bearing, and each is a silent corruption if
+missed:
+
+* a chunk's declared length **includes its padding** (12 + 8+1804 + 8+141356 =
+  143188, the declared total);
+* the BIN chunk's padding is **not** counted in `buffers[0].byteLength`;
+* the two chunks **pad with different bytes**. Padding chunk 0 with NULs was
+  tried, and `json.loads` threw `Extra data: line 1 column 1822` on the next
+  read. Space is JSON whitespace; NUL is not.
+
+So the rewrite touches chunk 0 and copies every other chunk through verbatim,
+padding and all, rather than re-deriving a 141 KB buffer it was not asked to
+change. `test_gltf.py` runs against the **real UE `.glb`**, not a synthetic
+one, and asserts the BIN chunk comes back byte-identical — a hand-built
+container would only prove the code agrees with itself. Four mutants were run
+against it: dropped padding, a truncated BIN payload, a stale total-length
+header and NUL-padded JSON are each caught.
+
 ### Three traps found on the way, each worth a cycle to someone else
 
 * **An unrecognised `.assetinfo` entry is silently dropped** — no warning, no
@@ -161,14 +204,16 @@ is worse than none.
 swap:
 
 * UE's per-asset glTF export emits a companion `.bin` and material PNGs, and
-  `staging.stage()` copies exactly the one file at `o3de_relative_path`. That
-  argues for `.glb` (single file, staging unchanged) — which in turn means any
-  node-naming fix must rewrite the JSON chunk inside a binary container
-  (chunk lengths, 4-byte padding), not a plain JSON file.
+  `staging.stage()` copies exactly the one file at `o3de_relative_path`. **That
+  is settled: export `.glb`.** It is a single file, so staging is unchanged,
+  and the node-naming it needs is now implemented and measured against UE's own
+  output (above). Choosing `.gltf` instead would mean teaching staging to carry
+  companion files, for no gain.
 * Our pipeline already exports textures and materials through the manifest, so
   a glTF carrying its own baked materials would duplicate them. `GLTFExportOptions`
   has the knobs (`bake_material_inputs`, `export_preview_mesh`, …) and they are
-  unmeasured.
+  unmeasured. Note the `.glb` above did emit its own `.azmaterial`, so this
+  duplication is real and not hypothetical.
 
 **The basis is a fresh measurement, not an adaptation.** glTF is Y-up
 right-handed in **metres**. The FBX path's correctness rests on a measured

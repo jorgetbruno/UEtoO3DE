@@ -242,7 +242,7 @@ def stage(document, source_root, project_assets_root, log=None):
         # AP job would fail with "wasn't found in the list of selected nodes".
         # Name it on the STAGED copy (never the export), so the file the sidecar
         # describes is the file the Asset Processor reads.
-        if gltf_source.is_gltf(staged_fbx):
+        if gltf_source.is_gltf_source(staged_fbx):
             meshes = gltf_source.mesh_node_count(staged_fbx)
             if meshes > 1:
                 raise StagingError(

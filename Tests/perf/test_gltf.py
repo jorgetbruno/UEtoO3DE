@@ -26,6 +26,8 @@ leaks into it.
 
 import json
 import os
+import shutil
+import struct
 import sys
 import tempfile
 
@@ -50,9 +52,18 @@ def check(condition, message):
 for path in ("a/b.gltf", "A/B.GLTF", "x.gltf"):
     check(gltf_source.is_gltf(path), "%r should be recognised as glTF" % path)
 for path in ("a/b.fbx", "a/b.glb", "a/b.gltf.assetinfo", "a/bgltf"):
-    check(not gltf_source.is_gltf(path), "%r must NOT be treated as glTF" % path)
+    check(not gltf_source.is_gltf(path),
+          "%r must NOT be the JSON container -- is_gltf names the CONTAINER, "
+          "and reading a .glb as text would fail" % path)
 check(gltf_source.is_glb("a/b.glb") and gltf_source.is_glb("A/B.GLB"),
-      ".glb must be recognised -- it needs different handling, not none")
+      ".glb must be recognised as the binary container")
+for path in ("a/b.gltf", "a/b.glb", "A/B.GLTF", "A/B.GLB"):
+    check(gltf_source.is_gltf_source(path),
+          "%r is glTF whatever the container: the SCENE GRAPH is the same, "
+          "and that is what the selection path depends on" % path)
+for path in ("a/b.fbx", "a/b.png", None):
+    check(not gltf_source.is_gltf_source(path),
+          "%r is not a glTF source" % (path,))
 
 # --- 2. the path shape, per format -------------------------------------------
 check(gltf_source.node_path("Mesh", "a/b.fbx") == "RootNode.Mesh",
@@ -115,15 +126,98 @@ check(gltf_source.mesh_node_count(path) == 2,
       "both mesh nodes must be counted -- staging refuses this case rather "
       "than picking one silently")
 
-# .glb must refuse loudly rather than pretend.
-glb = os.path.join(work, "thing.glb")
-with open(glb, "wb") as handle:
-    handle.write(b"glTF\x02\x00\x00\x00")
+# --- 3b. the SAME rule inside the binary container ----------------------------
+#
+# Run against UE 5.8's OWN .glb, not a synthetic one. A hand-built container
+# would only prove this code agrees with itself; the whole point of the GLB
+# path is that it survives the bytes UE actually writes -- space-padded JSON
+# chunk, NUL-padded BIN chunk, and a buffer whose byteLength EXCLUDES that pad.
+#
+# It lives in Tests/ue/data (TRACKED) and not in the probe's results directory,
+# which `Tests/**/results/` ignores: a suite whose only fixture is ignored
+# output passes here and fails on a fresh clone.
+FIXTURE = os.path.join(REPO_ROOT, "Tests", "ue", "data", "SM_LetterF.glb")
+
+if not os.path.exists(FIXTURE):
+    check(False, "missing %s -- it is committed, so this means the working "
+                 "tree is incomplete, not that a probe needs re-running"
+                 % FIXTURE)
+else:
+    glb = os.path.join(work, "SM_LetterF.glb")
+    shutil.copyfile(FIXTURE, glb)          # never mutate the fixture
+    original = open(FIXTURE, "rb").read()
+
+    before = gltf_source.read_glb_chunks(glb)
+    check([kind for kind, _ in before] == [0x4E4F534A, 0x004E4942],
+          "UE's .glb should be a JSON chunk then a BIN chunk; got %r"
+          % ([hex(k) for k, _ in before],))
+    bin_before = [data for kind, data in before if kind == 0x004E4942][0]
+
+    check(gltf_source.mesh_node_count(glb) == 1,
+          "the fixture has one mesh node, read through the container")
+    check(gltf_source.load_document(glb)["nodes"][0].get("name") is None,
+          "UE leaves the node UNNAMED in .glb exactly as in .gltf -- if this "
+          "ever fails, the naming step is no longer the fix and the sidecar "
+          "should use UE's own name")
+
+    check(gltf_source.name_mesh_nodes(glb, "SM_LetterF") == 1,
+          "the unnamed mesh node in the .glb should have been renamed")
+    check(gltf_source.load_document(glb)["nodes"][0]["name"] == "SM_LetterF",
+          "the name must survive the rewrite and be readable back")
+    check(gltf_source.name_mesh_nodes(glb, "SM_LetterF") == 0,
+          "a second naming pass must be a no-op for .glb too, or every "
+          "restage rewrites 143 KB and re-fingerprints it in the AP")
+
+    # The container must still be a valid container, and the payload must be
+    # untouched. A wrong chunk length or a dropped pad byte produces a file
+    # that still LOOKS like a .glb and fails deep inside an importer.
+    after = gltf_source.read_glb_chunks(glb)      # re-parses, so it validates
+    check([kind for kind, _ in after] == [0x4E4F534A, 0x004E4942],
+          "the rewritten .glb must keep both chunks, in order")
+    bin_after = [data for kind, data in after if kind == 0x004E4942][0]
+    check(bin_after == bin_before,
+          "the BIN chunk must come through BYTE-IDENTICAL, padding included: "
+          "this module changes one node name and has no business re-deriving "
+          "a %d-byte buffer" % len(bin_before))
+
+    blob = open(glb, "rb").read()
+    magic, version, declared = struct.unpack_from("<4sII", blob, 0)
+    check(magic == b"glTF" and version == 2, "header must survive the rewrite")
+    check(declared == len(blob),
+          "the header's total length must match the file on disk: %d declared, "
+          "%d written" % (declared, len(blob)))
+    json_len = struct.unpack_from("<I", blob, 12)[0]
+    check(json_len % 4 == 0,
+          "the JSON chunk must stay 4-byte aligned; got %d" % json_len)
+    check(blob[20:20 + json_len].endswith(b"}") or
+          blob[20:20 + json_len].rstrip(b"\x20").endswith(b"}"),
+          "the JSON chunk must be padded with SPACES -- a NUL-padded JSON "
+          "chunk parses here but is invalid to a strict reader")
+    check(len(blob) != len(original),
+          "sanity: naming a node changes the file, so this test is not "
+          "silently comparing a file to itself")
+
+# A truncated or mislabelled container must fail while the bytes are in hand,
+# not as an unexplained AP error two steps later.
+for name, payload in (
+        ("short.glb", b"glTF\x02\x00"),
+        ("badmagic.glb", b"GLTF" + struct.pack("<II", 2, 12)),
+        ("badlen.glb", b"glTF" + struct.pack("<II", 2, 999)),
+        ("runaway.glb", b"glTF" + struct.pack("<II", 2, 24)
+                        + struct.pack("<II", 900, 0x4E4F534A) + b"{}  ")):
+    bad = os.path.join(work, name)
+    with open(bad, "wb") as handle:
+        handle.write(payload)
+    try:
+        gltf_source.read_glb_chunks(bad)
+        check(False, "%s is not a valid container and must raise" % name)
+    except ValueError:
+        pass
+
+# A .fbx is not a glTF source in either container.
 try:
-    gltf_source.name_mesh_nodes(glb, "SM_Thing")
-    check(False, "naming nodes in a .glb must raise: its JSON is in a binary "
-                 "chunk, and returning 0 would leave an unaddressable file "
-                 "that fails later in an AP job")
+    gltf_source.load_document(os.path.join(work, "nope.fbx"))
+    check(False, "loading a .fbx as a glTF document must raise")
 except ValueError:
     pass
 
