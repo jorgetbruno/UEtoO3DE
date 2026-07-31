@@ -62,7 +62,9 @@ is. Per-triangle material IDs survive copy -> scale_mesh -> bake unchanged
 (same probe).
 """
 
+import json
 import os
+import struct
 
 import unreal
 
@@ -270,27 +272,47 @@ def _make_gltf_export_options():
     has to change per format is this options object and the path -- the
     AssetExportTask call below is shared.
 
-    `export_preview_mesh` is forced off for the same reason FbxExportOption
-    turns off collision and LODs: it would put an extra mesh in the scene that
-    the `.assetinfo` does not name, and staging REFUSES a multi-mesh glTF
-    rather than naming both nodes alike (`gltf_source.mesh_node_count`). A
-    knob that cannot be set is reported, not ignored -- an unset option here
-    surfaces as a staging failure much later, where its cause is invisible.
+    EVERY DEFAULT HERE IS WRONG FOR THIS PIPELINE, and two of them are wrong by
+    three orders of magnitude. Measured on SiegeOfPonthus before these were
+    set: `sm_armour_a_kneeguards.glb` came out **164.2 MB, of which 164.1 MB
+    was embedded PNG and 0.1 MB was the mesh**. The whole export was 11.9 GB
+    against the FBX path's 3.4 GB. UE's glTF exporter BAKES MATERIAL INPUTS TO
+    TEXTURES AND EMBEDS THEM, and this pipeline already exports textures and
+    materials through the manifest -- so every byte of that is a duplicate the
+    Asset Processor would then have to chew through.
+
+      texture_image_format = NONE     no image data in the container at all
+      bake_material_inputs = DISABLED do not render material graphs to textures
+      export_preview_mesh  = False    an extra mesh node the .assetinfo does
+                                      not name; staging REFUSES a multi-mesh
+                                      glTF rather than picking one silently
+
+    A knob that cannot be set RAISES rather than being skipped. Silently
+    falling back to the defaults is exactly how the 164 MB armour happened, and
+    it looked like a successful export in every log.
     """
     if not hasattr(unreal, "GLTFExportOptions"):
         raise MeshExportError(
             "this UE build has no unreal.GLTFExportOptions, so it cannot "
             "export .glb; use UEO3DE_MESH_FORMAT=fbx")
     options = unreal.GLTFExportOptions()
-    for name, value in (("export_preview_mesh", False),):
-        if not hasattr(options, name):
-            continue
+
+    required = [("export_preview_mesh", False)]
+    if hasattr(unreal, "GLTFTextureImageFormat"):
+        required.append(("texture_image_format", unreal.GLTFTextureImageFormat.NONE))
+    if hasattr(unreal, "GLTFMaterialBakeMode"):
+        required.append(("bake_material_inputs", unreal.GLTFMaterialBakeMode.DISABLED))
+
+    for name, value in required:
         try:
             options.set_editor_property(name, value)
         except Exception as exc:
             raise MeshExportError(
-                "GLTFExportOptions.%s could not be set (%s); the exported glTF "
-                "would carry nodes the importer does not expect" % (name, exc))
+                "GLTFExportOptions.%s could not be set to %r (%s). Refusing to "
+                "export: the defaults embed baked textures in every mesh (164 MB "
+                "for one measured armour piece, against 0.1 MB of geometry), "
+                "which this pipeline already exports through the manifest."
+                % (name, value, exc))
     return options
 
 
@@ -336,6 +358,39 @@ def _export_mesh(asset, output_path, options):
                 "%s was written with a companion %s: that is the .gltf layout "
                 "under a .glb name, and staging copies only the one file"
                 % (output_path, os.path.basename(companion)))
+        _refuse_embedded_images(output_path)
+
+
+def _refuse_embedded_images(path):
+    """A written `.glb` must carry NO image data.
+
+    The options in `_make_gltf_export_options` turn texture baking and image
+    embedding off; this checks the RESULT, because that is what actually
+    shipped. Measured before it existed: 164.1 MB of embedded PNG around 0.1 MB
+    of geometry, and every log line said the export succeeded. An options knob
+    that stops working in a future UE version fails silently in exactly the
+    same way, so the file is inspected rather than the settings trusted.
+
+    The header walk is a deliberate 12 lines rather than a call into
+    `ueimporter.gltf_source`: this plugin runs inside UE and must not depend on
+    the O3DE gem's import path. It only READS a length here; the container
+    rewriting all lives in that one module.
+    """
+    with open(path, "rb") as handle:
+        header = handle.read(20)
+        if len(header) < 20 or header[:4] != b"glTF":
+            raise MeshExportError("%s is not a .glb container" % path)
+        json_length = struct.unpack_from("<I", header, 12)[0]
+        document = json.loads(handle.read(json_length).decode("utf-8"))
+
+    images = document.get("images") or []
+    if images:
+        raise MeshExportError(
+            "%s embeds %d image(s): UE's glTF exporter baked material inputs to "
+            "textures despite the options. This pipeline exports textures "
+            "through the manifest, so those are duplicates -- one measured "
+            "armour mesh came to 164.2 MB of which 164.1 MB was embedded PNG."
+            % (os.path.basename(path), len(images)))
 
 
 # Kept as the old name so nothing outside this module has to change; every
