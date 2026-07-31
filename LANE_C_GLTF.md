@@ -274,14 +274,44 @@ baked one. The lesson is the same one the four node-path guesses taught: a
 prediction that costs one measurement to check is not worth writing down as a
 finding.
 
-### Genuinely still open
+### The embedded-texture trap — 164 MB of PNG per mesh
 
-* Our pipeline already exports textures and materials through the manifest, so
-  a glTF carrying its own baked materials **duplicates** them — the fixture's
-  `.glb` did emit its own `.azmaterial`, so this is real, not hypothetical. It
-  is wasted cache, not a correctness bug: the importer assigns materials from
-  the manifest and never looks at the glTF's own. `GLTFExportOptions` has the
-  knobs (`bake_material_inputs`, …) and they are unmeasured.
+I had this filed above as "wasted cache, not a correctness bug." **It was far
+worse than that,** and it only showed up on a real level:
+
+| `sm_armour_a_kneeguards.glb` | |
+|---|---|
+| embedded PNG | **164.1 MB** (`images=10`, `image/png`) |
+| geometry | 0.1 MB |
+
+The whole Siege export was **11.9 GB** against the FBX path's 3.4 GB. What gave
+it away was several completely *different* meshes coming out byte-for-byte the
+same 164.2 MB — geometry does not do that. Every log line said the export
+succeeded.
+
+UE renders material graphs to textures and embeds them in the container. Three
+`GLTFExportOptions` defaults are wrong for this pipeline:
+
+```
+texture_image_format = PNG            -> GLTFTextureImageFormat.NONE
+bake_material_inputs = USE_MESH_DATA  -> GLTFMaterialBakeMode.DISABLED
+export_preview_mesh  = True           -> False
+```
+
+Since the pipeline already exports textures and materials through the manifest
+and the importer assigns from there, every one of those bytes was a duplicate.
+After the fix: **158 meshes total 82.7 MB, down from 8,636 MB** — and
+`sm_letterf.glb` is 5,684 bytes against the FBX's 19,584, *smaller* than what
+it replaces. Product geometry is unchanged (still identity vs FBX, `#mx`
+included).
+
+**Two guards, because the failure mode is silence.** The options `raise` if any
+cannot be set, and `_refuse_embedded_images` inspects the **written file** and
+fails if it carries any images. Checking the result rather than the settings is
+the point: a knob that stops working in a future UE version fails in precisely
+the same silent way.
+
+### Genuinely still open
 * Skeletal meshes and animations still export FBX. glTF ingests skeletal fine
   (`.actor` + `.skinmeta`, measured), but the skeletal Lane B rule is a
   separate chain with its own `compose_rz180`, and switching it needs its own
