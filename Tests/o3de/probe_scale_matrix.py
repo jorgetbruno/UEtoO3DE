@@ -28,7 +28,8 @@ CONTROL: the unscaled plain box has an analytic AABB — exactly its authored
 half extents, centred on its entity. If that reading is wrong the query is not
 measuring what it claims and the whole run is refused before any verdict.
 
-Env: UEO3DE_COOKED_MESH  product path to use (default: per-backend barrel)
+Env: UEO3DE_COOKED_MESH  product path to use (default: the fixture's own
+                         cooked product, so this runs without licensed content)
 Run: Tests/o3de/run_o3de_python.bat Tests/o3de/probe_scale_matrix.py \
          <result> <project>
 """
@@ -133,7 +134,10 @@ def main():
     log("backend: %s" % backend)
 
     cooked_capable = base.CAP_SHAPE_MESH_COOKED in adapter.capabilities()
-    default_product = ("assets/uetoo3de/game/siegeofponthus/meshes/sm_barrel.fbx."
+    # Fixture_01's own cooked product, so this probe runs on any machine that
+    # has staged the fixture -- the previous default named a licensed content
+    # pack and only worked here. UEO3DE_COOKED_MESH overrides it.
+    default_product = ("assets/uetoo3de/game/meshes/sm_letterf.fbx."
                        + ("pxmesh" if backend == "physx" else "joltmesh"))
     product = os.environ.get("UEO3DE_COOKED_MESH", "").strip() or default_product
     asset_id = asset_wait.resolve(product) if cooked_capable else None

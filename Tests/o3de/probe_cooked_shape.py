@@ -29,7 +29,8 @@ The AABB bus name differs across O3DE versions, so every candidate is tried and
 the one that answered is logged; if none answer, that is reported as a probe
 limitation rather than a finding about the collider.
 
-Env: UEO3DE_COOKED_MESH  product path to test (default: per-backend barrel)
+Env: UEO3DE_COOKED_MESH  product path to test (default: the fixture's own
+                         cooked product, so this runs without licensed content)
 Run: Tests/o3de/run_o3de_python.bat Tests/o3de/probe_cooked_shape.py \
          <result> <project>
 """
@@ -103,7 +104,10 @@ def main():
         fail("%s does not advertise cooked mesh colliders; nothing to probe" % backend)
         return
 
-    default_product = ("assets/uetoo3de/game/siegeofponthus/meshes/sm_barrel.fbx."
+    # Fixture_01's own cooked product, so this probe runs anywhere the fixture
+    # is staged; UEO3DE_COOKED_MESH points it at real content when that is
+    # what is in question.
+    default_product = ("assets/uetoo3de/game/meshes/sm_letterf.fbx."
                        + ("pxmesh" if backend == "physx" else "joltmesh"))
     product = os.environ.get("UEO3DE_COOKED_MESH", "").strip() or default_product
     asset_id = asset_wait.resolve(product)

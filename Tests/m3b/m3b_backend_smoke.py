@@ -29,6 +29,12 @@ Assertions, in the order a failure is most diagnostic:
      (r=0.30), a box (half 0.50) and a capsule (r=0.20, h=1.20) are dropped
      onto a floor: each must rest at ITS OWN analytic height. A wrong enum
      lands the body at a different, and detectably wrong, height;
+  4b. SHAPE DIMENSIONS, all three axes. A resting height reads ONE axis, so
+     the box's deliberately unequal half extents did not actually constrain
+     the dimension ORDER: swap X and Y and every assertion above still
+     passes. Three STATIC subjects (no falling, so no settling rotation to
+     skew the reading) have their world AABB measured against the authored
+     size, which is what makes the ordering claim true rather than intended;
   5. dynamic bodies fall and rest; static bodies never move;
   6. kinematic bodies ignore gravity;
   7. a trigger does not physically block a falling body.
@@ -43,8 +49,11 @@ import traceback
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 GEM_SCRIPTS = os.path.join(REPO_ROOT, "O3DE", "Gems", "UEImporter", "Editor", "Scripts")
-if GEM_SCRIPTS not in sys.path:
-    sys.path.insert(0, GEM_SCRIPTS)
+for _path in (os.path.join(REPO_ROOT, "Tests", "lib"), GEM_SCRIPTS):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+import editor_physics  # noqa: E402
 
 if len(sys.argv) > 1 and sys.argv[1].strip() and not sys.argv[1].startswith('-'):
     RESULT_PATH = sys.argv[1]
@@ -261,6 +270,27 @@ def main():
     adapter.add_dynamic_body(faller)
     adapter.add_sphere_collider(faller, 0.2)
 
+    # Static twins of the three shapes, for the DIMENSION reading. Static
+    # because a dropped body can settle a degree off level, and an AABB is
+    # axis-aligned in WORLD space -- a tilted box reports a bigger box, which
+    # would turn an exact assertion into a fuzzy one for no reason. Parked far
+    # from the drop subjects so nothing can rest on them.
+    sizes = [('M3B_SizeSphere', 'sphere',
+              lambda e: adapter.add_sphere_collider(e, SPHERE_RADIUS),
+              [2.0 * SPHERE_RADIUS] * 3),
+             ('M3B_SizeBox', 'box',
+              lambda e: adapter.add_box_collider(
+                  e, [BOX_HALF_X, BOX_HALF_Y, BOX_HALF_Z]),
+              [2.0 * BOX_HALF_X, 2.0 * BOX_HALF_Y, 2.0 * BOX_HALF_Z]),
+             ('M3B_SizeCapsule', 'capsule',
+              lambda e: adapter.add_capsule_collider(
+                  e, CAPSULE_RADIUS, CAPSULE_HEIGHT),
+              [2.0 * CAPSULE_RADIUS, 2.0 * CAPSULE_RADIUS, CAPSULE_HEIGHT])]
+    for index, (name, _label, author, _expected) in enumerate(sizes):
+        entity_id = spawn(name, (0.0, 20.0 + 5.0 * index, 5.0))
+        adapter.add_static_body(entity_id)
+        author(entity_id)
+
     general.idle_wait_frames(60)
     general.enter_game_mode()
     general.idle_wait_frames(30)
@@ -286,6 +316,29 @@ def main():
               "%s rested at %.4f, not its analytic %.4f (tolerance %.4f). On "
               "PhysX this is also the SHAPE ENUM assertion: the collider is "
               "not the %s it was asked for" % (name, z, expected, tolerance, label))
+
+    log("")
+    log("  shape dimensions, all three axes (a rest height reads only one):")
+    for name, label, _author, expected in sizes:
+        game_id = general.find_game_entity(name)
+        if not check(game_id is not None and game_id.IsValid(),
+                     "%s missing in game mode" % name):
+            continue
+        measured = editor_physics.body_extents(game_id)
+        if not check(measured is not None,
+                     "%s has no simulated body, so its %s collider carries no "
+                     "geometry" % (name, label)):
+            continue
+        size = measured[0]
+        log("    %-16s %-8s AABB (%.3f, %.3f, %.3f) expected (%.3f, %.3f, %.3f)"
+            % (name, label, size[0], size[1], size[2],
+               expected[0], expected[1], expected[2]))
+        check(max(abs(size[i] - expected[i]) for i in range(3)) <= 0.02,
+              "%s: the %s collider measures %r, not the authored %r. Every "
+              "axis is constrained here, so this also catches a dimension "
+              "ORDER swap that a resting height cannot see"
+              % (name, label, [round(v, 3) for v in size],
+                 [round(v, 3) for v in expected]))
 
     floor_z = world_z('M3B_Floor')
     check(floor_z is not None and abs(floor_z - (FLOOR_TOP_Z - FLOOR_HALF)) < 1e-3,
