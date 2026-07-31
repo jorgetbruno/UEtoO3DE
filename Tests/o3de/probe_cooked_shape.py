@@ -41,8 +41,11 @@ import traceback
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 GEM_SCRIPTS = os.path.join(REPO_ROOT, "O3DE", "Gems", "UEImporter", "Editor", "Scripts")
-if GEM_SCRIPTS not in sys.path:
-    sys.path.insert(0, GEM_SCRIPTS)
+for _path in (os.path.join(REPO_ROOT, "Tests", "lib"), GEM_SCRIPTS):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+import editor_physics  # noqa: E402
 
 RESULT_PATH = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].strip()
                and not sys.argv[1].startswith('-')
@@ -66,52 +69,13 @@ def fail(message):
 
 
 def aabb_of(entity_id):
-    """(min, max, bus_name) for a game entity's simulated body, or (None, None, tried)."""
-    import azlmbr.bus as bus
+    """(min, max, bus name) for a game entity's simulated body.
 
-    tried = []
-    try:
-        import azlmbr.physics as physics
-    except ImportError:
-        return None, None, 'azlmbr.physics not importable'
-
-    for name in ('SimulatedBodyComponentRequestBus',
-                 'SimulatedBodyComponentRequestsBus',
-                 'RigidBodyRequestBus',
-                 'StaticRigidBodyRequestBus'):
-        handler = getattr(physics, name, None)
-        if handler is None:
-            continue
-        tried.append(name)
-        try:
-            aabb = handler(bus.Event, 'GetAabb', entity_id)
-        except Exception as error:  # noqa: BLE001 - any bus failure means "try the next"
-            tried[-1] += '(raised %s)' % type(error).__name__
-            continue
-        if aabb is None:
-            tried[-1] += '(None)'
-            continue
-        minimum, maximum = _corners(aabb)
-        if minimum is None:
-            # A bus that answers with something this probe cannot read is a probe
-            # limitation, and the only way to fix it is to see what came back.
-            tried[-1] += '(unreadable %s: %s)' % (
-                type(aabb).__name__,
-                ','.join(sorted(a for a in dir(aabb) if not a.startswith('_')))[:200])
-            continue
-        return minimum, maximum, name
-    return None, None, ', '.join(tried) or 'no candidate bus exists'
-
-
-def _corners(aabb):
-    """(min, max) out of whatever shape the Aabb binding takes, else (None, None)."""
-    if all(callable(getattr(aabb, getter, None)) for getter in ('GetMin', 'GetMax')):
-        return aabb.GetMin(), aabb.GetMax()
-    minimum = getattr(aabb, 'min', None)
-    maximum = getattr(aabb, 'max', None)
-    if minimum is not None and maximum is not None and hasattr(minimum, 'x'):
-        return minimum, maximum
-    return None, None
+    Shared with the acceptance tests via Tests/lib/editor_physics.py: a probe
+    that reads an AABB differently from the test it justifies is worse than no
+    probe, and four hand-copied versions of this had already diverged.
+    """
+    return editor_physics.body_aabb_with_source(entity_id)
 
 
 def main():

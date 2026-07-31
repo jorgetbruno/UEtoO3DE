@@ -40,8 +40,11 @@ import traceback
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 GEM_SCRIPTS = os.path.join(REPO_ROOT, "O3DE", "Gems", "UEImporter", "Editor", "Scripts")
-if GEM_SCRIPTS not in sys.path:
-    sys.path.insert(0, GEM_SCRIPTS)
+for _path in (os.path.join(REPO_ROOT, "Tests", "lib"), GEM_SCRIPTS):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+import editor_physics  # noqa: E402
 
 RESULT_PATH = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].strip()
                and not sys.argv[1].startswith('-')
@@ -80,68 +83,17 @@ def check(condition, message):
     return condition
 
 
-def rotation_matrix(quat):
-    """xyzw -> 3x3."""
-    x, y, z, w = quat
-    return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
-
-
-def rotated_aabb(half, quat, scale, half_already_scaled=False):
-    """World AABB size of a box rotated by `quat` on an entity scaled `scale`.
-
-    The scale multiplies in ENTITY space, outside the rotation: M = diag(s).R,
-    and the AABB of a box under M is sum_j |M[i][j]| * half[j]. Passing
-    `half_already_scaled` models the defect -- the importer having multiplied
-    the half extents in the shape's own frame before the engine scales again.
-    """
-    matrix = rotation_matrix(quat)
-    extents = [half[j] * (scale[j] if half_already_scaled else 1.0)
-               for j in range(3)]
-    return [2.0 * sum(abs(scale[i] * matrix[i][j]) * extents[j] for j in range(3))
-            for i in range(3)]
-
-
-def _corners(aabb):
-    if all(callable(getattr(aabb, getter, None)) for getter in ('GetMin', 'GetMax')):
-        return aabb.GetMin(), aabb.GetMax()
-    minimum = getattr(aabb, 'min', None)
-    maximum = getattr(aabb, 'max', None)
-    if minimum is not None and maximum is not None and hasattr(minimum, 'x'):
-        return minimum, maximum
-    return None, None
+# The AABB query and the rotated-box predictions live in Tests/lib so the
+# probes and the acceptance tests cannot drift apart: four hand-copied versions
+# of this had already diverged, and the one that handled only GetMin()/GetMax()
+# reported "no simulated body" for an entire level whose colliders were fine.
+rotated_aabb = editor_physics.scaled_rotated_aabb
 
 
 def aabb_of(entity_id):
     """(size, centre) of a game entity's simulated body, or (None, None)."""
-    import azlmbr.bus as bus
-
-    try:
-        import azlmbr.physics as physics
-    except ImportError:
-        return None, None
-
-    for name in ('SimulatedBodyComponentRequestBus',
-                 'SimulatedBodyComponentRequestsBus',
-                 'RigidBodyRequestBus'):
-        handler = getattr(physics, name, None)
-        if handler is None:
-            continue
-        try:
-            aabb = handler(bus.Event, 'GetAabb', entity_id)
-        except Exception:  # noqa: BLE001 - any bus failure means "try the next"
-            continue
-        if aabb is None:
-            continue
-        minimum, maximum = _corners(aabb)
-        if minimum is None:
-            continue
-        return ([maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z],
-                [(maximum.x + minimum.x) * 0.5,
-                 (maximum.y + minimum.y) * 0.5,
-                 (maximum.z + minimum.z) * 0.5])
-    return None, None
+    measured = editor_physics.body_extents(entity_id)
+    return measured if measured is not None else (None, None)
 
 
 def main():
@@ -293,7 +245,7 @@ def main():
             # more than any tolerance, so this reading picks one.
             want = rotated_aabb(HALF_EXTENTS, rotation, scale)
             baked = rotated_aabb(HALF_EXTENTS, rotation, scale,
-                                 half_already_scaled=True)
+                                 half_prescaled=True)
             looks_baked = max(abs(size[i] - baked[i]) for i in range(3)) <= TOLERANCE
             if check(max(abs(size[i] - want[i]) for i in range(3)) <= TOLERANCE,
                      "%s: rotated collider size %r, expected %r%s"

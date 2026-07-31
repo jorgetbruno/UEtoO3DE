@@ -50,16 +50,17 @@ import traceback
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 GEM_SCRIPTS = os.path.join(REPO_ROOT, "O3DE", "Gems", "UEImporter", "Editor", "Scripts")
-if GEM_SCRIPTS not in sys.path:
-    sys.path.insert(0, GEM_SCRIPTS)
+for _path in (os.path.join(REPO_ROOT, "Tests", "lib"), GEM_SCRIPTS):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+import editor_physics  # noqa: E402
 
 RESULT_PATH = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].strip()
                and not sys.argv[1].startswith('-')
                else os.path.join(SCRIPT_DIR, 'results', 'm3b_level_collides_result.txt'))
 
 SAMPLE = int(os.environ.get("UEO3DE_COLLIDE_SAMPLE", "40"))
-MIN_EXTENT = 0.005      # metres; `physics_build` clamps its own shapes at 0.01
-MAX_EXTENT = 10000.0    # metres; a runaway shape rather than a real one
 
 lines = []
 failures = []
@@ -209,57 +210,11 @@ def main():
     if not check(general.is_in_game_mode(), "editor did not enter game mode"):
         return
 
-    def body_aabb(game_id):
-        """(min, max) of the entity's simulated body, or (None, None).
-
-        The Aabb comes back as a PythonProxyObject whose corners are reached
-        as `min`/`max` ATTRIBUTES on this build, not `GetMin()`/`GetMax()`
-        methods -- the method names exist and are None. An earlier version of
-        this function checked only for the methods, so it reported "no
-        simulated body" for every entity in the level, including a control
-        collider built two lines earlier. Both spellings are tried here.
-        """
-        import azlmbr.physics as physics
-        for handler_name in ('SimulatedBodyComponentRequestBus',
-                             'SimulatedBodyComponentRequestsBus',
-                             'RigidBodyRequestBus'):
-            handler = getattr(physics, handler_name, None)
-            if handler is None:
-                continue
-            try:
-                aabb = handler(bus.Event, 'GetAabb', game_id)
-            except Exception:  # noqa: BLE001 - try the next binding
-                continue
-            if aabb is None:
-                continue
-            if all(callable(getattr(aabb, name, None)) for name in ('GetMin', 'GetMax')):
-                return aabb.GetMin(), aabb.GetMax()
-            minimum = getattr(aabb, 'min', None)
-            maximum = getattr(aabb, 'max', None)
-            if minimum is not None and maximum is not None and hasattr(minimum, 'x'):
-                return minimum, maximum
-        return None, None
-
-    def measured_size(game_id):
-        """The body's AABB size, or None when there is no real body.
-
-        `GetAabb` answers for ANY valid entity -- a light and a prefab container
-        answer it too -- so "the bus replied" is not evidence of collision. What
-        distinguishes a body is a NON-DEGENERATE, finite box: AZ::Aabb's null
-        value has min above max, which reads here as a negative extent. The
-        negative control below is what caught this: the first version treated
-        any reply as a body and would have called every entity in the level
-        collidable.
-        """
-        minimum, maximum = body_aabb(game_id)
-        if minimum is None:
-            return None
-        size = [maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z]
-        if min(size) < MIN_EXTENT or max(size) > MAX_EXTENT:
-            return None
-        centre = [(maximum.x + minimum.x) * 0.5, (maximum.y + minimum.y) * 0.5,
-                  (maximum.z + minimum.z) * 0.5]
-        return size, centre
+    # `editor_physics.body_extents` is the predicate, not a convenience: it
+    # knows that the Aabb proxy spells its corners `min`/`max` on this build,
+    # and that `GetAabb` REPLIES FOR EVERY VALID ENTITY, so a reply is not a
+    # body. Both facts were learned by getting them wrong here.
+    measured_size = editor_physics.body_extents
 
     control_game_id = general.find_game_entity(control_name)
     control_measured = None
@@ -275,7 +230,17 @@ def main():
         position = components.TransformBus(bus.Event, 'GetWorldTranslation', game_id)
         measured = measured_size(game_id)
         if measured is None:
-            results.append((name, "NO SIMULATED BODY", position, None))
+            # Two different defects reach here and they are worth separating in
+            # the report: no body was created at all, or a body exists whose
+            # shape carries no geometry -- which is precisely what a collider
+            # serialized before its bake finished looks like.
+            raw_min, raw_max = editor_physics.body_aabb(game_id)
+            problem = ("NO SIMULATED BODY" if raw_min is None else
+                       "A BODY WITH NO GEOMETRY (AABB %r)"
+                       % [round(raw_max.x - raw_min.x, 4),
+                          round(raw_max.y - raw_min.y, 4),
+                          round(raw_max.z - raw_min.z, 4)])
+            results.append((name, problem, position, None))
             continue
         size, centre = measured
         drift = max(abs(centre[0] - position.x), abs(centre[1] - position.y),
@@ -338,20 +303,13 @@ def main():
             bad += 1
             fail("%s: %s -- it was written into the prefab with a collider and "
                  "a body, so the file says it collides and the running world "
-                 "says it does not" % (name, problem))
+                 "does not agree" % (name, problem))
             continue
+        # Degenerate and runaway extents were already rejected by
+        # `body_extents`, and arrive above as a named problem. What is left to
+        # check is placement.
         size, centre, drift = measured
-        smallest, largest = min(size), max(size)
-        if smallest < MIN_EXTENT:
-            bad += 1
-            fail("%s: collider geometry is degenerate %r -- a fully configured "
-                 "collider carrying no shape, which is exactly what an unfinished "
-                 "bake serializes as" % (name, [round(v, 4) for v in size]))
-            continue
-        if largest > MAX_EXTENT:
-            bad += 1
-            fail("%s: collider AABB spans %.0f m" % (name, largest))
-            continue
+        largest = max(size)
         if drift > max(largest, 1.0):
             bad += 1
             fail("%s: collision sits %.2f m from the entity (AABB centre %r, "

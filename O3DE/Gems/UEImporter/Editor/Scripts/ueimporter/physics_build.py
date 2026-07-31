@@ -415,11 +415,29 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
     # to the importer. Both shipped backends apply it themselves.
     scale = collider_scale(adapter, item["transform"]["world"]["scale"])
 
+    # Reported against the PROFILE, not the entity, for two reasons. It is a
+    # fact about the profile -- naming an entity implies this one is special
+    # when every body with that profile is affected -- and `Report.warn`
+    # dedupes on (code, subject, detail), so the profile as subject collapses
+    # one record per body into one record per profile: 3,434 records became 3
+    # on a converted siege map.
+    #
+    # It fires for MAPPED profiles too, which the previous version did not,
+    # because the mapping currently changes nothing: `profile_map` is read here
+    # and nowhere else, no `layer` argument is passed to any adapter call
+    # below, and no adapter implements the `layer` parameter it accepts. Saying
+    # "the fallback layer was used" was worse than saying nothing -- it implied
+    # the mapped profiles had got a layer.
     profile = physics.get("collision_profile") or ""
-    if profile and profile not in profile_map:
-        report.warn("PHYS_PROFILE_FALLBACK", subject,
-                    "UE collision profile %r has no mapping; fallback layer used"
-                    % profile)
+    if profile:
+        report.warn("PHYS_PROFILE_FALLBACK", profile,
+                    "collision filtering is not applied on either backend: no "
+                    "layer reaches the collider, so every body collides with "
+                    "everything. UE's per-channel Block/Overlap/Ignore "
+                    "responses are lost%s"
+                    % ("" if profile in profile_map
+                       else " (and this profile has no entry in "
+                            "collision_profiles.json either)"))
 
     # --- body ---
     if physics["is_trigger"]:

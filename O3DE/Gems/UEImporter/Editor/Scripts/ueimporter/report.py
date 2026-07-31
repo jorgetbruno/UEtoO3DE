@@ -118,9 +118,14 @@ CODES = {
               "The same UE level legitimately differs per backend; this makes "
               "it visible."),
     "PHYS_PROFILE_FALLBACK": (
-        WARN, "UE collision profile has no entry in collision_profiles.json; "
-              "the named fallback layer was used. Channel semantics are lossy "
-              "by design -- see the file."),
+        WARN, "A UE collision profile reached an entity and no collision "
+              "filtering was applied: neither adapter implements the `layer` "
+              "argument, so every imported body collides with everything and "
+              "UE's per-channel responses are lost. Reported once per distinct "
+              "profile, not per body. `collision_profiles.json` maps profiles "
+              "to layer names but nothing consumes the result yet -- and the "
+              "test projects define one layer, `Default`, so there is nothing "
+              "to map onto until a project declares its own."),
     "MASS_FROM_DENSITY": (
         INFO, "UE body had no explicit mass override; the backend derives mass "
               "from shape volume and its default density, which will not match "

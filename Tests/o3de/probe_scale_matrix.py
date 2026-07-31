@@ -40,8 +40,11 @@ import traceback
 SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv and sys.argv[0] else os.getcwd()
 REPO_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 GEM_SCRIPTS = os.path.join(REPO_ROOT, "O3DE", "Gems", "UEImporter", "Editor", "Scripts")
-if GEM_SCRIPTS not in sys.path:
-    sys.path.insert(0, GEM_SCRIPTS)
+for _path in (os.path.join(REPO_ROOT, "Tests", "lib"), GEM_SCRIPTS):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+import editor_physics  # noqa: E402
 
 RESULT_PATH = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].strip()
                and not sys.argv[1].startswith('-')
@@ -73,80 +76,28 @@ def fail(message):
     log('FAIL: ' + str(message))
 
 
-def _corners(aabb):
-    """(min, max) out of whatever shape the Aabb binding takes, else (None, None)."""
-    if all(callable(getattr(aabb, getter, None)) for getter in ('GetMin', 'GetMax')):
-        return aabb.GetMin(), aabb.GetMax()
-    minimum = getattr(aabb, 'min', None)
-    maximum = getattr(aabb, 'max', None)
-    if minimum is not None and maximum is not None and hasattr(minimum, 'x'):
-        return minimum, maximum
-    return None, None
+# Shared with the acceptance tests (Tests/lib/editor_physics.py) so a probe
+# and the test it justifies cannot disagree about how to read an AABB.
+_quat_matrix = editor_physics.quaternion_matrix
+_aabb_size = editor_physics.transformed_aabb_size
 
 
 def aabb_of(entity_id):
-    """(size, centre, bus_name) for a game entity's simulated body, or (None, None, why)."""
-    import azlmbr.bus as bus
-
-    try:
-        import azlmbr.physics as physics
-    except ImportError:
-        return None, None, 'azlmbr.physics not importable'
-
-    tried = []
-    for name in ('SimulatedBodyComponentRequestBus',
-                 'SimulatedBodyComponentRequestsBus',
-                 'RigidBodyRequestBus'):
-        handler = getattr(physics, name, None)
-        if handler is None:
-            continue
-        tried.append(name)
-        try:
-            aabb = handler(bus.Event, 'GetAabb', entity_id)
-        except Exception as error:  # noqa: BLE001 - any bus failure means "try the next"
-            tried[-1] += '(raised %s)' % type(error).__name__
-            continue
-        if aabb is None:
-            tried[-1] += '(None)'
-            continue
-        minimum, maximum = _corners(aabb)
-        if minimum is None:
-            tried[-1] += '(unreadable %s)' % type(aabb).__name__
-            continue
-        size = [maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z]
-        centre = [(maximum.x + minimum.x) * 0.5,
-                  (maximum.y + minimum.y) * 0.5,
-                  (maximum.z + minimum.z) * 0.5]
-        return size, centre, name
-    return None, None, ', '.join(tried) or 'no candidate bus exists'
-
-
-def _quat_matrix(quat):
-    """xyzw -> 3x3 rotation matrix."""
-    x, y, z, w = quat
-    return [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
-
-
-def _aabb_size(matrix, half):
-    """World AABB of a box with `half` extents under a 3x3 transform."""
-    return [2.0 * sum(abs(matrix[i][j]) * half[j] for j in range(3))
-            for i in range(3)]
+    """(size, centre, bus name) for a game entity's simulated body."""
+    minimum, maximum, source = editor_physics.body_aabb_with_source(entity_id)
+    if minimum is None:
+        return None, None, source
+    return ([maximum.x - minimum.x, maximum.y - minimum.y, maximum.z - minimum.z],
+            [(maximum.x + minimum.x) * 0.5, (maximum.y + minimum.y) * 0.5,
+             (maximum.z + minimum.z) * 0.5],
+            source)
 
 
 def _predicted_rotated(half, quat, scale):
-    """(entity-space prediction, shape-space prediction).
-
-    ENTITY space: the scale is applied OUTSIDE the collider's rotation, the way
-    the render mesh transforms -- diag(scale) . R.
-    SHAPE space: the scale is applied INSIDE it, in the shape's own frame --
-    R . diag(scale). The two agree only when the scale is uniform.
-    """
-    rotation = _quat_matrix(quat)
-    outside = [[scale[i] * rotation[i][j] for j in range(3)] for i in range(3)]
-    inside = [[rotation[i][j] * scale[j] for j in range(3)] for i in range(3)]
-    return _aabb_size(outside, half), _aabb_size(inside, half)
+    """(entity-space prediction, shape-space prediction) for a rotated box."""
+    return (editor_physics.scaled_rotated_aabb(half, quat, scale),
+            editor_physics.scaled_rotated_aabb(half, quat, scale,
+                                               scale_in_shape_frame=True))
 
 
 def _ratio_verdict(value, base_value):
@@ -334,7 +285,7 @@ def main():
         log("  NO READING")
     else:
         unrotated = [2.0 * half for half in BOX_HALF]
-        turned = _aabb_size(_quat_matrix(ROT_X90), BOX_HALF)
+        turned = _aabb_size(BOX_HALF, _quat_matrix(ROT_X90))
         log("  unscaled+rotated  measured %r vs predicted %r"
             % ([round(v, 3) for v in rot_plain[0]], [round(v, 3) for v in turned]))
         if max(abs(rot_plain[0][i] - turned[i]) for i in range(3)) > 0.05:
