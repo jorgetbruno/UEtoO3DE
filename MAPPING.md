@@ -442,9 +442,15 @@ offers both routes the **cooked asset wins** — nothing bakes on a tick, so
 there is no settle to get wrong, and every instance references one shared
 asset instead of carrying its own copy of the geometry — with the bake kept as
 the fallback for meshes that got no product.
-`UEO3DE_PHYSX_DECOMPOSE=1` (or a hull cap number) enables V-HACD decomposition
-at cook time for multi-element meshes, trading Asset Processor time for
-collision that keeps the concavities UE decomposed away.
+`UEO3DE_DECOMPOSE=1` (or a hull cap number) enables V-HACD decomposition at
+cook time for multi-element meshes, trading Asset Processor time for collision
+that approximates the concavities UE decomposed away. It gates **both**
+backends — `UEO3DE_PHYSX_DECOMPOSE` is the historical name and still works.
+V-HACD is the only route available: UE's *actual* hulls cannot be read from
+Python at all (`KConvexElem` exposes no vertex accessor — measured,
+`Tests/ue/probe_convex_elems.py`), so the real decomposition cannot be
+exported however much one would prefer it. No non-licensed fixture has a
+multi-convex asset, so this path has unit coverage only.
 
 Two cooked-trimesh restrictions are the backend's, and both stay reported
 rather than authored: PhysX refuses triangle-mesh geometry on a **simulated

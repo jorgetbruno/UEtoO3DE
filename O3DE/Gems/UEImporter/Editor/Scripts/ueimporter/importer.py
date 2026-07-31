@@ -26,6 +26,51 @@ from . import staging
 from .report import Report
 
 
+# Measured on a 44,504-entity marketplace city: 4,000 entities import in 126 s
+# at a 4.8 GB peak, and 12,000 kills the editor during `saving prefab` with no
+# assert, no log line and exit 0xC0000409. The ceiling is deliberately the
+# largest size MEASURED to work rather than the smallest measured to fail --
+# the gap between them is unexplored, and guessing into it is how someone loses
+# a twenty-minute import to a silent process death.
+CHUNK_CEILING = 4000
+
+
+def chunk_ceiling(environ=None):
+    environ = os.environ if environ is None else environ
+    raw = str(environ.get("UEO3DE_CHUNK_CEILING", "")).strip()
+    if not raw:
+        return CHUNK_CEILING
+    value = int(raw)          # a garbage ceiling must raise, never fall back
+    if value < 1:
+        raise ValueError("UEO3DE_CHUNK_CEILING must be >= 1, got %r" % raw)
+    return value
+
+
+def recommended_chunks(entity_count, ceiling=None):
+    """How many chunks this manifest needs; 1 when it fits."""
+    ceiling = chunk_ceiling() if ceiling is None else ceiling
+    if entity_count <= ceiling:
+        return 1
+    return (entity_count + ceiling - 1) // ceiling
+
+
+def chunk_guard_message(entity_count, chunks, ceiling):
+    """What to tell someone whose level cannot arrive as one prefab."""
+    return (
+        "this manifest has %d entities and the measured ceiling for a single "
+        "import is %d: at roughly three times that the editor dies during "
+        "`saving prefab` with no assert and no log line, so importing anyway "
+        "would cost the whole run and produce nothing to debug. Import it as "
+        "%d chunks instead -- each writes its own prefab, split by whole "
+        "subtrees so no entity is separated from its parent:\n%s\n"
+        "Set UEO3DE_CHUNK=1/1 to import it as one prefab anyway, or raise "
+        "UEO3DE_CHUNK_CEILING if a larger import has been measured to work "
+        "on this machine."
+        % (entity_count, ceiling, chunks,
+           "\n".join("    set UEO3DE_CHUNK=%d/%d   (then run the import)"
+                     % (index, chunks) for index in range(1, chunks + 1))))
+
+
 def chunk_of(document, index, count):
     """The `index`-th of `count` slices of a manifest, split by whole subtrees.
 
@@ -248,7 +293,6 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         document = chunk_of(document, index - 1, total)
         emit("UEO3DE_CHUNK=%s -- %d of this manifest's entities"
              % (chunk, len(document["entities"])))
-
     if max_entities is not None:
         # Diagnostic bisect knob (UEO3DE_MAX_ENTITIES): import only the first
         # N entities to localize scale- or content-dependent failures.
@@ -257,6 +301,22 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         document["entities"] = [e for e in document["entities"]
                                 if e["id"] in keep and
                                 (e["parent_id"] is None or e["parent_id"] in keep)]
+
+    # Refuse a manifest measured to be beyond what a single import survives,
+    # rather than discovering it during `saving prefab` twenty minutes in,
+    # where the failure leaves nothing to read.
+    #
+    # AFTER every knob that shrinks the document, and that ordering is the
+    # whole point: an explicit UEO3DE_CHUNK is a decision to override this, and
+    # UEO3DE_MAX_ENTITIES=500 against a huge level is a 500-entity import that
+    # this guard has no business refusing. It measures what is actually about
+    # to be imported, not what the file happens to contain.
+    if not chunk:
+        ceiling = chunk_ceiling()
+        count = len(document["entities"])
+        chunks = recommended_chunks(count, ceiling)
+        if chunks > 1:
+            raise ValueError(chunk_guard_message(count, chunks, ceiling))
 
     # --- incremental re-import (M10) ---------------------------------------
     # Computed BEFORE anything is authored, because it reads the prefab as it

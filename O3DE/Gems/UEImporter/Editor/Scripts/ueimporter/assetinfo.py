@@ -104,6 +104,23 @@ def group_id(group_name, backend):
 
 _DECOMPOSE_OFF = ("0", "off", "false", "no", "none", "disabled")
 _DECOMPOSE_ON = ("1", "on", "true", "yes", "enabled")
+# The knob was named for PhysX because PhysX was the only backend that cooked
+# meshes when it landed. It has gated BOTH backends since Jolt's mesh colliders
+# moved onto assets -- `_physics_group` writes DecomposeMeshes for jolt too --
+# so the PhysX-specific name is now a lie that would send someone hunting for a
+# Jolt equivalent that does not exist. The new name is preferred; the old one
+# still works, because it is documented in shipped READMEs.
+_DECOMPOSE_ENV = ("UEO3DE_DECOMPOSE", "UEO3DE_PHYSX_DECOMPOSE")
+
+
+def decompose_env_value(environ=None):
+    """The decomposition knob's raw value, preferring the backend-neutral name."""
+    environ = os.environ if environ is None else environ
+    for name in _DECOMPOSE_ENV:
+        value = environ.get(name, "")
+        if str(value).strip():
+            return value
+    return ""
 
 
 def decompose_setting(value=None):
@@ -121,7 +138,7 @@ def decompose_setting(value=None):
     stance (a bare `int()` that throws on garbage).
     """
     if value is None:
-        value = os.environ.get("UEO3DE_PHYSX_DECOMPOSE", "")
+        value = decompose_env_value()
     if isinstance(value, bool):
         return 1 if value else 0
     if isinstance(value, int):
@@ -135,7 +152,7 @@ def decompose_setting(value=None):
         number = int(text)
     except ValueError:
         raise ValueError(
-            "UEO3DE_PHYSX_DECOMPOSE=%r is not understood. Use a hull count "
+            "UEO3DE_DECOMPOSE=%r is not understood. Use a hull count "
             "(e.g. 64), 1/on/true to enable with the default cap, or "
             "0/off/false to disable." % (value,))
     return number if number > 0 else 0
@@ -159,7 +176,7 @@ def physics_for_asset(asset, decompose=None):
       * primitives only (box/sphere/capsule) -> None; they author faithfully
         as primitive colliders and need no cooked asset
 
-    `decompose` mirrors UEO3DE_PHYSX_DECOMPOSE (read here when None), parsed by
+    `decompose` mirrors UEO3DE_DECOMPOSE (read here when None), parsed by
     `decompose_setting`: enables V-HACD decomposition for multi-element convex
     assets, hull count capped at the element count (UE's own decomposition
     size) or at the value when it is a number > 1. Off by default: a single

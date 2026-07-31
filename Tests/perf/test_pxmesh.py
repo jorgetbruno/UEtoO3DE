@@ -48,7 +48,8 @@ from ueimporter.adapters import base  # noqa: E402
 from ueimporter.report import Report  # noqa: E402
 
 # The env knob changes decomposition; scrub it so the suite tests one world.
-os.environ.pop("UEO3DE_PHYSX_DECOMPOSE", None)
+for _name in ("UEO3DE_DECOMPOSE", "UEO3DE_PHYSX_DECOMPOSE"):
+    os.environ.pop(_name, None)
 
 failures = []
 
@@ -257,12 +258,31 @@ check(assetinfo.physics_for_asset(asset(shapes=many),
 check(assetinfo.physics_for_asset(asset(shapes=[{"type": "convex"}]),
                                   decompose=1)["decompose_hulls"] is None,
       "a single convex element must never decompose")
-os.environ["UEO3DE_PHYSX_DECOMPOSE"] = "1"
+os.environ["UEO3DE_DECOMPOSE"] = "1"
 try:
     check(assetinfo.physics_for_asset(asset(shapes=convex3))["decompose_hulls"] == 3,
-          "decompose=None should read UEO3DE_PHYSX_DECOMPOSE")
+          "decompose=None should read UEO3DE_DECOMPOSE")
 finally:
-    os.environ.pop("UEO3DE_PHYSX_DECOMPOSE", None)
+    os.environ.pop("UEO3DE_DECOMPOSE", None)
+
+# The knob gates BOTH backends but was named for PhysX, so the old name stays
+# working -- and an alias nobody asserts is an alias that quietly stops
+# working. Both names, and which one wins when both are set.
+check(assetinfo.decompose_env_value({"UEO3DE_DECOMPOSE": "64"}) == "64",
+      "the backend-neutral name must be read")
+check(assetinfo.decompose_env_value({"UEO3DE_PHYSX_DECOMPOSE": "32"}) == "32",
+      "the historical PhysX-named knob must keep working; it is in shipped docs")
+check(assetinfo.decompose_env_value(
+          {"UEO3DE_DECOMPOSE": "64", "UEO3DE_PHYSX_DECOMPOSE": "32"}) == "64",
+      "with both set the backend-neutral name must win, or the deprecated one "
+      "silently overrides the current one")
+check(assetinfo.decompose_env_value(
+          {"UEO3DE_DECOMPOSE": "  ", "UEO3DE_PHYSX_DECOMPOSE": "32"}) == "32",
+      "an EMPTY new-name variable must not mask a set old-name one -- that is "
+      "how `set UEO3DE_DECOMPOSE=` in a shell would silently disable the knob "
+      "someone had configured")
+check(assetinfo.decompose_env_value({}) == "",
+      "neither set means unset, not an error")
 check(assetinfo.physics_for_asset(asset(shapes=convex3))["decompose_hulls"] is None,
       "with the env unset, decomposition must default OFF (a single hull is "
       "what the editor's own Add PhysXMesh produces)")
@@ -275,11 +295,11 @@ check(assetinfo.physics_for_asset(asset(shapes=convex3))["decompose_hulls"] is N
 for text in ("0", "off", "OFF", "false", "False", "no", "none", "disabled", "",
              "  ", "-3"):
     check(assetinfo.decompose_setting(text) == 0,
-          "UEO3DE_PHYSX_DECOMPOSE=%r must mean OFF, got %r"
+          "UEO3DE_DECOMPOSE=%r must mean OFF, got %r"
           % (text, assetinfo.decompose_setting(text)))
 for text in ("1", "on", "true", "YES", "enabled"):
     check(assetinfo.decompose_setting(text) == 1,
-          "UEO3DE_PHYSX_DECOMPOSE=%r must mean ON, got %r"
+          "UEO3DE_DECOMPOSE=%r must mean ON, got %r"
           % (text, assetinfo.decompose_setting(text)))
 check(assetinfo.decompose_setting("128") == 128,
       "a numeric hull cap must survive parsing")

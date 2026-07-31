@@ -115,6 +115,74 @@ def install(project_path, gem_root=None, log=print):
     return changes
 
 
+def check_gem_buildable(gem_root):
+    """Problems that stop O3DE from MOUNTING or CONFIGURING the gem.
+
+    The project-side checks below answer "did we write the right entries".
+    They passed while the gem itself was unusable, which is the failure this
+    covers: a project.json naming a gem, and a setreg pointing at a directory,
+    say nothing about whether that directory is a gem O3DE can load. Three
+    things have to hold, and each has been wrong at least once:
+
+      * `gem.json` exists and its `gem_name` is the name the project asks for
+        -- a mismatch mounts nothing, silently;
+      * the gem is registered in the O3DE manifest's external subdirectories,
+        which is how the engine finds the path at all. project.json listing
+        the NAME is not the same as the engine knowing the PATH;
+      * `CMakeLists.txt` exists. A registered directory without one fails
+        project configuration for the whole project, not just this gem.
+    """
+    problems = []
+    gem_root = os.path.abspath(gem_root)
+
+    gem_json = os.path.join(gem_root, "gem.json")
+    if not os.path.isfile(gem_json):
+        problems.append(
+            "missing %s -- O3DE will not mount a directory that does not "
+            "declare itself a gem, however it is referenced" % gem_json)
+    else:
+        try:
+            with open(gem_json, "r") as handle:
+                declared = json.load(handle).get("gem_name")
+        except Exception as exc:  # noqa: BLE001 - report, never raise out of a check
+            declared = None
+            problems.append("%s is not valid JSON: %s" % (gem_json, exc))
+        if declared is not None and declared != GEM_NAME:
+            problems.append(
+                "%s declares gem_name %r, but the project asks for %r; the "
+                "names must match or nothing mounts"
+                % (gem_json, declared, GEM_NAME))
+
+    cmake_lists = os.path.join(gem_root, "CMakeLists.txt")
+    if not os.path.isfile(cmake_lists):
+        problems.append(
+            "missing %s -- a registered gem directory without one breaks "
+            "configuration for every project that references it" % cmake_lists)
+
+    manifest = os.path.expanduser(os.path.join("~", ".o3de", "o3de_manifest.json"))
+    if not os.path.isfile(manifest):
+        problems.append(
+            "no %s -- cannot confirm the engine knows where this gem lives"
+            % manifest)
+    else:
+        try:
+            with open(manifest, "r") as handle:
+                registered = json.load(handle).get("external_subdirectories") or []
+        except Exception as exc:  # noqa: BLE001
+            registered = []
+            problems.append("%s is not valid JSON: %s" % (manifest, exc))
+        wanted = _forward(gem_root).rstrip("/").lower()
+        if not any(_forward(str(entry)).rstrip("/").lower() == wanted
+                   for entry in registered):
+            problems.append(
+                "%s is not in %s external_subdirectories -- project.json can "
+                "name the gem all it likes; without this the engine never "
+                "resolves the name to this path (o3de register --gem-path)"
+                % (gem_root, manifest))
+
+    return problems
+
+
 def check(project_path, gem_root=None, log=print):
     """Verify without writing. Returns a list of problems (empty == installed)."""
     problems = []
@@ -158,6 +226,8 @@ def check(project_path, gem_root=None, log=print):
     bootstrap = os.path.join(gem_root or GEM_ROOT, "Editor", "Scripts", "bootstrap.py")
     if not os.path.isfile(bootstrap):
         problems.append("missing " + bootstrap)
+
+    problems.extend(check_gem_buildable(gem_root or GEM_ROOT))
 
     for problem in problems:
         log("  PROBLEM: " + problem)

@@ -224,14 +224,28 @@ that looks healthy and does nothing. Convex cooks work everywhere.
 Knobs:
 
 ```
-set UEO3DE_PHYSX_DECOMPOSE=1     rem or a hull cap, e.g. 64 -- V-HACD at cook time
+set UEO3DE_DECOMPOSE=1           rem or a hull cap, e.g. 64 -- V-HACD at cook time, BOTH backends
 set UEO3DE_PHYSX_COOK=1          rem force cooking on when PhysX is activated transitively
+set UEO3DE_CHUNK=3/12            rem import one slice of a level too big for a single prefab
+set UEO3DE_CHUNK_CEILING=6000    rem raise the refuse-to-import threshold (default 4000, measured)
 ```
 
-Decomposition keeps concavities UE decomposed away (better fidelity than
-Jolt's single whole-mesh hull) in exchange for Asset Processor time; it is off
-by default, and anything the parser does not recognise fails loudly rather than
-guessing a direction. `UEO3DE_PHYSX_COOK` exists because O3DE activates gems
+Decomposition approximates the concavities UE decomposed away (better fidelity
+than a single whole-mesh hull) in exchange for Asset Processor time; it is off
+by default, gates both backends despite the historical name, and anything the
+parser does not recognise fails loudly rather than guessing a direction. It is
+also the *only* route: UE's real convex hulls cannot be read from Python, so
+its actual decomposition cannot be exported.
+
+**A level too large for one prefab is refused, not attempted.** Measured: 4,000
+entities import in 126 s at a 4.8 GB peak, and roughly three times that kills
+the editor during `saving prefab` with no assert and no log line. Rather than
+discovering that twenty minutes in, the importer computes the split and stops,
+printing the exact `UEO3DE_CHUNK=i/n` command for every slice; chunks split by
+whole subtrees, so no entity is separated from its parent. `UEO3DE_CHUNK=1/1`
+imports as one prefab anyway.
+
+`UEO3DE_PHYSX_COOK` exists because O3DE activates gems
 transitively: a project that gets PhysX through another gem's dependency runs
 the PhysX backend while `project.json` never names it, and without the override
 the "restage to fix" advice would loop forever. Existing stagings need one

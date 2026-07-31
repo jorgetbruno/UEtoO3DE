@@ -37,6 +37,10 @@ if %ERRORLEVEL% NEQ 0 goto :failed
 if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_scale.py"
 if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_install_gem.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_chunk_guard.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
 
 echo === 1/1  live: a real level, every authored bake accounted for ===
 if not exist "%UEO3DE_EXPORT%\manifest.json" (
@@ -59,7 +63,36 @@ if %ERRORLEVEL% NEQ 0 (
 "%O3DE_BIN%\AssetProcessorBatch.exe" --project-path="%JOLT%" --platforms=pc >nul 2>&1
 if %ERRORLEVEL% NEQ 0 goto :failed
 call "%REPO%\Tests\o3de\run_o3de_python.bat" "%REPO%\Tests\perf\perf_bakes.py" "%REPO%\Tests\perf\results\perf_bakes_result.txt" "%JOLT%"
+set "LIVE_RC=%ERRORLEVEL%"
+
+rem RESTORE THE STAGING BEFORE RETURNING, pass or fail.
+rem
+rem The staging above is SHARED STATE, not this suite's own: cooking off strips
+rem the physics mesh groups from every sidecar of this level, and M7 imports
+rem the SAME level, where the terrain's collision comes from a cooked product.
+rem Measured, running the suites in order: M7's five terrain probes fell 500 m
+rem through the world with "waiting for 0 cooked physics meshes" in its log --
+rem a failure with no connection to anything M7 or the terrain code did, and
+rem one that vanished when M7 ran alone. Ordering the suites around it would
+rem only hide it; the leak is the bug.
+rem
+rem Restored on the failure path too, or one red run leaves the project broken
+rem for every suite after it.
+set "UEO3DE_JOLT_COOK="
+set "UEO3DE_PHYSX_COOK="
+%PY% "%REPO%\Tests\m2\m2_stage.py" --project "%JOLT%" --manifest "%UEO3DE_EXPORT%\manifest.json" --source-assets "%UEO3DE_EXPORT%\Assets" >nul
 if %ERRORLEVEL% NEQ 0 (
+  echo   WARNING: could not restore %UEO3DE_EXPORT% staging in %JOLT%; 1>&2
+  echo   re-stage it before running M7 or its terrain will have no collision 1>&2
+  goto :failed
+)
+"%O3DE_BIN%\AssetProcessorBatch.exe" --project-path="%JOLT%" --platforms=pc >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+  echo   WARNING: AssetProcessor failed while restoring the cooked products 1>&2
+  goto :failed
+)
+
+if not "%LIVE_RC%"=="0" (
   echo   see Tests\perf\results\perf_bakes_result.txt
   goto :failed
 )
