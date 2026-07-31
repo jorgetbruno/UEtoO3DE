@@ -354,6 +354,36 @@ def _collision_shapes(mesh, subject, warnings):
 # asset table
 # ---------------------------------------------------------------------------
 
+# UEO3DE_MESH_FORMAT picks the STATIC MESH container: "fbx" (default) or
+# "glb". Nothing else moves -- skeletal meshes and animations stay FBX, so a
+# glb run is deliberately a MIXED-FORMAT project. That is not a compromise, it
+# is the case worth exercising: staging and the sidecar writer both key on the
+# file's own extension (`gltf_source.is_gltf_source`), never on a global flag,
+# and a mixed export is the only thing that proves it.
+#
+# The basis is measured and identical for the two containers when the same
+# Lane A bake is applied to both (LANE_C_GLTF.md), so the importer needs no
+# per-format branch. That is WHY the bake is kept for glb rather than exporting
+# raw: a raw glTF lands Rz180 away from the FBX product, and matching bases
+# beats carrying a second correction.
+_STATIC_MESH_FORMATS = ("fbx", "glb")
+
+
+def static_mesh_format(environ=None):
+    """The container static meshes export in. Raises on anything unknown.
+
+    A typo must not silently fall back to FBX: the whole run would look like a
+    success and produce the wrong container.
+    """
+    source = os.environ if environ is None else environ
+    value = (source.get("UEO3DE_MESH_FORMAT") or "fbx").strip().lower().lstrip(".")
+    if value not in _STATIC_MESH_FORMATS:
+        raise ValueError(
+            "UEO3DE_MESH_FORMAT=%r is not one of %s"
+            % (value, ", ".join(_STATIC_MESH_FORMATS)))
+    return value
+
+
 _EXTENSIONS = {"static_mesh": "fbx", "material": "material",
                "skeletal_mesh": "fbx", "animation": "fbx"}
 
@@ -398,7 +428,10 @@ class AssetTable:
             self._warnings.add("ASSET_PATH_COLLISION", exc.stem,
                                "%s vs %s" % (exc.first, exc.second))
             raise ExportAborted(str(exc))
-        return naming.with_extension(stem, _EXTENSIONS[kind])
+        extension = _EXTENSIONS[kind]
+        if kind == "static_mesh":
+            extension = static_mesh_format()
+        return naming.with_extension(stem, extension)
 
     def add_material(self, material):
         from . import material_export

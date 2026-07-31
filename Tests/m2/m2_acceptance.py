@@ -40,8 +40,18 @@ if len(sys.argv) > 1 and sys.argv[1].strip() and not sys.argv[1].startswith('-')
 else:
     RESULT_PATH = os.path.join(SCRIPT_DIR, 'results', 'm2_acceptance_result.txt')
 
-MANIFEST_PATH = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "manifest.json")
-PREFAB_REL_PATH = "Prefabs/Fixture_01.prefab"
+# Defaults target the FBX acceptance fixture; UEO3DE_EXPORT points the SAME
+# assertions at another export of the same level -- which is how the `.glb`
+# container is held to the identical acceptance bar rather than to a weaker
+# one written for it. m2_import.py already reads this variable; the two must
+# agree or the acceptance would silently assert against a different level than
+# the one just imported.
+EXPORT_DIR = os.environ.get("UEO3DE_EXPORT", "").strip() or \
+    os.path.join(REPO_ROOT, "Exports", "Fixture_01")
+LEVEL_NAME = os.path.basename(os.path.normpath(EXPORT_DIR))
+
+MANIFEST_PATH = os.path.join(EXPORT_DIR, "manifest.json")
+PREFAB_REL_PATH = "Prefabs/%s.prefab" % LEVEL_NAME
 
 TRANSLATION_TOLERANCE_M = 0.01      # 1 cm, per the plan
 ROTATION_TOLERANCE_DEG = 0.1        # 0.1 degrees, per the plan

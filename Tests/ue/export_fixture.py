@@ -49,6 +49,7 @@ for _path in (PACKAGE_ROOT, LIB_ROOT):
         sys.path.insert(0, _path)
 
 import fbx_reader  # noqa: E402
+import gltf_reader  # noqa: E402
 from ueo3de import export_api  # noqa: E402
 from ueo3de.warnings import ERROR, WARN  # noqa: E402
 
@@ -80,9 +81,18 @@ def verify_fbx_intermediate(record):
     expected_max = list(record["ue_bounds_max"])
 
     path = os.path.join(ASSETS_ROOT, record["relative_path"]).replace("\\", "/")
-    stats = fbx_reader.vertex_stats(path)
-
     tolerance = record.get("tolerance_cm", BOUNDS_TOLERANCE_CM)
+
+    # ONE recorded expectation, converted per container (see export_level.py).
+    # A glTF is Y-up and in METRES, so the tolerance converts too: 1e-3 cm
+    # compared against metre-scale values would pass anything at all.
+    if gltf_reader.gltf_source.is_gltf_source(path):
+        expected_min, expected_max = gltf_reader.expected_from_fbx_bounds(
+            expected_min, expected_max)
+        tolerance = tolerance / 100.0
+        stats = gltf_reader.vertex_stats(path)
+    else:
+        stats = fbx_reader.vertex_stats(path)
     deltas = [max(abs(stats["min"][i] - expected_min[i]),
                   abs(stats["max"][i] - expected_max[i])) for i in range(3)]
     if max(deltas) > tolerance:

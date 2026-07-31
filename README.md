@@ -228,7 +228,20 @@ set UEO3DE_DECOMPOSE=1           rem or a hull cap, e.g. 64 -- V-HACD at cook ti
 set UEO3DE_PHYSX_COOK=1          rem force cooking on when PhysX is activated transitively
 set UEO3DE_CHUNK=3/12            rem import one slice of a level too big for a single prefab
 set UEO3DE_CHUNK_CEILING=6000    rem raise the refuse-to-import threshold (default 4000, measured)
+set UEO3DE_MESH_FORMAT=glb       rem export STATIC meshes as glTF binary instead of FBX
 ```
+
+`UEO3DE_MESH_FORMAT` is set at **export** time (`export_level.bat`), not at
+import. It moves static meshes only — skeletal meshes and animations stay FBX,
+so a glb run is a mixed-format export, and staging decides per file from the
+extension rather than from a flag. An unrecognised value fails loudly rather
+than falling back to FBX and producing a whole export in the wrong container.
+
+The two containers are **measured to produce identical product geometry**
+(including the mirrored `#mx` variant), because the same Lane A bake is applied
+to both — so nothing downstream branches on format and `units.lane_b_rule` is
+unchanged. `.gltf` is deliberately not offered: UE writes it with a companion
+`.bin`, and staging copies exactly one file. See [LANE_C_GLTF.md](LANE_C_GLTF.md).
 
 Decomposition approximates the concavities UE decomposed away (better fidelity
 than a single whole-mesh hull) in exchange for Asset Processor time; it is off

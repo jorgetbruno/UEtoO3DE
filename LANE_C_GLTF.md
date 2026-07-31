@@ -198,37 +198,94 @@ Until then no sidecar is written for glTF: the importer is unchanged on this
 branch, because a format branch that silently emits a sidecar the AP rejects
 is worse than none.
 
-## What is left: the exporter, and only the exporter
+## DONE: the exporter emits `.glb`
 
-Node addressing, the container, and the basis are all measured and implemented.
-**The one remaining piece is that the exporter still writes FBX** — and it is
-now a bounded job with no unknowns in it, because the two things that used to
-make it risky have both been answered:
+`UEO3DE_MESH_FORMAT=glb` switches the **static mesh** container. Nothing else
+moves — skeletal meshes and animations stay FBX — so a glb run is deliberately
+a **mixed-format export**. That is not a compromise; it is the case worth
+exercising, because staging and the sidecar writer key on each file's own
+extension (`gltf_source.is_gltf_source`) and never on a global flag. A typo
+**raises**: falling back to FBX would make a whole export look successful in
+the wrong container.
 
-* **which container** — `.glb`, settled by measurement above;
-* **what basis correction** — one `Rz180`, settled by measurement above, and
-  `skel_build.compose_rz180` already implements it.
+### The bake is kept, and that makes the basis correction vanish
 
-What the exporter change involves:
+The measurement above (`Rz180`) compared a **raw** glTF against a **baked**
+FBX. Keeping the Lane A bake for glb too should make them coincide, and it
+does — measured on the fixture, both products present in one project:
 
-* UE's per-asset glTF export emits a companion `.bin` and material PNGs, and
-  `staging.stage()` copies exactly the one file at `o3de_relative_path`. **That
-  is settled: export `.glb`.** It is a single file, so staging is unchanged,
-  and the node-naming it needs is now implemented and measured against UE's own
-  output (above). Choosing `.gltf` instead would mean teaching staging to carry
-  companion files, for no gain.
+| | glb product centroid | fbx product centroid | `glb == M · fbx` |
+|---|---|---|---|
+| `sm_letterf` | (−0.2097, −0.0659, +1.4452) | (−0.2097, −0.0659, +1.4452) | **identity** |
+| `sm_letterf_mx` | (+0.2097, −0.0659, +1.4452) | (+0.2097, −0.0659, +1.4452) | **identity** |
+
+**Identity, for the mirrored `#mx` variant as well.** So:
+
+* the importer needs **no per-format branch at all**;
+* `units.lane_b_rule` stays `negate_y_scene_rz180` — it records the *net* map,
+  which is unchanged, and only the intermediate container differs.
+
+That is why the bake is kept rather than exporting raw: matching bases beats
+carrying a second correction that every downstream consumer would have to know
+about.
+
+### The export verifier converts, rather than being switched off
+
+`export_level.py` checks every written mesh against the bounds the exporter
+expects — the guard that catches a bake missing or doubled. It stays on for
+glb. The exporter keeps **one** recorded expectation per mesh (the FBX-file
+one) and `gltf_reader.expected_from_fbx_bounds` converts it, so the two can
+never disagree:
+
+```
+baked = (fbx_x, -fbx_y, fbx_z)                  undo the FBX writer's Y flip
+glTF  = (baked_x, baked_z, baked_y) / 100       Y-up, cm -> m
+  =>  glTF = (fbx_x, fbx_z, -fbx_y) / 100
+```
+
+It depends only on the two writers, not on the bake, so it holds for `#mx` too.
+Negating an axis **swaps that axis's min and max** — the easy thing to get
+wrong, and pinned directly in `Tests/perf/test_glb_export.py` because a
+symmetric mesh would not catch it. The tolerance converts too: a 1e-3 **cm**
+tolerance compared against metre-scale values would pass anything.
+
+Validated end to end on the fixture: export PASS (including the intermediate
+bounds check on all 7 meshes), AP 0 errors, M2 import PASS, and **M2 acceptance
+PASS** — the same 30-entity, 1 cm / 0.1°, model-asset-and-vertex-count bar the
+FBX path meets. `m2_acceptance.py` now reads `UEO3DE_EXPORT` like
+`m2_import.py` already did, so glb is held to the identical assertions rather
+than to a weaker set written for it.
+
+### Two predictions this page made, and the measurement that killed both
+
+Written here *before* the exporter existed, and both **wrong**:
+
+* ~~"a glTF manifest needs its own `lane_b_rule` rather than reusing
+  `negate_y_scene_rz180`"~~ — no. The rule records the **net** map, and with
+  the bake kept the net map is unchanged. The value stays.
+* ~~"the `Rz180` must be applied for glTF and NOT for FBX; a mixed project is
+  the dangerous case"~~ — no. With the bake kept the two products are
+  **identical**, so there is no per-format branch to get wrong. The mixed
+  project is now the *safe* case, and the fixture exercises it (static `.glb`,
+  skeletal `.fbx`, in one level).
+
+Both were reasoned from the raw-export measurement rather than measured on a
+baked one. The lesson is the same one the four node-path guesses taught: a
+prediction that costs one measurement to check is not worth writing down as a
+finding.
+
+### Genuinely still open
+
 * Our pipeline already exports textures and materials through the manifest, so
-  a glTF carrying its own baked materials would duplicate them. `GLTFExportOptions`
-  has the knobs (`bake_material_inputs`, `export_preview_mesh`, …) and they are
-  unmeasured. Note the `.glb` above did emit its own `.azmaterial`, so this
-  duplication is real and not hypothetical.
-* the manifest must record `.glb` paths, and `manifest_io` pins the Lane B rule
-  (`units.lane_b_rule`) and refuses a mismatch — so a glTF manifest needs its
-  own rule value rather than reusing `negate_y_scene_rz180`, which describes a
-  chain glTF does not go through.
-* **the `Rz180` must be applied for glTF and NOT for FBX.** Both formats in one
-  project is the dangerous case: get this per-format and every static mesh is
-  either right or 180° wrong, with no error anywhere.
+  a glTF carrying its own baked materials **duplicates** them — the fixture's
+  `.glb` did emit its own `.azmaterial`, so this is real, not hypothetical. It
+  is wasted cache, not a correctness bug: the importer assigns materials from
+  the manifest and never looks at the glTF's own. `GLTFExportOptions` has the
+  knobs (`bake_material_inputs`, …) and they are unmeasured.
+* Skeletal meshes and animations still export FBX. glTF ingests skeletal fine
+  (`.actor` + `.skinmeta`, measured), but the skeletal Lane B rule is a
+  separate chain with its own `compose_rz180`, and switching it needs its own
+  measurement — not this one, which covers statics only.
 
 ## SOLVED: the basis is one 180° yaw
 

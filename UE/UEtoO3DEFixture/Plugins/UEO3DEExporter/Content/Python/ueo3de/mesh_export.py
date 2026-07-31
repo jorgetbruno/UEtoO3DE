@@ -263,10 +263,57 @@ def _bake_temp_asset(dyn, asset_name):
     return temp_path, baked
 
 
-def _export_fbx(asset, output_path, options):
+def _make_gltf_export_options():
+    """Options for a `.glb` static-mesh export.
+
+    UE picks the exporter from the FILENAME EXTENSION, so the only thing that
+    has to change per format is this options object and the path -- the
+    AssetExportTask call below is shared.
+
+    `export_preview_mesh` is forced off for the same reason FbxExportOption
+    turns off collision and LODs: it would put an extra mesh in the scene that
+    the `.assetinfo` does not name, and staging REFUSES a multi-mesh glTF
+    rather than naming both nodes alike (`gltf_source.mesh_node_count`). A
+    knob that cannot be set is reported, not ignored -- an unset option here
+    surfaces as a staging failure much later, where its cause is invisible.
+    """
+    if not hasattr(unreal, "GLTFExportOptions"):
+        raise MeshExportError(
+            "this UE build has no unreal.GLTFExportOptions, so it cannot "
+            "export .glb; use UEO3DE_MESH_FORMAT=fbx")
+    options = unreal.GLTFExportOptions()
+    for name, value in (("export_preview_mesh", False),):
+        if not hasattr(options, name):
+            continue
+        try:
+            options.set_editor_property(name, value)
+        except Exception as exc:
+            raise MeshExportError(
+                "GLTFExportOptions.%s could not be set (%s); the exported glTF "
+                "would carry nodes the importer does not expect" % (name, exc))
+    return options
+
+
+_GLTF_OPTIONS = []          # built once, on first .glb export
+
+
+def _export_mesh(asset, output_path, options):
+    """Run one asset export task. The FORMAT comes from `output_path`.
+
+    UE selects the exporter from the filename extension, so the extension is
+    already the source of truth here -- and the options object must agree with
+    it or the task fails on a type mismatch. Rather than thread a second
+    options object through four call sites, the extension picks it. Callers
+    pass the FBX options and keep working unchanged.
+    """
     directory = os.path.dirname(output_path)
     if directory:
         os.makedirs(directory, exist_ok=True)
+    label = os.path.splitext(output_path)[1].lstrip(".").upper() or "mesh"
+    if output_path.lower().endswith(".glb"):
+        if not _GLTF_OPTIONS:
+            _GLTF_OPTIONS.append(_make_gltf_export_options())
+        options = _GLTF_OPTIONS[0]
     task = unreal.AssetExportTask()
     task.object = asset
     task.filename = output_path
@@ -275,9 +322,25 @@ def _export_fbx(asset, output_path, options):
     task.prompt = False
     task.options = options
     if not unreal.Exporter.run_asset_export_task(task):
-        raise MeshExportError("FBX export failed for " + output_path)
+        raise MeshExportError("%s export failed for %s" % (label, output_path))
     if not os.path.exists(output_path):
-        raise MeshExportError("FBX export reported success but wrote nothing: " + output_path)
+        raise MeshExportError("%s export reported success but wrote nothing: %s"
+                              % (label, output_path))
+    # A .glb that arrived beside a .bin means UE wrote the JSON container under
+    # a .glb name. Staging copies exactly one file, so the mesh data would be
+    # left behind and the AP would fail on a dangling buffer reference.
+    if output_path.lower().endswith(".glb"):
+        companion = os.path.splitext(output_path)[0] + ".bin"
+        if os.path.exists(companion):
+            raise MeshExportError(
+                "%s was written with a companion %s: that is the .gltf layout "
+                "under a .glb name, and staging copies only the one file"
+                % (output_path, os.path.basename(companion)))
+
+
+# Kept as the old name so nothing outside this module has to change; every
+# call site now goes through _export_mesh, which dispatches on the extension.
+_export_fbx = _export_mesh
 
 
 # ---------------------------------------------------------------------------

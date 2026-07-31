@@ -42,6 +42,7 @@ for _path in (PACKAGE_ROOT, LIB_ROOT):
         sys.path.insert(0, _path)
 
 import fbx_reader  # noqa: E402
+import gltf_reader  # noqa: E402
 from ueo3de import mesh_export, ue_level  # noqa: E402
 from ueo3de.warnings import ERROR, WARN  # noqa: E402
 
@@ -66,8 +67,17 @@ def log(message):
     unreal.log("[EXPORT_LEVEL] " + str(message))
 
 
+def gltf_source_is_gltf(path):
+    """Is this mesh a glTF container? Asked of the PATH, never of a flag.
+
+    A glb run is a MIXED-format export -- skeletal meshes and animations stay
+    FBX -- so "which reader" is a per-file question.
+    """
+    return gltf_reader.gltf_source.is_gltf_source(path)
+
+
 def verify_fbx_intermediate(record):
-    """The written FBX must match the RECORD's expected bounds (cm).
+    """The written mesh must match the RECORD's expected bounds.
 
     mesh_export mirrors the expectation for normal entries (the bake nets
     diag(-1,1,1) at the FBX level, Lane B rev 4) and leaves #mx variants
@@ -80,20 +90,34 @@ def verify_fbx_intermediate(record):
     expected_max = list(record["ue_bounds_max"])
 
     path = os.path.join(ASSETS_ROOT, record["relative_path"]).replace("\\", "/")
-    stats = fbx_reader.vertex_stats(path)
     tolerance = record.get("tolerance_cm", BOUNDS_TOLERANCE_CM)
+
+    # ONE recorded expectation, converted per container. The record holds the
+    # FBX-file expectation; a glTF is Y-up and in METRES, so both the numbers
+    # and the tolerance have to be converted or the check is meaningless --
+    # a 1e-3 cm tolerance against metre-scale values would pass anything.
+    if gltf_source_is_gltf(path):
+        label = "glTF"
+        expected_min, expected_max = gltf_reader.expected_from_fbx_bounds(
+            expected_min, expected_max)
+        tolerance = tolerance / 100.0
+        stats = gltf_reader.vertex_stats(path)
+    else:
+        label = "FBX"
+        stats = fbx_reader.vertex_stats(path)
+
     deltas = [max(abs(stats["min"][i] - expected_min[i]),
                   abs(stats["max"][i] - expected_max[i])) for i in range(3)]
     if max(deltas) > tolerance:
         raise RuntimeError(
-            "%s: FBX does not match its expected intermediate bounds.\n"
-            "  FBX bounds %s .. %s\n"
-            "  UE source  %s .. %s\n"
-            "The bake stage and UE's export negation should cancel here; one "
+            "%s: %s does not match its expected intermediate bounds.\n"
+            "  file bounds %s .. %s\n"
+            "  expected    %s .. %s\n"
+            "The bake stage and the writer's negation should cancel here; one "
             "is missing or doubled, and the product will be mirrored."
-            % (record["relative_path"],
-               [round(v, 3) for v in stats["min"]], [round(v, 3) for v in stats["max"]],
-               [round(v, 3) for v in expected_min], [round(v, 3) for v in expected_max]))
+            % (record["relative_path"], label,
+               [round(v, 4) for v in stats["min"]], [round(v, 4) for v in stats["max"]],
+               [round(v, 4) for v in expected_min], [round(v, 4) for v in expected_max]))
 
 
 status = "PASS"
