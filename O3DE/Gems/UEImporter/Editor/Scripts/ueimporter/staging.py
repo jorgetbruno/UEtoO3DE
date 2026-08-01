@@ -61,6 +61,79 @@ _BACKEND_GEM_PREFIX = {"physx": "PhysX", "jolt": "JoltPhysics"}
 _BACKEND_COOK_ENV = {"physx": "UEO3DE_PHYSX_COOK", "jolt": "UEO3DE_JOLT_COOK"}
 
 
+def _builder_binaries(project_root, prefix):
+    """Built `<prefix>*.Editor*.dll` files reachable by this project's AP.
+
+    LISTED IS NOT BUILT, and the difference is invisible until far too late.
+    A gem in `gem_names` whose code was never compiled leaves the Asset
+    Processor with no serializer for its mesh group's `$type` -- and an
+    unrecognised `.assetinfo` entry is SILENTLY DROPPED. Measured on a fresh
+    project: `JoltPhysics==1.0.0` in `gem_names`, sidecars carrying
+    `JoltMeshGroup`, 141 of 141 `.azmodel` built, **0 `.joltmesh`, 0 errors,
+    and no job log mentioning Jolt at all.**
+
+    Two places count, and the difference is why this only bites some backends:
+    PhysX SHIPS WITH THE ENGINE (`PhysX.Editor.Gem.dll` sits in the engine's
+    bin), so a PhysX project needs no build; Jolt is an EXTERNAL gem whose
+    `JoltPhysics.Editor.dll` exists only after the project is built.
+    """
+    found = []
+    roots = []
+    build_root = os.path.join(project_root, "build")
+    if os.path.isdir(build_root):
+        roots.append(build_root)
+    roots.extend(_engine_bin_roots())
+
+    for root in roots:
+        for directory, _subdirs, files in os.walk(root):
+            for name in files:
+                lowered = name.lower()
+                if (lowered.startswith(prefix.lower())
+                        and ".editor" in lowered and lowered.endswith(".dll")):
+                    found.append(os.path.join(directory, name))
+            if len(found) > 4:            # enough to answer the question
+                return found
+    return found
+
+
+def _engine_bin_roots():
+    """Every registered engine's `bin`, best effort.
+
+    Read from the o3de manifest because staging runs OUTSIDE the editor, where
+    no engine path is resolved for us. Returning nothing is fine -- the check
+    that uses this only ever DOWNGRADES to "cannot prove it is built", and it
+    says so rather than guessing.
+    """
+    manifest = os.path.join(os.path.expanduser("~"), ".o3de", "o3de_manifest.json")
+    roots = []
+    try:
+        with open(manifest, "r") as handle:
+            engines = json.load(handle).get("engines") or []
+    except (OSError, ValueError):
+        return roots
+    for engine in engines:
+        path = engine.get("path") if isinstance(engine, dict) else engine
+        if not path:
+            continue
+        candidate = os.path.join(str(path), "bin")
+        if os.path.isdir(candidate):
+            roots.append(candidate)
+    return roots
+
+
+def backend_builder_missing(project_assets_root, backend):
+    """Is `backend`'s gem listed but its builder nowhere to be found?
+
+    True means every physics mesh group written for it will be silently
+    dropped. False means either the builder is there or we could not look.
+    """
+    prefix = _BACKEND_GEM_PREFIX.get(backend)
+    if not prefix:
+        return False
+    project_root = os.path.dirname(os.path.normpath(project_assets_root))
+    return not _builder_binaries(project_root, prefix)
+
+
 def project_physics_backends(project_assets_root):
     """Which physics backends' mesh groups this project's AP can cook.
 
@@ -112,6 +185,42 @@ def project_physics_backends(project_assets_root):
     return tuple(out)
 
 
+def verify_builders_present(project_assets_root, backends):
+    """Raise if a chosen backend's scene builder does not exist on disk.
+
+    DELIBERATELY SEPARATE from `project_physics_backends`, which answers "what
+    does this project DECLARE" and is pure enough to unit-test against a
+    project.json in a temp directory. This answers "can the Asset Processor
+    actually build it", which is a question about the machine. Folding the two
+    together made every synthetic project fixture in the suite start raising --
+    the fixtures were right and the merged function was wrong.
+
+    Called from `stage()`, so a real staging run refuses in seconds instead of
+    writing hundreds of sidecars whose physics groups are silently dropped.
+    """
+    for backend in backends:
+        # AN EXPLICIT COOK=1 WINS. That override means "I know this backend is
+        # active even though the scan cannot see it" -- the transitive-gem
+        # case -- and the search below is a heuristic over dll NAMES and
+        # directory layout. If it ever returns a false negative, an
+        # unoverridable check would be a wall with no way past it. Every other
+        # override in this module works the same way.
+        if os.environ.get(_BACKEND_COOK_ENV[backend], "").strip().lower() in (
+                "1", "on", "true", "yes"):
+            continue
+        prefix = _BACKEND_GEM_PREFIX.get(backend)
+        if prefix and backend_builder_missing(project_assets_root, backend):
+            raise StagingError(
+                "%s is listed in project.json but no %s*.Editor*.dll was "
+                "found in the project's build tree or any registered engine "
+                "bin. Its scene builder does not exist, so every %s mesh "
+                "group would be SILENTLY DROPPED -- the Asset Processor "
+                "reports no error, produces no cooked mesh, and the imported "
+                "level has no collision. Build the project (target "
+                "%s.Editor), or set %s=0 to stage without it."
+                % (prefix, prefix, backend, prefix, _BACKEND_COOK_ENV[backend]))
+
+
 def project_has_physx_gem(project_assets_root):
     """Back-compat: does the project cook PhysX physics meshes?"""
     return "physx" in project_physics_backends(project_assets_root)
@@ -152,6 +261,9 @@ def stage(document, source_root, project_assets_root, log=None):
     product_prefix = os.path.basename(os.path.normpath(project_assets_root)).lower()
     assets_by_guid = {a["guid"]: a for a in document["assets"]}
     cook_backends = project_physics_backends(project_assets_root)
+    # Before writing a single sidecar: a declared-but-unbuilt physics gem takes
+    # the whole physics pipeline down without one error message anywhere.
+    verify_builders_present(project_assets_root, cook_backends)
     records = []
 
     for asset in document["assets"]:
