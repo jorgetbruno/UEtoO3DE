@@ -106,6 +106,23 @@ CODES = {
     "ENV_BLOOM_THRESHOLD_APPROX": (
         INFO, "UE's negative bloom threshold is a 'no threshold' sentinel "
               "with no Atom equivalent; 0.0 is used."),
+    "ENV_VALUE_IMPLAUSIBLE": (
+        WARN, "A UE post-process value is outside the plausible range for the "
+              "Atom property it maps to -- the two engines do not share that "
+              "unit's meaning. It is clamped so the level is usable, and must "
+              "be re-tuned in O3DE. Measured: auto_exposure_bias 12.0 became "
+              "a 4096x exposure multiply and rendered the level white."),
+    "ENV_EXPOSURE_LIMIT_CONVERTED": (
+        INFO, "UE's auto-exposure min/max BRIGHTNESS is a luminance; Atom's "
+              "matching clamp is in EV, so it is imported as log2(value)."),
+    "ENV_EXPOSURE_LIMIT_APPROX": (
+        WARN, "UE's auto-exposure brightness clamp is zero or negative and "
+              "has no logarithm; Atom's EV clamp is set to its floor."),
+    "ENV_EXPOSURE_ALREADY_AUTHORED": (
+        WARN, "More than one level-wide post-process volume carries exposure "
+              "settings. Exposure is global and does not stack, so only the "
+              "highest-priority volume authors it; the others' exposure is "
+              "not applied."),
     "ENV_TYPE_UNSUPPORTED": (
         WARN, "Environment actor type has no v1 mapping; the entity keeps "
               "its transform only."),

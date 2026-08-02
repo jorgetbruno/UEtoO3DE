@@ -330,7 +330,99 @@ def _author_shape(adapter, entity_id, shape, scale, subject, report, missing,
                     "shape %r has no authoring path; skipped" % kind)
 
 
-def _collapse_convex(shapes, subject, report, adapter, cooked=False):
+# A whole-mesh convex hull replaces UE's decomposition with one solid lump.
+# Below this many elements the import authors a box PER ELEMENT instead, which
+# keeps the decomposition's spatial structure. The cap exists because the
+# collapse it overrides was put there for a real reason: one `Scaf_Tower`
+# carries 340 elements and five of them helped push an import to 24 GB. Boxes
+# are far cheaper than hulls, but "far cheaper" times 340 is still worth
+# refusing, and past a certain count the shape is better served by V-HACD
+# (UEO3DE_DECOMPOSE) than by hundreds of AABBs.
+CONVEX_PER_ELEMENT_MAX = 16
+# How much thicker UE's collision may be than the render mesh before a
+# whole-mesh hull is the wrong answer. A hull CANNOT be thicker than the mesh
+# it hulls, so when UE's own collision is substantially bigger on an axis, the
+# hull silently loses that volume.
+#
+# NOT a flatness test, and that is a correction. The obvious rule -- "the
+# render mesh has a zero extent" -- cannot be evaluated from the manifest:
+# measured on SiegeOfPonthus, `SM_Floor`'s `bounds_local` reports a Z extent of
+# 0.15 m while its exported geometry is genuinely 0.0 m thick (1089 vertices,
+# all at the same Y in the glTF basis). `bounds_local` is UE's asset bounding
+# box and does not describe what the exporter wrote. The RATIO survives that
+# disagreement: 0.51 m of collision against 0.15 m of mesh is 3.4x either way.
+CONVEX_THICKNESS_RATIO = 2.0
+MIN_MEASURABLE_EXTENT = 1e-4
+
+
+def _convex_as_box(shape):
+    """A convex element's own AABB, as a box shape dict.
+
+    UE's convex VERTICES are not reachable from Python (DIVERGENCES.md), but
+    every element carries its AABB, and a box over that AABB is a real,
+    localised volume. Returned in the same shape-dict form the box path
+    already understands, so nothing downstream needs to know.
+    """
+    low = shape["aabb_min"]
+    high = shape["aabb_max"]
+    return {
+        "type": "box",
+        "half_extents": [(high[i] - low[i]) * 0.5 for i in range(3)],
+        "offset": [(high[i] + low[i]) * 0.5 for i in range(3)],
+        "rotation": shape.get("rotation"),
+    }
+
+
+def _hull_would_under_cover(shape, mesh_bounds):
+    """Is UE's collision substantially thicker than the mesh a hull would use?
+
+    The whole-mesh convex answer hulls the RENDER mesh, and a hull cannot
+    exceed the mesh it hulls. Measured on SiegeOfPonthus: `SM_Floor`'s UE
+    convex is 5.0 x 5.0 x 0.51 m while the exported mesh is 5.0 x 5.0 x 0.0 m
+    (and `bounds_local` claims 0.15 -- see CONVEX_THICKNESS_RATIO). 179
+    entities placed it, and every one collided as an infinitely thin sheet a
+    fast body can pass straight through.
+    """
+    if not mesh_bounds:
+        return False
+    low, high = mesh_bounds.get("min"), mesh_bounds.get("max")
+    if not low or not high or len(low) != 3 or len(high) != 3:
+        return False
+    element_low, element_high = shape.get("aabb_min"), shape.get("aabb_max")
+    if not element_low or not element_high:
+        return False
+    for axis in range(3):
+        mesh_extent = abs(high[axis] - low[axis])
+        element_extent = abs(element_high[axis] - element_low[axis])
+        if element_extent < MIN_MEASURABLE_EXTENT:
+            continue
+        if element_extent > CONVEX_THICKNESS_RATIO * max(mesh_extent,
+                                                         MIN_MEASURABLE_EXTENT):
+            return True
+    return False
+
+
+def convex_per_element(environ=None):
+    """UEO3DE_CONVEX_PER_ELEMENT -> author a box per convex piece.
+
+    Off by default; see `_collapse_convex` for why the default stands.
+    Unrecognised values RAISE, like every other switch in this module.
+    """
+    source = os.environ if environ is None else environ
+    text = str(source.get("UEO3DE_CONVEX_PER_ELEMENT", "")).strip().lower()
+    if not text:
+        return False
+    if text in _BAKE_SCALE_ON:
+        return True
+    if text in _BAKE_SCALE_OFF:
+        return False
+    raise ValueError(
+        "UEO3DE_CONVEX_PER_ELEMENT=%r is not one of %s"
+        % (text, ", ".join(_BAKE_SCALE_ON + _BAKE_SCALE_OFF)))
+
+
+def _collapse_convex(shapes, subject, report, adapter, cooked=False,
+                     mesh_bounds=None, per_element=None):
     """N convex elements -> one, but ONLY where they are genuinely identical.
 
     `_author_shape` has two kinds of answer for a `convex` element and they
@@ -371,12 +463,51 @@ def _collapse_convex(shapes, subject, report, adapter, cooked=False):
     between them. A tower you could walk inside becomes solid. That is worth a
     warning whether or not it is worth 340 copies.
     """
+    if per_element is None:
+        per_element = convex_per_element()
     if base.CAP_SHAPE_CONVEX not in adapter.capabilities() and not cooked:
         # Every element becomes its own AABB box; they are not interchangeable.
         return shapes
     convex = [shape for shape in shapes if shape.get("type") == "convex"]
+
+    # A whole-mesh hull is only the better answer when the render mesh
+    # actually contains the element. Where it is FLAT on an axis the element
+    # has, the hull is a sheet and the element's own AABB is strictly more
+    # faithful -- so take the box and say so.
+    if len(convex) == 1 and _hull_would_under_cover(convex[0], mesh_bounds):
+        report.warn("PHYS_SHAPE_APPROXIMATED", subject,
+                    "UE's convex collision is much thicker than the render mesh on "
+                    "at least one axis, and a hull cannot exceed the mesh it "
+                    "hulls -- it would lose that volume. A box over the "
+                    "element's own AABB is authored instead")
+        return [_convex_as_box(shape) if shape.get("type") == "convex" else shape
+                for shape in shapes]
+
     if len(convex) <= 1:
         return shapes
+
+    # UE decomposed this, and one whole-mesh hull fills every concavity
+    # between the pieces. One box per piece keeps the decomposition's shape --
+    # but it is OPT-IN, not the default, and that is deliberate.
+    #
+    # The collapse it would override is a MEASURED decision, not an oversight:
+    # a cooked convex product is one shared asset per mesh, where per-instance
+    # geometry cost the same level 315.7 MB against 22.0 MB. Replacing a
+    # cooked hull with N AABBs also trades tighter geometry for looser on
+    # every asset, and "looser everywhere" is not obviously better than
+    # "concavities filled" -- it depends on the shape, and I have not measured
+    # which wins. So the choice is offered and named, and the default stands.
+    if per_element and len(convex) <= CONVEX_PER_ELEMENT_MAX:
+        report.warn("PHYS_SHAPE_APPROXIMATED", subject,
+                    "UE decomposes this collision into %d convex pieces; "
+                    "UEO3DE_CONVEX_PER_ELEMENT is on, so one BOX PER PIECE is "
+                    "authored from each piece's own AABB. Boxes are looser "
+                    "than UE's hulls (whose vertices are not reachable from "
+                    "Python) but the concavities between pieces survive"
+                    % len(convex))
+        return [_convex_as_box(shape) if shape.get("type") == "convex" else shape
+                for shape in shapes]
+
     kept = []
     seen = False
     for shape in shapes:
@@ -477,7 +608,8 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
         if collision.get("source") == "simple":
             for shape in _collapse_convex(
                     collision.get("shapes") or [], subject, report, adapter,
-                    cooked=bool(cooked and cooked.get("method") == "convex")):
+                    cooked=bool(cooked and cooked.get("method") == "convex"),
+                    mesh_bounds=(asset or {}).get("bounds_local")):
                 _author_shape(adapter, entity_id, shape, scale, subject, report,
                               None, cooked=cooked)
                 authored += 1

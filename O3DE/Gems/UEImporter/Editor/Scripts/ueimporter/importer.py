@@ -707,13 +707,31 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         kind = (item.get("environment") or {}).get("type")
         return 0 if kind == "skylight" else 1
 
-    for item in sorted(document["entities"], key=sky_first):
+    # Exposure is global and does not stack, so exactly one level-wide volume
+    # may author it -- and WHICH one is not arbitrary. UE resolves overlapping
+    # unbound volumes by PRIORITY, so the highest-priority volume must be
+    # reached first, or "the first one wins" would silently pick whichever the
+    # manifest happened to list first. Measured on Demonstration: two distinct
+    # volumes both named PostProcessVolume2, both unbound, both priority 0,
+    # biases 12.0 and 9.5 -- two enabled Exposure Controls and a white level.
+    def exposure_rank(item):
+        environment = item.get("environment") or {}
+        if environment.get("type") != "post_process":
+            return 0.0
+        return -float(environment.get("priority", 0) or 0)
+
+    ordered = sorted(document["entities"], key=lambda i: (sky_first(i),
+                                                          exposure_rank(i)))
+    exposure_authored = False
+
+    for item in ordered:
         entity_id = created.get(item["id"])
         environment = item.get("environment")
         if entity_id is None or environment is None:
             continue
         plans, env_warnings = env_build.plan_environment(
-            environment, item["name"], sky_already_authored=sky_authored)
+            environment, item["name"], sky_already_authored=sky_authored,
+            exposure_already_authored=exposure_authored)
         for code, detail in env_warnings:
             report.warn(code, item["name"], detail)
         if not plans:
@@ -722,6 +740,8 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             entity_id, plans, item["name"], prefab_build.resolve_component_type)
         if env_build.PHYSICAL_SKY in authored:
             sky_authored = True
+        if env_build.EXPOSURE_CONTROL in authored:
+            exposure_authored = True
         environments += 1
         emit("  %-22s %s" % (item["name"], ", ".join(authored)))
     report.count("environments_created", environments)

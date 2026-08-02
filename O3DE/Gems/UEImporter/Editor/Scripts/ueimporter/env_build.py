@@ -41,7 +41,46 @@ Atom's post-process components each carry `Overrides|... Override` weights AND
 an `Enable...` flag; a component whose enable flag is false serializes into
 the prefab looking configured while doing nothing, so the enable flag is
 always written explicitly.
+
+--------------------------------------------------------------------------
+A NUMBER THAT CROSSES ENGINES IS NOT THE SAME NUMBER
+--------------------------------------------------------------------------
+Measured on a real level (Docks/VOL4_Albert `Demonstration`, 905 entities):
+**the imported scene rendered pure white and every existing test passed.**
+Two UE post-process volumes carried `auto_exposure_bias` 12.0 and 9.5, and
+both were copied verbatim into Atom's `Manual Compensation`. That property is
+in **EV stops**, so 12.0 is a 2^12 = 4096x multiply, and with both volumes
+unbound and level-wide the stack came to ~21.5 EV.
+
+The copy was wrong in KIND, not just in size. UE's `AutoExposureBias` is
+entangled with UE's own exposure model -- its auto-exposure normalises the
+scene before the bias is added, and in UE's manual mode the base comes from
+physical camera settings. Atom's `Manual Compensation` offsets the RAW scene
+from zero. **We do not export UE's `AutoExposureMethod`, so the correct
+conversion is not derivable from the manifest at all.**
+
+So the audit below is expressed as PLAUSIBLE RANGES rather than invented
+conversions. A value inside its range transfers; a value outside it is
+clamped and REPORTED with the original, which keeps the level usable and
+tells the artist exactly what to re-tune. Inventing a factor we cannot verify
+would trade a visible failure for an invisible one.
+
+    UE key                        UE unit      Atom property        Atom unit
+    auto_exposure_bias            EV, model-   Manual Compensation  EV from 0
+                                  relative                          CLAMPED
+    auto_exposure_min_brightness  luminance    Minimum Exposure     EV
+    auto_exposure_max_brightness  luminance    Maximum Exposure     EV
+                                  -> CONVERTED with log2, reported
+    auto_exposure_speed_up/down   speed        Speed Up/Down        speed, 1:1
+    bloom_intensity               0..1 scalar  Intensity            scalar
+                                                                    CLAMPED
+
+The luminance -> EV conversion IS derivable (EV is the base-2 log of a
+luminance ratio) and so it is done rather than clamped; everything else that
+cannot be derived is bounded and reported.
 """
+
+import math
 
 # --- component names (resolve-or-fail through prefab_build) ---------------
 PHYSICAL_SKY = "Physical Sky"
@@ -91,6 +130,68 @@ P_BLOOM_THRESHOLD = P + "Threshold"
 EXPOSURE_MANUAL = 0
 EXPOSURE_EYE_ADAPTATION = 1
 
+# --- plausible ranges, and why these numbers -----------------------------
+#
+# The bound is not a style preference: it is the line past which a value
+# cannot have come from the unit the property is in.
+#
+# EXPOSURE_EV_RANGE: Atom's Manual Compensation offsets the raw scene in
+# stops. Photographic exposure compensation spans about +/-3 stops and no
+# artist hand-dials 12 (a 4096x multiply) on a scene that is already
+# correctly exposed. +/-5 leaves generous headroom for deliberate grading
+# while still catching the measured 12.0 and 9.5.
+EXPOSURE_EV_RANGE = (-5.0, 5.0)
+# Atom's eye-adaptation clamps are EV; +/-16 covers starlight to noon sun.
+EXPOSURE_LIMIT_EV_RANGE = (-16.0, 16.0)
+# UE bloom intensity is a 0..1-ish scalar and so is Atom's. Negative is
+# meaningless; the upper bound is loose because bloom is a taste control.
+BLOOM_INTENSITY_RANGE = (0.0, 10.0)
+# Below this, a UE brightness is zero or negative and log2 is undefined.
+MIN_POSITIVE_LUMINANCE = 1e-6
+
+
+def _clamped_value(value, bounds, key, atom_property, unit, warnings):
+    """`value` if it is plausible, else the nearest bound -- and a report.
+
+    Clamping rather than raising is deliberate. The manifest is a record of
+    what a person set in UE, and refusing to import a level because one slider
+    is out of range would be worse than importing it usable and saying so.
+    """
+    low, high = bounds
+    if low <= value <= high:
+        return value
+    clamped = low if value < low else high
+    warnings.append((
+        "ENV_VALUE_IMPLAUSIBLE",
+        "UE %s is %.4g, which is outside the plausible range %g..%g for "
+        "Atom's %r (%s). It has been clamped to %.4g so the level is usable; "
+        "the two engines do not share this unit's meaning, so re-tune it in "
+        "O3DE rather than trusting the UE number."
+        % (key, value, low, high, atom_property, unit, clamped)))
+    return clamped
+
+
+def _luminance_to_ev(value, key, warnings):
+    """UE's auto-exposure brightness clamps (luminance) as Atom's EV clamps.
+
+    This one IS derivable -- EV is the base-2 log of a luminance ratio -- so
+    it is converted instead of clamped. Copying the raw luminance would put
+    0.03 into a field that means "EV -5", which is a 32x error in the
+    direction nothing would notice until a scene was too dark.
+    """
+    if value <= MIN_POSITIVE_LUMINANCE:
+        warnings.append((
+            "ENV_EXPOSURE_LIMIT_APPROX",
+            "UE %s is %.4g, which has no logarithm; Atom's matching EV clamp "
+            "is set to its floor instead" % (key, value)))
+        return EXPOSURE_LIMIT_EV_RANGE[0]
+    converted = math.log(value, 2.0)
+    warnings.append((
+        "ENV_EXPOSURE_LIMIT_CONVERTED",
+        "UE %s is a LUMINANCE (%.4g); Atom's matching clamp is in EV, so it "
+        "is imported as log2(%.4g) = %.3f EV" % (key, value, value, converted)))
+    return converted
+
 # PhotometricUnit::Ev100Luminance -- PhysicalSkyComponentConfig's own default.
 PHOTOMETRIC_EV100_LUMINANCE = 4
 # PhysicalSkyDefaultIntensity, the value a fresh Physical Sky ships with.
@@ -126,13 +227,23 @@ def fog_density_to_atom(ue_density):
     return min(FOG_DENSITY_MAX, scaled)
 
 
-def plan_environment(environment, subject, sky_already_authored=False):
+def plan_environment(environment, subject, sky_already_authored=False,
+                     exposure_already_authored=False):
     """Manifest `environment` block → authoring plan.
 
     Returns `(plans, warnings)` where `plans` is a list of
     `{"component": name, "properties": [(path, kind, value), ...]}` -- a list
     because Atom's post-process components only work as members of a PostFX
     Layer, so fog and post-process each author two components on one entity.
+
+    `exposure_already_authored` exists for the same reason
+    `sky_already_authored` does: EXPOSURE IS A GLOBAL, NON-ADDITIVE PROPERTY,
+    and a second level-wide Exposure Control is always wrong. Measured on
+    `Demonstration`: two DIFFERENT UE volumes both named `PostProcessVolume2`,
+    both `unbound`, both priority 0, carrying bias 12.0 and 9.5 -- so the
+    level got two enabled Exposure Controls and rendered white. UE resolves
+    overlapping unbound volumes by priority into ONE result; authoring both is
+    not a faithful import of that, it is a stack.
     """
     warnings = []
     kind = (environment.get("type") or "unknown").lower()
@@ -238,14 +349,35 @@ def plan_environment(environment, subject, sky_already_authored=False):
         exposure = []
         if "auto_exposure_bias" in overrides:
             exposure.append((P_EXPOSURE_COMPENSATION, KIND_FLOAT,
-                             float(overrides["auto_exposure_bias"])))
+                             _clamped_value(
+                                 float(overrides["auto_exposure_bias"]),
+                                 EXPOSURE_EV_RANGE, "auto_exposure_bias",
+                                 "Manual Compensation", "EV stops from zero",
+                                 warnings)))
+        # Luminance clamps are CONVERTED (log2); speeds are the same kind of
+        # quantity in both engines and pass through.
         for key, path in (("auto_exposure_min_brightness", P_EXPOSURE_MIN),
-                          ("auto_exposure_max_brightness", P_EXPOSURE_MAX),
-                          ("auto_exposure_speed_up", P_EXPOSURE_SPEED_UP),
+                          ("auto_exposure_max_brightness", P_EXPOSURE_MAX)):
+            if key in overrides:
+                exposure.append((path, KIND_FLOAT, _luminance_to_ev(
+                    float(overrides[key]), key, warnings)))
+        for key, path in (("auto_exposure_speed_up", P_EXPOSURE_SPEED_UP),
                           ("auto_exposure_speed_down", P_EXPOSURE_SPEED_DOWN)):
             if key in overrides:
                 exposure.append((path, KIND_FLOAT, float(overrides[key])))
-        if exposure:
+        if exposure and exposure_already_authored:
+            # The PostFX layer is still authored -- this volume's fog, bloom
+            # and weights are its own -- but the level's exposure is decided
+            # once. Reported, never silent: losing a setting quietly is how
+            # the stack that produced a white level went unnoticed.
+            warnings.append((
+                "ENV_EXPOSURE_ALREADY_AUTHORED",
+                "another level-wide post-process volume already authored the "
+                "Exposure Control; exposure is global and does not stack, so "
+                "this volume's exposure settings are NOT applied. UE resolves "
+                "overlapping unbound volumes by priority into one result -- if "
+                "this one should win, raise its priority in UE and re-export"))
+        elif exposure:
             eye_adaptation = any(key in overrides for key in (
                 "auto_exposure_min_brightness", "auto_exposure_max_brightness",
                 "auto_exposure_speed_up", "auto_exposure_speed_down"))
@@ -260,7 +392,10 @@ def plan_environment(environment, subject, sky_already_authored=False):
         bloom = []
         if "bloom_intensity" in overrides:
             bloom.append((P_BLOOM_INTENSITY, KIND_FLOAT,
-                          float(overrides["bloom_intensity"])))
+                          _clamped_value(
+                              float(overrides["bloom_intensity"]),
+                              BLOOM_INTENSITY_RANGE, "bloom_intensity",
+                              "Intensity", "0..1-ish scalar", warnings)))
         if "bloom_threshold" in overrides:
             threshold = float(overrides["bloom_threshold"])
             if threshold < 0.0:

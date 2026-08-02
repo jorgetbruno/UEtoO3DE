@@ -202,6 +202,125 @@ def test_exposure_type_follows_the_overridden_settings():
           "eye-adaptation settings mean eye-adaptation exposure")
 
 
+def test_implausible_exposure_bias_is_clamped_and_reported():
+    """A ×4096 exposure passed every test in this file until it shipped.
+
+    MEASURED on Docks/VOL4_Albert `Demonstration` (905 entities): two UE
+    volumes carried auto_exposure_bias 12.0 and 9.5, both were copied straight
+    into Atom's `Manual Compensation` -- a property in EV STOPS -- and the
+    imported level rendered PURE WHITE. Every other check passed: 905
+    entities, 693/693 colliders verified, 0 Asset Processor errors.
+
+    Nothing here asserted MAGNITUDE, and every fixture used a plausible value
+    (1.5, 1.75), so a four-thousand-fold error was invisible. That is the gap
+    this test exists to close -- the bound matters more than the exact number.
+    """
+    blown = dict(PPV, overrides={"auto_exposure_bias": 12.0})
+    plans, warnings = env_build.plan_environment(blown, "ppv")
+    compensation = value_at(plans, env_build.EXPOSURE_CONTROL,
+                            env_build.P_EXPOSURE_COMPENSATION)
+    low, high = env_build.EXPOSURE_EV_RANGE
+    check(low <= compensation <= high,
+          "an exposure compensation of 12 EV is 4096x and must be clamped "
+          "into %r; got %r" % (env_build.EXPOSURE_EV_RANGE, compensation))
+    check(any(code == "ENV_VALUE_IMPLAUSIBLE" for code, _ in warnings),
+          "clamping must be REPORTED -- a silently altered value is a second "
+          "invisible failure, not a fix")
+    check(any("12" in detail for _code, detail in warnings),
+          "the report must name the ORIGINAL value so it can be re-tuned")
+
+    # The other direction: a plausible value must pass through untouched, or
+    # the guard would quietly flatten every artist's grading.
+    sane = dict(PPV, overrides={"auto_exposure_bias": 1.75})
+    plans, warnings = env_build.plan_environment(sane, "ppv")
+    check(value_at(plans, env_build.EXPOSURE_CONTROL,
+                   env_build.P_EXPOSURE_COMPENSATION) == 1.75,
+          "a plausible compensation must be imported EXACTLY")
+    check(not any(code == "ENV_VALUE_IMPLAUSIBLE" for code, _ in warnings),
+          "a plausible value must not be reported as implausible")
+
+    negative = dict(PPV, overrides={"auto_exposure_bias": -30.0})
+    plans, _warnings = env_build.plan_environment(negative, "ppv")
+    check(value_at(plans, env_build.EXPOSURE_CONTROL,
+                   env_build.P_EXPOSURE_COMPENSATION) == low,
+          "an implausibly DARK bias must clamp too; a level that imports "
+          "pure black is no better than one that imports pure white")
+
+
+def test_exposure_brightness_limits_are_luminance_not_ev():
+    """UE's min/max BRIGHTNESS is a luminance; Atom's clamp is in EV.
+
+    The second unit mismatch in the same block, found by auditing after the
+    first. Unlike the bias, this conversion IS derivable -- EV is the base-2
+    log of a luminance ratio -- so it is converted rather than clamped.
+    Copying 0.03 verbatim would mean "EV 0.03" where "EV -5.06" was intended.
+    """
+    volume = dict(PPV, overrides={"auto_exposure_min_brightness": 0.03,
+                                  "auto_exposure_max_brightness": 8.0})
+    plans, warnings = env_build.plan_environment(volume, "ppv")
+    minimum = value_at(plans, env_build.EXPOSURE_CONTROL, env_build.P_EXPOSURE_MIN)
+    maximum = value_at(plans, env_build.EXPOSURE_CONTROL, env_build.P_EXPOSURE_MAX)
+    check(abs(maximum - 3.0) < 1e-6,
+          "log2(8) is 3 EV; got %r" % maximum)
+    check(abs(minimum - (-5.058893689053568)) < 1e-6,
+          "log2(0.03) is about -5.06 EV; got %r" % minimum)
+    check(minimum != 0.03 and maximum != 8.0,
+          "the raw luminances must NOT reach the EV properties")
+    check(any(code == "ENV_EXPOSURE_LIMIT_CONVERTED" for code, _ in warnings),
+          "the conversion must be reported")
+
+    # log2 is undefined at zero, and UE writes 0 to mean "no lower clamp".
+    zero = dict(PPV, overrides={"auto_exposure_min_brightness": 0.0})
+    plans, warnings = env_build.plan_environment(zero, "ppv")
+    floor = value_at(plans, env_build.EXPOSURE_CONTROL, env_build.P_EXPOSURE_MIN)
+    check(floor == env_build.EXPOSURE_LIMIT_EV_RANGE[0],
+          "a zero brightness has no logarithm and must fall to the EV floor")
+    check(any(code == "ENV_EXPOSURE_LIMIT_APPROX" for code, _ in warnings),
+          "the floor substitution must be reported")
+
+
+def test_bloom_intensity_is_bounded():
+    """Same class as the exposure bias: a scalar whose meaning may not carry."""
+    plans, warnings = env_build.plan_environment(
+        dict(PPV, overrides={"bloom_intensity": 500.0}), "ppv")
+    low, high = env_build.BLOOM_INTENSITY_RANGE
+    check(low <= value_at(plans, env_build.BLOOM,
+                          env_build.P_BLOOM_INTENSITY) <= high,
+          "an absurd bloom intensity must be clamped")
+    check(any(code == "ENV_VALUE_IMPLAUSIBLE" for code, _ in warnings),
+          "clamped bloom must be reported")
+
+
+def test_only_one_level_wide_volume_authors_exposure():
+    """Exposure is global. Two enabled Exposure Controls is always a bug.
+
+    MEASURED on `Demonstration`: two DIFFERENT UE volumes, both named
+    `PostProcessVolume2`, both unbound, both priority 0, biases 12.0 and 9.5.
+    Both were authored, so the level carried two enabled Exposure Controls.
+    UE resolves overlapping unbound volumes by priority into ONE result;
+    authoring both is not a faithful import of that, it is a stack.
+    """
+    volume = dict(PPV, overrides={"auto_exposure_bias": 1.5,
+                                  "bloom_intensity": 0.5})
+
+    first, _warnings = env_build.plan_environment(volume, "ppv")
+    check(env_build.EXPOSURE_CONTROL in components_of(first),
+          "the first level-wide volume must author exposure")
+
+    second, warnings = env_build.plan_environment(
+        volume, "ppv2", exposure_already_authored=True)
+    check(env_build.EXPOSURE_CONTROL not in components_of(second),
+          "a second level-wide volume must NOT author another Exposure "
+          "Control; got %r" % components_of(second))
+    check(any(code == "ENV_EXPOSURE_ALREADY_AUTHORED" for code, _ in warnings),
+          "dropping the second volume's exposure must be reported, not silent")
+    check(env_build.POSTFX_LAYER in components_of(second),
+          "the layer itself must still be authored -- only EXPOSURE is "
+          "global; the volume's other settings are its own")
+    check(env_build.BLOOM in components_of(second),
+          "bloom is per-layer and must survive the exposure de-duplication")
+
+
 def test_ue_bloom_threshold_sentinel():
     """UE's -1 means 'bloom everything'; Atom has no sentinel."""
     sentinel = dict(PPV, overrides={"bloom_intensity": 0.7, "bloom_threshold": -1.0})
