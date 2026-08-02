@@ -44,6 +44,61 @@ ROLE_TOKENS = (
 EXCLUDE_TOKENS = ("blend", "grunge", "ground", "detail", "macro", "dirt",
                   "noise", "mask", "overlay", "puddle", "moss", "snow")
 
+# THE PACKING TOKEN NAMES THE CHANNEL ORDER, AND THE FOUR ARE NOT THE SAME.
+# They were all treated as ORM, which is correct for exactly half of them:
+#
+#     ORM  Occlusion, Roughness, Metallic   R=ao        G=roughness  B=metallic
+#     ARM  AO,        Roughness, Metallic   R=ao        G=roughness  B=metallic
+#     RMA  Roughness, Metallic,  AO         R=roughness G=metallic   B=ao
+#     MRA  Metallic,  Roughness, AO         R=metallic  G=roughness  B=ao
+#
+# Measured on Docks/VOL4_Albert: 53 textures named `*_RMA`, every one split as
+# if it were ORM -- so roughness received metallic data, metallic received AO,
+# and AO received roughness. ALL THREE CHANNELS WRONG on every PBR surface in
+# the level, which is what "the materials are all weird" looked like.
+#
+# This only bites materials classified BY NAME (`MAT_PARAMS_BY_NAME`), where
+# there is no ComponentMask in the graph to read the truth from -- 59 of 62
+# materials on that level. When the graph IS walkable the channel comes from
+# the mask and none of this applies.
+PACKED_CHANNEL_ORDER = {
+    "orm": {"R": "ao", "G": "roughness", "B": "metallic"},
+    "arm": {"R": "ao", "G": "roughness", "B": "metallic"},
+    "rma": {"R": "roughness", "G": "metallic", "B": "ao"},
+    "mra": {"R": "metallic", "G": "roughness", "B": "ao"},
+}
+# What a name with no recognisable token falls back to. ORM is the most common
+# convention and the previous behaviour, so this is the conservative default --
+# but the caller reports it, because a guess that is silent is how the RMA
+# levels shipped wrong.
+DEFAULT_PACKING = "orm"
+
+
+def packing_token(name):
+    """Which packed convention this parameter name declares, or None.
+
+    Word-boundary matched, like the role token itself: "armor" must not read
+    as ARM. Longest token first is unnecessary here (all four are 3 letters)
+    but the word split already prevents substring accidents.
+    """
+    words = _words(name)
+    for token in PACKED_CHANNEL_ORDER:
+        if token in words:
+            return token
+    return None
+
+
+def packed_channel_order(name):
+    """`{channel: role}` for a packed texture parameter, and whether it was known.
+
+    Returns `(order, token)`; `token` is None when the name declared nothing
+    and the ORM default was assumed.
+    """
+    token = packing_token(name)
+    if token is None:
+        return dict(PACKED_CHANNEL_ORDER[DEFAULT_PACKING]), None
+    return dict(PACKED_CHANNEL_ORDER[token]), token
+
 
 def _normalize(name):
     return re.sub(r"[^a-z0-9]", "", str(name).lower())

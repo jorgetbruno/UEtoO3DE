@@ -702,9 +702,23 @@ def _classify_by_parameter_names(master, instance, bank, warnings, subject,
     if "normal" in roles:
         request(roles["normal"], "normal", None, "normal")
     if "orm" in roles:
-        request(roles["orm"], "ao", "R", "occlusion")
-        request(roles["orm"], "roughness", "G", "roughness")
-        request(roles["orm"], "metallic", "B", "metallic")
+        # THE TOKEN NAMES THE ORDER. ORM/ARM/RMA/MRA pack the same three maps
+        # in different channels, and this used to split all four as ORM --
+        # correct for two of them and wrong on all three channels for the
+        # other two. See param_roles.PACKED_CHANNEL_ORDER for the measurement.
+        order, token = param_roles.packed_channel_order(roles["orm"])
+        role_keys = {"ao": "occlusion", "roughness": "roughness",
+                     "metallic": "metallic"}
+        for channel in ("R", "G", "B"):
+            role = order[channel]
+            request(roles["orm"], role, channel, role_keys[role])
+        if token is None:
+            warnings.add(
+                "MAT_PACKED_ORDER_ASSUMED", subject,
+                "packed texture parameter %r declares no ORM/ARM/RMA/MRA "
+                "token, so ORM channel order was assumed; if the source packs "
+                "them differently, roughness/metallic/AO are swapped"
+                % roles["orm"])
     else:
         if "roughness" in roles:
             request(roles["roughness"], "roughness", None, "roughness")

@@ -127,6 +127,61 @@ def test_parameter_role_matching():
           "unrecognizable names must yield no roles")
 
 
+def test_packed_channel_order_follows_the_token():
+    """ORM/ARM/RMA/MRA are FOUR orders, not four spellings of one.
+
+    THE BUG THIS PINS, measured on Docks/VOL4_Albert `Demonstration`: 53
+    textures named `*_RMA` were every one split as if they were ORM, because
+    all four tokens mapped to a single role and the splitter hard-coded
+    R->ao, G->roughness, B->metallic. So roughness received METALLIC data,
+    metallic received AO, and AO received ROUGHNESS -- all three channels
+    wrong on every PBR surface in the level.
+
+    Nothing caught it: the material files were well-formed, every texture
+    resolved, the importer assigned 810 materials, and the Asset Processor
+    reported no errors. The only symptom was that the level looked wrong.
+
+    This only applies to name-classified materials (`MAT_PARAMS_BY_NAME`);
+    when the graph is walkable the channel comes from its ComponentMask.
+    """
+    from ueo3de import param_roles
+
+    expected = {
+        "ORM": {"R": "ao", "G": "roughness", "B": "metallic"},
+        "ARM": {"R": "ao", "G": "roughness", "B": "metallic"},
+        "RMA": {"R": "roughness", "G": "metallic", "B": "ao"},
+        "MRA": {"R": "metallic", "G": "roughness", "B": "ao"},
+    }
+    for token, want in expected.items():
+        order, seen = param_roles.packed_channel_order("T_Boat_17a_%s" % token)
+        check(seen == token.lower(),
+              "%r should be recognised as %r, got %r" % (token, token.lower(), seen))
+        check(order == want,
+              "%s must split as %r, got %r" % (token, want, order))
+
+    # The two that differ are the whole point: if these ever agree, the fix
+    # has been undone.
+    orm, _ = param_roles.packed_channel_order("T_X_ORM")
+    rma, _ = param_roles.packed_channel_order("T_X_RMA")
+    check(orm != rma,
+          "ORM and RMA must NOT split alike -- treating them alike is the bug")
+    check(rma["R"] == "roughness" and orm["R"] == "ao",
+          "the R channel is roughness in RMA and occlusion in ORM")
+
+    # An unlabelled packed map falls back to ORM, and the caller must be able
+    # to see that it was a guess.
+    order, seen = param_roles.packed_channel_order("T_Surface_Packed")
+    check(seen is None,
+          "a name with no convention token must report None, not a guess "
+          "dressed as a fact")
+    check(order == expected["ORM"],
+          "the fallback is ORM (most common, and the previous behaviour)")
+
+    # Word boundaries still apply: "armor" is not ARM.
+    check(param_roles.packing_token("Armor Packed") is None,
+          "'Armor' must not be read as the ARM packing token")
+
+
 def test_manifest_material_data(document):
     for name in ("M_Fixture_PBR", "M_Fixture_ORM", "M_Fixture_Masked",
                  "M_Fixture_Translucent"):
@@ -258,6 +313,8 @@ def main():
     for name, test in (
             ("tga split (synthetic, known channels)", lambda: test_tga_split_synthetic(scratch)),
             ("parameter role matching (pure)", test_parameter_role_matching),
+            ("packed channel order ORM/ARM/RMA/MRA (pure)",
+             test_packed_channel_order_follows_the_token),
             ("manifest material_data", lambda: test_manifest_material_data(document)),
             ("exported texture files", lambda: test_exported_textures(document)),
             ("staged .material JSON", lambda: test_staged_materials(document, project)),

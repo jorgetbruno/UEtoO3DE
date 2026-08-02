@@ -80,6 +80,11 @@ CODES = {
               "internals Python cannot walk; the material was classified "
               "from its texture parameter NAMES instead. Role assignment is "
               "heuristic -- check the named parameters."),
+    "MAT_PACKED_ORDER_ASSUMED": (
+        WARN, "A packed AO/roughness/metallic texture parameter names no "
+              "ORM/ARM/RMA/MRA convention, so ORM channel order was assumed. "
+              "If the source packs them differently, all three maps are "
+              "swapped -- measured on a level of *_RMA textures split as ORM."),
 
     # --- environment (M6) ---
     "ENV_POSTPROCESS_UNMAPPED": (
