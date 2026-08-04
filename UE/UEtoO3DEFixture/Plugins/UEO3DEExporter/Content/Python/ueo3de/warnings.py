@@ -80,6 +80,11 @@ CODES = {
               "internals Python cannot walk; the material was classified "
               "from its texture parameter NAMES instead. Role assignment is "
               "heuristic -- check the named parameters."),
+    "MAT_PACKED_TEXTURE_SPLIT": (
+        INFO, "One texture drove two or more of roughness/metallic/AO with no "
+              "channel mask, so it is a packed map and was split by channel. "
+              "Exporting it whole three times made all three read the same "
+              "data -- measured as three byte-identical 48 MB copies."),
     "MAT_PACKED_ORDER_ASSUMED": (
         WARN, "A packed AO/roughness/metallic texture parameter names no "
               "ORM/ARM/RMA/MRA convention, so ORM channel order was assumed. "

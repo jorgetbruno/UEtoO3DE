@@ -287,6 +287,19 @@ class TextureBank:
     def entries(self):
         return [record["entry"] for record in self._records.values()]
 
+    def find_by_guid(self, guid):
+        """(key, texture, entry) for a planned record, or (None, None, None)."""
+        for key, record in self._records.items():
+            if record["entry"]["guid"] == guid:
+                return key, record["texture"], record["entry"]
+        return None, None, None
+
+    def discard(self, key):
+        """Un-plan an export. Used when a whole-texture request is replaced
+        by channel splits -- otherwise the full RGB copy is still written and
+        the manifest carries a texture nothing references."""
+        self._records.pop(key, None)
+
     def _run_export_task(self, texture, path):
         task = unreal.AssetExportTask()
         task.object = texture
@@ -554,6 +567,80 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
     return None
 
 
+# Manifest key -> the role name used in PACKED_CHANNEL_ORDER.
+_PACKABLE_KEYS = {"roughness": "roughness", "metallic": "metallic",
+                  "occlusion": "ao"}
+
+
+def split_shared_packed_texture(properties, bank, warnings, subject):
+    """One texture feeding several of roughness/metallic/AO is a PACKED map.
+
+    THE BUG THIS FIXES, measured on Vehicles/VOL4_RetroCars: roughness,
+    metallic and occlusion all resolved to `TX_Car_24a_RMA` with NO channel
+    hint, so each was exported WHOLE. The three files came out byte-identical
+    (same MD5, 50,331,666 bytes each -- three 48 MB copies of one image), and
+    Atom then read the same data for all three. Metallic and AO were being
+    driven by the roughness map; the cars rendered dark and wrongly reflective.
+
+    It reaches here and not the name-heuristic path because the graph WAS
+    walkable: `_follow` found a texture for each property but there was no
+    ComponentMask between them, so `channel_hint` stayed None three times over.
+    Nothing downstream could tell that one texture was doing three jobs.
+
+    The tell is unambiguous -- the SAME texture guid on two or more of those
+    three roles, none of them channel-masked. No single-role material can look
+    like that, so this cannot misfire on a mesh that genuinely uses one map for
+    one job. Which channel carries which role comes from the packing token in
+    the texture's own name (param_roles.PACKED_CHANNEL_ORDER); an unlabelled
+    one falls back to ORM and says so.
+    """
+    # GROUPED BY THE SOURCE TEXTURE, NOT BY THE GUID. `TextureBank.request`
+    # derives the guid from `ue_path + "#" + role`, so one texture requested
+    # for roughness, metallic and AO comes back as THREE DIFFERENT guids --
+    # which is exactly why the three exports had different filenames and
+    # identical bytes. Grouping on guid finds nothing, every time.
+    shared = {}
+    resolved = {}
+    for key, role in _PACKABLE_KEYS.items():
+        spec = properties.get(key)
+        if not spec or spec.get("source") != "texture" or spec.get("channel"):
+            continue
+        bank_key, texture, entry = bank.find_by_guid(spec["texture_guid"])
+        if texture is None:
+            continue
+        resolved[key] = (bank_key, texture, entry)
+        shared.setdefault(entry.get("ue_path"), []).append((key, role))
+
+    for ue_path, members in shared.items():
+        if len(members) < 2:
+            continue
+        bank_key, texture, entry = resolved[members[0][0]]
+        order, token = param_roles.packed_channel_order(entry.get("name") or "")
+        role_to_channel = {role: channel for channel, role in order.items()}
+        for key, role in members:
+            channel = role_to_channel.get(role)
+            if channel is None:
+                continue
+            split = bank.request(texture, role, channel)
+            properties[key] = dict(properties[key],
+                                   texture_guid=split["guid"], channel=channel)
+        # Each role had its OWN whole-texture request (one guid per role), so
+        # every one of them has to be dropped or the full 48 MB copies still
+        # get written and the manifest carries textures nothing references.
+        for key, _role in members:
+            member_key = resolved[key][0]
+            if member_key is not None:
+                bank.discard(member_key)
+        warnings.add(
+            "MAT_PACKED_TEXTURE_SPLIT", subject,
+            "%s drives %s from one texture with no channel mask, so it is a "
+            "packed map; split as %s%s"
+            % (entry.get("name"), "/".join(key for key, _r in members),
+               token.upper() if token else "ORM",
+               "" if token else " (no ORM/ARM/RMA/MRA token in the name -- "
+                               "assumed; if it packs differently these are swapped)"))
+
+
 # MakeMaterialAttributes input names -> (manifest key, role suffix)
 _ATTRIBUTE_INPUTS = {
     "BaseColor": ("base_color", "basecolor"),
@@ -638,6 +725,7 @@ def _classify_material_attributes(master, instance, bank, warnings, subject):
                                    warnings, subject)
         if spec is not None:
             properties[key] = spec
+    split_shared_packed_texture(properties, bank, warnings, subject)
     return properties
 
 

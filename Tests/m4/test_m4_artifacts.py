@@ -127,6 +127,143 @@ def test_parameter_role_matching():
           "unrecognizable names must yield no roles")
 
 
+def test_one_texture_on_several_roles_is_a_packed_map():
+    """Roughness+metallic+AO from ONE texture with no mask is packed.
+
+    MEASURED on Vehicles/VOL4_RetroCars: the graph WAS walkable, so each
+    property found its texture -- but there was no ComponentMask between them,
+    so every channel hint came back None and the same TX_Car_24a_RMA was
+    exported WHOLE three times. The three files were byte-identical (same MD5,
+    50,331,666 bytes each), so Atom read the same data for roughness, metallic
+    and AO. Metallic and occlusion were driven by the roughness map and the
+    cars rendered dark and wrongly reflective.
+
+    Same root cause as the ORM/RMA bug, reached by the other classification
+    path -- which is why the earlier fix did not cover this level.
+    """
+    # material_export imports `unreal` at module scope; the function under
+    # test never touches it, so a bare stub keeps this suite offline.
+    import types
+    sys.modules.setdefault("unreal", types.ModuleType("unreal"))
+    from ueo3de import material_export
+
+    class FakeTexture(object):
+        def __init__(self, name): self._name = name
+        def get_name(self): return self._name
+
+    class FakeBank(object):
+        """Enough of TextureBank to observe what gets requested.
+
+        MODELS THE REAL GUID SCHEME: `request` derives the guid from
+        ue_path + "#" + role, so ONE texture on three roles yields THREE
+        DIFFERENT guids. An earlier version of this fake handed out a single
+        shared guid; the test passed and the real export did nothing, because
+        the code was grouping on guid and never saw a shared texture.
+        """
+        def __init__(self, ue_path, texture, name):
+            self.ue_path = ue_path
+            self.texture = texture
+            self.name = name
+            self.records = {}
+            self.requested = []
+            self.discarded = []
+            # Whole-texture requests, one per role, as the real exporter makes.
+            for role in ("roughness", "metallic", "ao"):
+                self.request(texture, role, None)
+
+        def request(self, texture, role, channel=None):
+            self.requested.append((texture.get_name(), role, channel))
+            role_key = role if channel is None else "%s@%s" % (role, channel)
+            guid = "%s#%s" % (self.ue_path, role_key)
+            self.records[(self.ue_path, role_key)] = {
+                "entry": {"guid": guid, "name": self.name,
+                          "ue_path": self.ue_path},
+                "texture": texture}
+            return {"guid": guid}
+
+        def find_by_guid(self, guid):
+            for key, rec in self.records.items():
+                if rec["entry"]["guid"] == guid:
+                    return key, rec["texture"], rec["entry"]
+            return None, None, None
+
+        def discard(self, key):
+            self.discarded.append(key)
+            self.records.pop(key, None)
+
+    class FakeWarnings(object):
+        def __init__(self): self.added = []
+        def add(self, code, subject, detail): self.added.append((code, subject, detail))
+
+    def packed_props(texture_name):
+        texture = FakeTexture(texture_name)
+        bank = FakeBank("/Game/T/%s" % texture_name, texture, texture_name)
+        props = {}
+        for key, role in (("roughness", "roughness"), ("metallic", "metallic"),
+                          ("occlusion", "ao")):
+            props[key] = {"source": "texture",
+                          "texture_guid": "/Game/T/%s#%s" % (texture_name, role),
+                          "channel": None, "factor": None}
+        warns = FakeWarnings()
+        material_export.split_shared_packed_texture(props, bank, warns, "MI_X")
+        return props, bank, warns
+
+    props, bank, warns = packed_props("TX_Car_24a_RMA")
+    check(props["roughness"]["channel"] == "R",
+          "RMA: roughness is the R channel, got %r" % props["roughness"]["channel"])
+    check(props["metallic"]["channel"] == "G",
+          "RMA: metallic is the G channel, got %r" % props["metallic"]["channel"])
+    check(props["occlusion"]["channel"] == "B",
+          "RMA: AO is the B channel, got %r" % props["occlusion"]["channel"])
+    check(len({props[k]["texture_guid"] for k in props}) == 3,
+          "the three roles must end up on three DIFFERENT channel-split "
+          "entries; got %r" % {k: props[k]["texture_guid"] for k in props})
+    check(len(bank.discarded) == 3,
+          "all THREE whole-texture requests must be dropped -- there is one "
+          "per role, and leaving any writes a full 48 MB copy nothing uses; "
+          "discarded %r" % (bank.discarded,))
+    check(bank.discarded,
+          "the whole-texture request must be discarded once the splits replace "
+          "it, or the 48 MB full copy is still exported and nothing uses it")
+    check(any(c == "MAT_PACKED_TEXTURE_SPLIT" for c, _s, _d in warns.added),
+          "the split must be reported")
+
+    # ORM order for an ORM-named map, so the detection is not RMA-specific.
+    props, _bank, _warns = packed_props("TX_Wall_ORM")
+    check(props["occlusion"]["channel"] == "R" and props["metallic"]["channel"] == "B",
+          "ORM: AO is R and metallic is B, got %r"
+          % {k: props[k]["channel"] for k in props})
+
+    # ONE role on a texture is a normal dedicated map and must NOT be split.
+    texture = FakeTexture("TX_Thing_Roughness")
+    bank = FakeBank("/Game/T/Solo", texture, "TX_Thing_Roughness")
+    props = {"roughness": {"source": "texture",
+                           "texture_guid": "/Game/T/Solo#roughness",
+                           "channel": None, "factor": None}}
+    warns = FakeWarnings()
+    material_export.split_shared_packed_texture(props, bank, warns, "MI_Y")
+    check(props["roughness"]["texture_guid"] == "/Game/T/Solo#roughness"
+          and props["roughness"]["channel"] is None,
+          "a texture used by a SINGLE role is a dedicated map and must be left "
+          "whole; got %r" % props["roughness"])
+    check(not warns.added, "no split, no warning")
+
+    # Already channel-masked properties are the graph's own answer: leave them.
+    texture = FakeTexture("TX_Masked_RMA")
+    bank = FakeBank("/Game/T/Masked", texture, "TX_Masked_RMA")
+    props = {"roughness": {"source": "texture",
+                           "texture_guid": "/Game/T/Masked#roughness@R",
+                           "channel": "R", "factor": None},
+             "metallic": {"source": "texture",
+                          "texture_guid": "/Game/T/Masked#metallic@G",
+                          "channel": "G", "factor": None}}
+    warns = FakeWarnings()
+    material_export.split_shared_packed_texture(props, bank, warns, "MI_Z")
+    check(props["roughness"]["channel"] == "R" and props["metallic"]["channel"] == "G",
+          "a ComponentMask in the graph is authoritative and must not be "
+          "second-guessed; got %r" % {k: props[k]["channel"] for k in props})
+
+
 def test_packed_channel_order_follows_the_token():
     """ORM/ARM/RMA/MRA are FOUR orders, not four spellings of one.
 
@@ -315,6 +452,8 @@ def main():
             ("parameter role matching (pure)", test_parameter_role_matching),
             ("packed channel order ORM/ARM/RMA/MRA (pure)",
              test_packed_channel_order_follows_the_token),
+            ("one texture on several roles is packed (pure)",
+             test_one_texture_on_several_roles_is_a_packed_map),
             ("manifest material_data", lambda: test_manifest_material_data(document)),
             ("exported texture files", lambda: test_exported_textures(document)),
             ("staged .material JSON", lambda: test_staged_materials(document, project)),
