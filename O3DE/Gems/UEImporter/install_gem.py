@@ -44,6 +44,26 @@ def _forward(path):
     return os.path.abspath(path).replace("\\", "/")
 
 
+def _gem_base_name(entry):
+    """`"UEImporter==0.3.0"` -> `"UEImporter"`.
+
+    O3DE writes VERSION SPECIFIERS into `gem_names` ("UEImporter==0.3.0",
+    "PhysX>=2.0"), and comparing the raw string against a bare name reports a
+    gem that is plainly there as missing -- measured on a project whose
+    gem_names contained exactly that, where `--check` said "not in gem_names"
+    and the install path would then have appended a SECOND entry for the same
+    gem. `staging.project_physics_backends` already strips these; this is the
+    same rule, and the two must agree or the two halves of the pipeline
+    disagree about whether a gem is present.
+    """
+    name = entry if isinstance(entry, str) else (entry or {}).get("name", "")
+    return str(name).split(">")[0].split("<")[0].split("=")[0].strip()
+
+
+def _gem_base_names(gem_names):
+    return [_gem_base_name(entry) for entry in gem_names]
+
+
 def setreg_contents(gem_root=None):
     """The registry entry that mounts the gem. See the module docstring."""
     root = _forward(gem_root or GEM_ROOT)
@@ -75,7 +95,7 @@ def install(project_path, gem_root=None, log=print):
         document = json.load(handle)
 
     gem_names = document.setdefault("gem_names", [])
-    plain = [g if isinstance(g, str) else g.get("name") for g in gem_names]
+    plain = _gem_base_names(gem_names)
     if GEM_NAME not in plain:
         gem_names.append(GEM_NAME)
         changes.append("added %s to gem_names" % GEM_NAME)
@@ -193,8 +213,7 @@ def check(project_path, gem_root=None, log=print):
 
     with open(project_json, "r") as handle:
         document = json.load(handle)
-    plain = [g if isinstance(g, str) else g.get("name")
-             for g in document.get("gem_names", [])]
+    plain = _gem_base_names(document.get("gem_names", []))
     if GEM_NAME not in plain:
         problems.append("%s is not in project.json gem_names" % GEM_NAME)
 

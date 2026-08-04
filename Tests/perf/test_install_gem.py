@@ -96,6 +96,46 @@ except Exception as error:  # noqa: BLE001
           "a malformed gem.json raised %s instead of being reported -- a check "
           "that throws cannot be used to decide anything" % type(error).__name__)
 
+# --- 5. gem_names carry VERSION SPECIFIERS ------------------------------------
+# Measured on D:/O3DE/Projects/Phoenix, whose project.json contained
+# "UEImporter==0.3.0": `--check` reported "UEImporter is not in project.json
+# gem_names" about a gem that was plainly there, and `install` would then have
+# appended a SECOND entry for the same gem. `staging.project_physics_backends`
+# already strips these specifiers; the two halves of the pipeline must agree
+# about whether a gem is present.
+for spelling, wanted in (
+        ("UEImporter", "plain"),
+        ("UEImporter==0.3.0", "== pin"),
+        ("UEImporter>=0.3.0", ">= floor"),
+        ("UEImporter<2.0", "< ceiling"),
+        (" UEImporter == 1.0 ", "whitespace"),
+        ({"name": "UEImporter==0.3.0"}, "dict form with a specifier"),
+):
+    check(install_gem._gem_base_name(spelling) == "UEImporter",
+          "%s (%r) must resolve to the bare gem name, got %r"
+          % (wanted, spelling, install_gem._gem_base_name(spelling)))
+
+check(install_gem._gem_base_name("UEImporterExtra") == "UEImporterExtra",
+      "a DIFFERENT gem whose name merely starts the same must not be "
+      "flattened onto UEImporter -- stripping specifiers must not become a "
+      "prefix match")
+
+# install() must be idempotent against a specifier-bearing entry: the bug
+# would have shown up as a duplicate, not an error.
+project = tempfile.mkdtemp(prefix="ueo3de_proj_spec_")
+with open(os.path.join(project, "project.json"), "w") as handle:
+    json.dump({"project_name": "T", "gem_names": ["Atom", "UEImporter==0.3.0"],
+               "external_subdirectories": []}, handle)
+install_gem.install(project, gem_root=GEM_DIR, log=lambda _m: None)
+with open(os.path.join(project, "project.json")) as handle:
+    after = json.load(handle)["gem_names"]
+check(sum(1 for g in after if install_gem._gem_base_name(g) == "UEImporter") == 1,
+      "installing over an existing 'UEImporter==0.3.0' must not add a second "
+      "entry; gem_names came out %r" % (after,))
+check("UEImporter==0.3.0" in after,
+      "the existing PINNED entry must be left alone -- rewriting someone's "
+      "version pin is not this script's business; got %r" % (after,))
+
 print("")
 print("RESULT: " + ("PASS" if not failures else "FAIL (%d)" % len(failures)))
 sys.exit(1 if failures else 0)
