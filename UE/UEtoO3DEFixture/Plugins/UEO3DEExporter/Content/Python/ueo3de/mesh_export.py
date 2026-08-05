@@ -297,11 +297,38 @@ def _make_gltf_export_options():
             "export .glb; use UEO3DE_MESH_FORMAT=fbx")
     options = unreal.GLTFExportOptions()
 
-    required = [("export_preview_mesh", False)]
+    # PINNED, NOT INHERITED. UE PERSISTS GLTF EXPORTER SETTINGS IN CONFIG, so
+    # `GLTFExportOptions()` hands back whatever was last chosen in the export
+    # dialog -- not a fixed default. Measured the hard way: with 1.0 saved in
+    # the UI, every mesh exported 100x too large (a 1 m cube came out as
+    # [-50,-50,-50]..[50,50,50]) and the intermediate bounds check failed the
+    # whole export. UE authors in CENTIMETRES; glTF and O3DE are in METRES, so
+    # 0.01 IS the unit conversion and the pipeline's correctness rests on it.
+    # Anything the importer depends on is set here explicitly, whatever the
+    # editor's saved state says.
+    required = [("export_uniform_scale", 0.01),
+                ("export_preview_mesh", False)]
     if hasattr(unreal, "GLTFTextureImageFormat"):
         required.append(("texture_image_format", unreal.GLTFTextureImageFormat.NONE))
     if hasattr(unreal, "GLTFMaterialBakeMode"):
         required.append(("bake_material_inputs", unreal.GLTFMaterialBakeMode.DISABLED))
+
+    # SKELETAL-ONLY KNOBS, all defaulting True, all meaningless for a
+    # StaticMesh -- a static mesh has no morph targets, no skin weights and no
+    # skinned root to reparent. They are turned off anyway because this path
+    # exports STATIC MESHES ONLY (skeletal sources go through UE's native FBX
+    # exporter, see export_skeletal below), and every option left on is one
+    # more way for a node the `.assetinfo` does not name to appear in the
+    # scene. Staging REFUSES a multi-mesh glTF rather than guessing which node
+    # to select, so a stray node is a hard failure, not a cosmetic one.
+    #
+    # Expect no visual change from these: measured on a level with zero
+    # skeletal meshes, they alter nothing. This is hygiene.
+    required.extend([
+        ("export_morph_targets", False),
+        ("export_vertex_skin_weights", False),
+        ("make_skinned_meshes_root", False),
+    ])
 
     for name, value in required:
         try:
