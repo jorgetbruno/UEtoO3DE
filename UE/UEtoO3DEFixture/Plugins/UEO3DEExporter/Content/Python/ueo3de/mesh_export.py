@@ -330,6 +330,22 @@ def _make_gltf_export_options():
         ("make_skinned_meshes_root", False),
     ])
 
+    # EXPORT_SOURCE_MODEL: set deliberately, and pinned either way so it is
+    # never inherited from the export dialog's saved state (see the scale
+    # comment above -- that lesson cost a 100x level).
+    #
+    # The risk it carries is specific: this path does NOT export the mesh as
+    # UE stores it. `_bake_temp_asset` builds a temporary StaticMesh through
+    # GeometryScript carrying the Lane B basis correction, LOD0 flattening and
+    # material-slot compaction, and THAT is what gets exported. A procedurally
+    # created asset has no imported source model, so "export the source rather
+    # than the engine-processed mesh" may have nothing to fall back on, or may
+    # bypass the bake outright. The intermediate bounds check in
+    # export_level.py is what catches the second case: a bypassed bake changes
+    # the geometry's basis and the written file stops matching its expected
+    # bounds.
+    required.append(("export_source_model", True))
+
     for name, value in required:
         try:
             options.set_editor_property(name, value)
