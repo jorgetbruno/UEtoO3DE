@@ -104,6 +104,31 @@ def _make_export_options():
     return options
 
 
+def _nanite_enabled(mesh):
+    """Does this asset render through Nanite? False when unreadable."""
+    try:
+        return bool(mesh.get_editor_property("nanite_settings")
+                    .get_editor_property("enabled"))
+    except Exception:
+        return False
+
+
+_NANITE_ON = ("1", "on", "true", "yes")
+_NANITE_OFF = ("", "0", "off", "false", "no")
+
+
+def _nanite_fallback_forced():
+    """UEO3DE_NANITE_FALLBACK -> True to keep exporting the fallback mesh."""
+    value = os.environ.get("UEO3DE_NANITE_FALLBACK", "").strip().lower()
+    if value in _NANITE_ON:
+        return True
+    if value in _NANITE_OFF:
+        return False
+    raise MeshExportError(
+        "UEO3DE_NANITE_FALLBACK=%r is not one of %s"
+        % (value, ", ".join(_NANITE_ON + _NANITE_OFF[1:])))
+
+
 def _baked_dynamic_mesh(source_mesh, mirrored=False):
     """LOD0 render geometry with the bake-stage negations applied.
 
@@ -135,8 +160,28 @@ def _baked_dynamic_mesh(source_mesh, mirrored=False):
     dyn = unreal.DynamicMesh()
     copy_options = unreal.GeometryScriptCopyMeshFromAssetOptions()
     requested_lod = unreal.GeometryScriptMeshReadLOD()
-    # The render mesh is what the FBX exporter writes, so read the same thing.
-    requested_lod.set_editor_property("lod_type", unreal.GeometryScriptLODType.RENDER_DATA)
+    # The render mesh is what the FBX exporter writes, so read the same thing
+    # -- EXCEPT for Nanite meshes, where RENDER_DATA is the FALLBACK mesh, not
+    # what anyone sees. Measured on VOL4 packs (every asset Nanite-enabled):
+    #
+    #     SM_Wagon_01a   RENDER_DATA  8,646 tris   MAX_AVAILABLE 93,712
+    #     SM_Car_24a     RENDER_DATA  6,770 tris   MAX_AVAILABLE 90,023
+    #     SM_Boat_17a    RENDER_DATA  1,652 tris   MAX_AVAILABLE 12,615
+    #
+    # UE's viewport renders the full Nanite geometry, so exporting the ~9%
+    # fallback shipped visibly decimated models ("something is breaking the
+    # models" -- coarse pillars, faceted shading) while every check passed:
+    # the fallback is a perfectly valid mesh, just not the one the user sees.
+    # Gated on the asset's own Nanite flag so non-Nanite meshes keep producing
+    # the exact bytes the suites pin (the fixture is non-Nanite).
+    #
+    # UEO3DE_NANITE_FALLBACK=1 restores the old read -- the fallback IS what
+    # UE itself uses for complex collision on Nanite meshes, and a 90k-tri
+    # cooked collider per car is not free. Unrecognised values raise.
+    lod_type = unreal.GeometryScriptLODType.RENDER_DATA
+    if _nanite_enabled(source_mesh) and not _nanite_fallback_forced():
+        lod_type = unreal.GeometryScriptLODType.MAX_AVAILABLE
+    requested_lod.set_editor_property("lod_type", lod_type)
     dyn = _unwrap(unreal.GeometryScript_AssetUtils.copy_mesh_from_static_mesh(
         source_mesh, dyn, copy_options, requested_lod))
     if dyn is None:
