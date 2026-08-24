@@ -464,8 +464,19 @@ def _baked_lod_chain(source_mesh, mirrored=False):
         works", inverted: the near view was the faithful one).
         Simplification preserves per-triangle material ids (measured:
         46,500 -> 5,891 tris, identical per-id regions), so every distance
-        now shows what UE shows. SM_Car_24a still comes out
-        90,023 / 6,770 / 3,385 / 1,692 / 846.
+        now shows what UE shows.
+
+        BUDGETS: the fallback counts are ~6/3/1.5/0.7% of the source --
+        sized for a chain UE never displays -- and exporting at those
+        budgets read as "geometry is still weird when zooming out"
+        (SM_Tow_Truck_01a's hood collapsing at moderate range). Each far
+        LOD now targets max(fallback count, source * _LOD_RATIOS[i]):
+        20/8/3/1.2% -- SM_Tow_Truck_01b (100,554 source tris) comes out
+        20,110 / 8,044 / 3,016 / 1,206 instead of 9,434 / ... / 1,180.
+        The reduction runs through apply_editor_simplify_to_triangle_count,
+        the SAME reducer UE's own LOD generation uses (takes no options;
+        editor-only, which the export session is), falling back to the
+        GeometryScript simplifier only if the editor one is unavailable.
       * non-Nanite, multiple LODs: [render LOD 0..N-1] -- the authored chain
         exactly as UE renders it.
       * single LOD, non-Nanite: [render LOD0] -- the pipeline's original
@@ -488,24 +499,22 @@ def _baked_lod_chain(source_mesh, mirrored=False):
         return [single]
     chain = [single]
     if nanite:
+        source_tris = int(single.get_triangle_count())
         for index in range(lod_count):
             try:
-                target = int(source_mesh.get_num_triangles(index))
+                fallback_tris = int(source_mesh.get_num_triangles(index))
             except Exception:
-                target = 0
+                fallback_tris = 0
+            ratio = (_LOD_RATIOS[index] if index < len(_LOD_RATIOS)
+                     else _LOD_RATIOS[-1] / 2.0)
+            target = max(fallback_tris, int(source_tris * ratio))
+            target = min(target, source_tris)
             if target <= 0:
                 continue
             reduced = _baked_dyn_for_lod(
                 source_mesh, mirrored,
                 unreal.GeometryScriptLODType.MAX_AVAILABLE, 0)
-            reduced = _unwrap(
-                unreal.GeometryScript_MeshSimplification.
-                apply_simplify_to_triangle_count(
-                    reduced, target,
-                    unreal.GeometryScriptSimplifyMeshOptions()))
-            if reduced is None:
-                raise MeshExportError(
-                    "apply_simplify_to_triangle_count returned no mesh")
+            reduced = _simplify_to_triangle_count(reduced, target)
             chain.append(reduced)
     else:
         for index in range(1, lod_count):
@@ -513,6 +522,41 @@ def _baked_lod_chain(source_mesh, mirrored=False):
                 source_mesh, mirrored,
                 unreal.GeometryScriptLODType.RENDER_DATA, index))
     return chain
+
+
+# Far-LOD triangle budgets as fractions of the Nanite source, LOD1..LOD4.
+# The auto-fallback counts (~6/3/1.5/0.7%) are sized for a chain UE never
+# renders; at those budgets LOD1 already collapsed hoods at moderate range
+# ("it gets worse when I fall back more, this is lod 1").
+_LOD_RATIOS = (0.20, 0.08, 0.03, 0.012)
+
+
+def _simplify_to_triangle_count(dyn, target):
+    """Reduce `dyn` to ~`target` triangles, editor reducer first.
+
+    `apply_editor_simplify_to_triangle_count` is the SAME simplifier UE's
+    LOD generation uses (quadric, editor-module-backed; takes no options)
+    and keeps silhouettes the GeometryScript reducer visibly loses at car
+    scale. Editor-only -- which the export session always is -- but fall
+    back to the scriptable reducer rather than fail an export over it.
+    Both preserve per-triangle material ids.
+    """
+    try:
+        reduced = _unwrap(
+            unreal.GeometryScript_MeshSimplification.
+            apply_editor_simplify_to_triangle_count(dyn, int(target)))
+        if reduced is not None:
+            return reduced
+    except Exception:
+        pass
+    reduced = _unwrap(
+        unreal.GeometryScript_MeshSimplification.
+        apply_simplify_to_triangle_count(
+            dyn, int(target), unreal.GeometryScriptSimplifyMeshOptions()))
+    if reduced is None:
+        raise MeshExportError(
+            "neither simplifier produced a mesh for target %d" % target)
+    return reduced
 
 
 def _bake_temp_asset(dyn, asset_name):
