@@ -277,21 +277,35 @@ def _triangle_material_ids(dyn):
     return list(unreal.GeometryScript_List.convert_index_list_to_array(id_list))
 
 
-def _compact_slots(dyn, source):
-    """Compact the mesh's material IDs to 0..n-1 and return the matching
-    source slot list.
+def _compact_slots(dyns, source):
+    """Compact material IDs to 0..n-1 across EVERY LOD and return the slots.
 
     The bake creates one slot per material ID, so IDs must be contiguous or
     the baked asset's slot indices would not line up with the slot list we
-    attach. Sparse IDs (a source slot unused by LOD0) are remapped here,
-    deterministically, rather than trusting the bake to compact them.
+    attach. Sparse IDs are remapped here, deterministically, rather than
+    trusting the bake to compact them.
+
+    `dyns` is the WHOLE LOD chain, and that is a bug fix, not a convenience:
+    the first chain export remapped only LOD0's triangle IDs while LOD1..N
+    kept the SOURCE indices -- so any mesh whose LOD0 uses a sparse or
+    reordered slot subset rendered its far LODs with the wrong materials
+    ("some lods broke the materials": the white wagon, whose LOD0 happens to
+    use slots 0..3 in order, was fine; the black car was scrambled). The
+    `used` set is the UNION over the chain -- a slot only a far LOD touches
+    must still exist in the compacted list -- and the SAME remap is applied
+    to every LOD's triangles.
     """
-    ids = _triangle_material_ids(dyn)
-    used = sorted(set(ids)) if ids else [0]
+    if not isinstance(dyns, list):
+        dyns = [dyns]
+    ids_per_dyn = [_triangle_material_ids(d) for d in dyns]
+    used = sorted(set(material_id for ids in ids_per_dyn for material_id in ids))
+    if not used:
+        used = [0]
     if used != list(range(len(used))):
         remap = {old: new for new, old in enumerate(used)}
-        for triangle, material_id in enumerate(ids):
-            dyn.set_triangle_material_id(triangle, remap[material_id])
+        for dyn, ids in zip(dyns, ids_per_dyn):
+            for triangle, material_id in enumerate(ids):
+                dyn.set_triangle_material_id(triangle, remap[material_id])
 
     source_slots = list(source.get_editor_property("static_materials") or [])
     slots = []
@@ -1131,7 +1145,7 @@ def export_meshes(assets, output_root, log=None):
         else:
             chain = [_baked_dynamic_mesh(source, mirrored=mirrored)]
         dyn = chain[0]
-        slots = _compact_slots(dyn, source)
+        slots = _compact_slots(chain, source)
         temp_path, baked = _bake_temp_asset(chain, node_name)
         try:
             # The FBX carries one material per slot, named after the UE
