@@ -60,7 +60,15 @@ def material_by_name(document, name):
 
 def test_tga_split_synthetic(scratch):
     """Channel split against KNOWN values -- white fixtures can't catch a
-    channel-index bug, so a synthetic 2x1 image with distinct channels does."""
+    channel-index bug, so a synthetic 2x1 image with distinct channels does.
+
+    The split output is 8-BIT GRAYSCALE PNG, not TGA: the engine's TgaLoader
+    rejects grayscale TGA outright ("unsupported type code [3]", measured),
+    and channel-replicated 24-bit TGA was 5.1x the bytes. Read back through
+    the same pure PNG reader the exporter package ships.
+    """
+    from ueo3de import png as png_module
+
     source = os.path.join(scratch, "synthetic.tga")
     header = struct.pack("<BBBHHBHHHHBB", 0, 0, 2, 0, 0, 0, 0, 0, 2, 1, 32, 8)
     # BGRA: pixel0 = (B=10, G=20, R=30, A=40), pixel1 = (50, 60, 70, 80)
@@ -69,22 +77,41 @@ def test_tga_split_synthetic(scratch):
 
     for channel, expected in (("R", (30, 70)), ("G", (20, 60)),
                               ("B", (10, 50)), ("A", (40, 80))):
-        out = os.path.join(scratch, "split_%s.tga" % channel)
-        tga.write_grayscale_from_channel(source, out, channel)
-        image = tga.read(out)
-        got = (image["pixels"][0], image["pixels"][3])
+        out = os.path.join(scratch, "split_%s.png" % channel)
+        tga.write_channel_png(source, out, channel)
+        image = png_module.read(out)
+        # png.read normalizes to RGBA; a grayscale source reads back R=G=B.
+        got = (image["pixels"][0], image["pixels"][4])
         check(got == expected,
               "channel %s split produced %r, expected %r" % (channel, got, expected))
+        check(image["pixels"][0] == image["pixels"][1] == image["pixels"][2],
+              "a grayscale split must read back with R=G=B")
 
     # A from a 24-bpp source is implicitly opaque -> solid white.
     source24 = os.path.join(scratch, "synthetic24.tga")
     header24 = struct.pack("<BBBHHBHHHHBB", 0, 0, 2, 0, 0, 0, 0, 0, 1, 1, 24, 0)
     with open(source24, "wb") as handle:
         handle.write(header24 + bytes([1, 2, 3]))
-    out = os.path.join(scratch, "split24_A.tga")
-    tga.write_grayscale_from_channel(source24, out, "A")
-    check(tga.read(out)["pixels"][0] == 255,
+    out = os.path.join(scratch, "split24_A.png")
+    tga.write_channel_png(source24, out, "A")
+    check(png_module.read(out)["pixels"][0] == 255,
           "alpha of a 24-bpp image must split as opaque white")
+
+    # ROW ORDER: TGA default origin is bottom-left, PNG is top-down. A 1x2
+    # bottom-up TGA whose STORED rows are [bottom=5, top=200] must read back
+    # from the PNG with 200 first. Getting this wrong flips every split
+    # against the basecolor it shares UVs with -- and a symmetric texture
+    # would never show it.
+    source_rows = os.path.join(scratch, "rows.tga")
+    header_rows = struct.pack("<BBBHHBHHHHBB", 0, 0, 2, 0, 0, 0, 0, 0, 1, 2, 24, 0)
+    with open(source_rows, "wb") as handle:
+        handle.write(header_rows + bytes([5, 5, 5, 200, 200, 200]))
+    out = os.path.join(scratch, "rows_R.png")
+    tga.write_channel_png(source_rows, out, "R")
+    pixels = png_module.read(out)["pixels"]
+    check((pixels[0], pixels[4]) == (200, 5),
+          "bottom-up TGA rows must be flipped to PNG top-down order; "
+          "got top=%r bottom=%r" % (pixels[0], pixels[4]))
 
 
 def test_parameter_role_matching():

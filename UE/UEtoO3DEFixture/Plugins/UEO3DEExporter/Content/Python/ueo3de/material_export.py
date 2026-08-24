@@ -30,9 +30,10 @@ itself (measured from ImageBuilder.settings):
     _roughness/_metallic -> Reflectance (linear)     _ao -> AmbientOcclusion
 
 Channel-packed sources (the ORM case: one texture driving AO/R, Roughness/G,
-Metallic/B) are exported once raw, then split into grayscale TGAs by
-`tga.write_grayscale_from_channel` -- pure Python, testable offline (plan M4:
-"simpler and more testable than channel-selection plumbing").
+Metallic/B) are exported once raw, then split into 8-bit GRAYSCALE PNGs by
+`tga.write_channel_png` -- pure Python, testable offline. PNG because the
+engine's TgaLoader rejects grayscale TGA ("unsupported type code [3]",
+measured) and channel-replicated RGB TGA was 5.1x the bytes.
 
 Normal maps: UE authors DirectX-style (green down); the manifest records
 `flip_y: true` and the importer sets StandardPBR's `normal.flipY` (plan M4:
@@ -269,7 +270,10 @@ class TextureBank:
         if channel is None:
             relative = "%s_%s.tga" % (stem, role_suffix)
         else:
-            relative = "%s_%s_%s.tga" % (stem, str(channel).lower(), role_suffix)
+            # Channel splits are GRAYSCALE PNG (see tga.write_channel_png:
+            # the engine rejects grayscale TGA, and channel-replicated RGB
+            # TGA was 5.1x the bytes). Whole textures stay TGA.
+            relative = "%s_%s_%s.png" % (stem, str(channel).lower(), role_suffix)
         guid = naming.asset_guid(ue_path + "#" + role_key)
         entry = {
             "guid": guid,
@@ -406,7 +410,7 @@ class TextureBank:
             if entry["channel"] is None:
                 tga.copy(raw, out_path)
             else:
-                tga.write_grayscale_from_channel(raw, out_path, entry["channel"])
+                tga.write_channel_png(raw, out_path, entry["channel"])
             exported.append(out_path)
             if log is not None:
                 log("  %-52s <- %s%s" % (entry["o3de_relative_path"], entry["ue_path"],

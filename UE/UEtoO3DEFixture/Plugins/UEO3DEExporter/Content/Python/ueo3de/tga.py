@@ -19,6 +19,7 @@ loudly.
 """
 
 import struct
+import zlib
 
 
 class TgaError(Exception):
@@ -65,16 +66,31 @@ def _header(width, height, bpp, descriptor):
                        0, 0, 2, 0, 0, 0, 0, 0, width, height, bpp, descriptor)
 
 
-def write_grayscale_from_channel(source_path, output_path, channel):
-    """Extract one channel into a 24-bit grayscale TGA. Returns output_path.
+def write_channel_png(source_path, output_path, channel):
+    """Extract one channel of a TGA into an 8-BIT GRAYSCALE PNG.
+
+    Why PNG, and why not any TGA:
+
+      * O3DE's ImageBuilder REJECTS grayscale TGA outright -- "TgaLoader:
+        unsupported type code [3] ... Only support RGB(RLE) or color mapped"
+        (measured: four probes, four instant failures). A grayscale-TGA
+        writer here would be a trap for its next caller, so none exists.
+      * The previous writer replicated the channel into 24-bit RGB TGA: one
+        4096 packed-map split was 50.3 MB carrying 16.8 MB of data three
+        times over. The same channel as grayscale PNG measured 9.8 MB and
+        produced a full mipchain + streamingimage with zero AP errors --
+        5.1x smaller, and a packed level splits every such texture three
+        times.
+
+    The image-builder PRESET still comes from the filename suffix
+    (`_roughness`, `_metallic`, `_ao`), which is extension-independent.
 
     `channel` is 'R', 'G', 'B' or 'A' in the intuitive colour sense; TGA
-    stores BGR(A), so the byte index maps accordingly.
-
-    Requesting 'A' from a 24-bit source produces a solid-white image: an RGB
-    image's alpha IS 1.0 everywhere by definition (UE writes 24 bpp exactly
-    when the texture carries no alpha data), so white is the faithful value,
-    not a fallback."""
+    stores BGR(A), so the byte index maps accordingly. Requesting 'A' from a
+    24-bit source produces solid white: an RGB image's alpha IS 1.0
+    everywhere by definition (UE writes 24 bpp exactly when the texture
+    carries no alpha), so white is the faithful value, not a fallback.
+    """
     image = read(source_path)
     stride = image["bpp"] // 8
     index_by_channel = {"B": 0, "G": 1, "R": 2, "A": 3}
@@ -82,28 +98,34 @@ def write_grayscale_from_channel(source_path, output_path, channel):
         raise TgaError("bad channel %r" % channel)
     index = index_by_channel[channel]
 
-    count = image["width"] * image["height"]
-    out = bytearray(count * 3)
+    width, height = image["width"], image["height"]
     if index >= stride:
         if channel != "A":
             raise TgaError("%s: channel %s requested but image is %d bpp"
                            % (source_path, channel, image["bpp"]))
-        out = bytearray(b"\xff") * len(out)
+        gray = b"\xff" * (width * height)
     else:
-        # Extended slices run at C speed; the per-pixel loop this replaces was
-        # ~50M Python bytecode operations for one 4096x4096 RMA split, and a
-        # packed level splits every such texture three times. Byte-identical
-        # to the loop (verified against the old implementation on random
-        # images before it was deleted).
-        values = image["pixels"][index::stride]
-        out[0::3] = values
-        out[1::3] = values
-        out[2::3] = values
+        gray = bytes(image["pixels"][index::stride])
+
+    # TGA rows are bottom-up unless descriptor bit 5 says otherwise; PNG is
+    # strictly top-down. Getting this wrong flips every split vertically
+    # against its basecolor, which shares UVs with it.
+    rows = [gray[y * width:(y + 1) * width] for y in range(height)]
+    if not (image["descriptor"] & 0x20):
+        rows = rows[::-1]
+    raw = b"".join(b"\x00" + row for row in rows)
+
+    def chunk(tag, data):
+        body = tag + data
+        return (struct.pack(">I", len(data)) + body
+                + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF))
 
     with open(output_path, "wb") as handle:
-        handle.write(_header(image["width"], image["height"], 24,
-                             image["descriptor"] & 0x2F))
-        handle.write(bytes(out))
+        handle.write(b"\x89PNG\r\n\x1a\n")
+        handle.write(chunk(b"IHDR", struct.pack(
+            ">IIBBBBB", width, height, 8, 0, 0, 0, 0)))
+        handle.write(chunk(b"IDAT", zlib.compress(raw, 6)))
+        handle.write(chunk(b"IEND", b""))
     return output_path
 
 
