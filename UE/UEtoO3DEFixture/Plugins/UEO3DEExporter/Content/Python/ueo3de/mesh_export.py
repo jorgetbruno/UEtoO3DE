@@ -187,6 +187,20 @@ def _baked_dynamic_mesh(source_mesh, mirrored=False):
     if dyn is None:
         raise MeshExportError("copy_mesh_from_static_mesh returned no mesh")
 
+    # ORPHANED VERTICES make the bounds lie. Measured on Docks
+    # `SM_Crab_Cages_NN_02a` (Nanite, 863,082 tris): the SOURCE MODEL carries
+    # vertices at X=-174.89 cm that NO TRIANGLE references -- editing
+    # leftovers outside even the asset's own declared bounds (+/-41 cm). Every
+    # exporter drops unreferenced vertices, so the written file was correct;
+    # but get_mesh_bounding_box counts them, so the intermediate bounds
+    # expectation reached 1.75 m the geometry never does, and the export
+    # failed on a file that was RIGHT. Compaction removes exactly the
+    # unreferenced data (triangle count measured unchanged: 863,082 in, and
+    # the same 863,082 reach the glb) and is a no-op on a mesh with none.
+    dyn = _unwrap(unreal.GeometryScript_MeshRepair.remove_unused_vertices(dyn))
+    if dyn is None:
+        raise MeshExportError("remove_unused_vertices returned no mesh")
+
     bake_x = 1.0 if mirrored else -1.0
     dyn = _unwrap(unreal.GeometryScript_MeshTransforms.scale_mesh(
         dyn, unreal.Vector(bake_x, -1.0, 1.0), unreal.Vector(0.0, 0.0, 0.0)))
@@ -1042,7 +1056,17 @@ def export_meshes(assets, output_root, log=None):
             lod_count = int(source.get_num_lods())
         except Exception:
             lod_count = 1
-        if lod_count > 1:
+        # The expectation must describe WHAT WAS EXPORTED, and two cases
+        # export something other than "the asset": multiple LODs (bake reads
+        # LOD0 only) and a NANITE SOURCE READ (bake reads the source model,
+        # whose geometry need not fill the asset's declared bounds). Measured
+        # on Docks `SM_Crab_Cages_NN_02a`: a single-LOD Nanite asset whose
+        # bounds reach X=1.75 m while its source geometry ends at 0.41 m --
+        # the asset-bounds expectation failed the whole export on a mesh the
+        # bake had exported perfectly. RetroCars never hit this because every
+        # mesh there has 4 LODs and already took the dyn-derived branch.
+        if lod_count > 1 or (_nanite_enabled(source)
+                             and not _nanite_fallback_forced()):
             # The asset AABB is the UNION of all LODs; the bake reads LOD0
             # only (M9's LOD_FLATTENED), so the FBX expectation must come
             # from the baked geometry itself. dyn already carries the bake's
