@@ -88,16 +88,17 @@ def write_grayscale_from_channel(source_path, output_path, channel):
         if channel != "A":
             raise TgaError("%s: channel %s requested but image is %d bpp"
                            % (source_path, channel, image["bpp"]))
-        for byte in range(len(out)):
-            out[byte] = 255
+        out = bytearray(b"\xff") * len(out)
     else:
-        pixels = image["pixels"]
-        for pixel in range(count):
-            value = pixels[pixel * stride + index]
-            base = pixel * 3
-            out[base] = value
-            out[base + 1] = value
-            out[base + 2] = value
+        # Extended slices run at C speed; the per-pixel loop this replaces was
+        # ~50M Python bytecode operations for one 4096x4096 RMA split, and a
+        # packed level splits every such texture three times. Byte-identical
+        # to the loop (verified against the old implementation on random
+        # images before it was deleted).
+        values = image["pixels"][index::stride]
+        out[0::3] = values
+        out[1::3] = values
+        out[2::3] = values
 
     with open(output_path, "wb") as handle:
         handle.write(_header(image["width"], image["height"], 24,

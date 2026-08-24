@@ -1458,6 +1458,16 @@ def _instance_children(actor, actor_entity, component, subject, assets, warnings
 
     actor_path = actor.get_path_name()
     children = []
+    # The mesh and physics blocks depend on (component, mirrored) ONLY -- the
+    # instance contributes nothing but its transform -- yet they were rebuilt
+    # per instance: up to 2,000 rounds of get_num_materials/get_material/
+    # body_instance reads through the UE interop for identical answers. One
+    # build per mirror parity; each instance gets a DEEP COPY so no two
+    # entities alias the same dict (the manifest writer's float rounding
+    # would be harmless on a shared dict, but "harmless aliasing" is how the
+    # next mutation becomes a spooky cross-entity edit).
+    import copy as copy_module
+    blocks_by_mirror = {}
     for index in range(exported):
         result = component.get_instance_transform(index, True)
         ok = result[0] if isinstance(result, tuple) else True
@@ -1473,10 +1483,18 @@ def _instance_children(actor, actor_entity, component, subject, assets, warnings
         # put thousands of identical records in a foliage level's manifest.
         world, local, mirrored = _child_transforms(
             world_ue, actor, instance_subject, warnings)
-        mesh_block, mesh_guid = _mesh_block_from_component(
-            component, assets, subject, warnings, mirrored=mirrored)
-        if mesh_block is None:
+        if mirrored not in blocks_by_mirror:
+            built_mesh, built_guid = _mesh_block_from_component(
+                component, assets, subject, warnings, mirrored=mirrored)
+            built_physics = None
+            if built_mesh is not None:
+                built_physics = _physics_block(component, built_guid, subject,
+                                               warnings)
+            blocks_by_mirror[mirrored] = (built_mesh, built_guid, built_physics)
+        cached_mesh, mesh_guid, cached_physics = blocks_by_mirror[mirrored]
+        if cached_mesh is None:
             break   # no mesh on the component: nothing to place, once
+        mesh_block = copy_module.deepcopy(cached_mesh)
         entity = {
             "id": naming.entity_id("%s:%s#%d" % (actor_path,
                                                  component.get_name(), index)),
@@ -1490,9 +1508,8 @@ def _instance_children(actor, actor_entity, component, subject, assets, warnings
             "transform": {"world": world, "local": local},
             "mesh": mesh_block,
         }
-        physics = _physics_block(component, mesh_guid, subject, warnings)
-        if physics["has_collision"]:
-            entity["physics"] = physics
+        if cached_physics["has_collision"]:
+            entity["physics"] = copy_module.deepcopy(cached_physics)
         children.append(entity)
     return children
 

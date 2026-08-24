@@ -75,7 +75,7 @@ def _transform_of(entity):
     return dict(IDENTITY)
 
 
-def read_prefab(prefab_path, duplicates=None):
+def read_prefab(prefab_path, duplicates=None, document=None):
     """`{entity name: transform}` for a saved prefab. `{}` if there is none.
 
     Pass a `set` as `duplicates` to learn which names appeared more than once.
@@ -85,10 +85,11 @@ def read_prefab(prefab_path, duplicates=None):
     whichever one the dict keeps is decided by iteration order. Callers that
     write back through these names must refuse to touch a duplicated one.
     """
-    if not os.path.isfile(prefab_path):
-        return {}
-    with open(prefab_path, "r") as handle:
-        document = json.load(handle)
+    if document is None:
+        if not os.path.isfile(prefab_path):
+            return {}
+        with open(prefab_path, "r") as handle:
+            document = json.load(handle)
     out = {}
     for entity in (document.get("Entities") or {}).values():
         name = entity.get("Name")
@@ -117,13 +118,16 @@ def transforms_equal(left, right, epsilon=EPSILON):
 # the ledger
 # ---------------------------------------------------------------------------
 
-def build_ledger(document, prefab_path):
+def build_ledger(document, prefab_path, prefab_document=None):
     """Record what this import produced, keyed by manifest entity id.
 
     Read back from the SAVED prefab rather than from what we meant to author:
     the point of the ledger is to describe the file the user will edit.
+    `prefab_document` is the already-parsed saved prefab, when the caller has
+    one -- a 20 MB prefab was being re-parsed four times in the post-save
+    stretch of every import for want of passing it along.
     """
-    by_name = read_prefab(prefab_path)
+    by_name = read_prefab(prefab_path, document=prefab_document)
     entities = {}
     for item in document.get("entities") or []:
         name = item.get("name")
@@ -264,7 +268,7 @@ def plan(ledger, document, current_transforms=None, prefab_duplicates=None):
 # putting hand edits back
 # ---------------------------------------------------------------------------
 
-def preserve_conflicts(prefab_path, conflicts):
+def preserve_conflicts(prefab_path, conflicts, document=None):
     """Write the user's transforms back into a freshly rebuilt prefab.
 
     Done as a JSON patch on the saved file rather than during authoring, for
@@ -277,8 +281,9 @@ def preserve_conflicts(prefab_path, conflicts):
     """
     if not conflicts or not os.path.isfile(prefab_path):
         return []
-    with open(prefab_path, "r") as handle:
-        document = json.load(handle)
+    if document is None:
+        with open(prefab_path, "r") as handle:
+            document = json.load(handle)
 
     # Match on the name the REBUILT prefab uses. `new_name` is absent only for
     # conflicts built by older callers, where the two are the same anyway.

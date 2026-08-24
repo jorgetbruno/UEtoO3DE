@@ -109,12 +109,25 @@ def _uuid_from_string(text):
     return math.Uuid().CreateString(text)
 
 
+# resolve_component_type answers per NAME and never changes within an editor
+# session, yet it was broadcast per CALL -- and physics/light/env authoring
+# call it per entity, so a 3,677-entity level paid thousands of
+# FindComponentTypeIdsByEntityType broadcasts to learn the same handful of
+# ids. create_entities already hoisted its one lookup out of the loop, which
+# is this same fix applied narrowly. Only successes are cached: a miss is
+# fatal by contract and must stay a fresh, diagnosable lookup.
+_component_type_cache = {}
+
+
 def resolve_component_type(name):
     """Type id for an editor component, by display name. Misses are fatal.
 
     A silent miss would produce entities with no Mesh component -- a level that
     imports "successfully" and renders nothing.
     """
+    cached = _component_type_cache.get(name)
+    if cached is not None:
+        return cached
     import azlmbr.bus as bus
     import azlmbr.editor as editor
     from azlmbr.entity import EntityType
@@ -129,6 +142,7 @@ def resolve_component_type(name):
         raise PrefabBuildError(
             "component %r did not resolve to a type id. Available: %r"
             % (name, sorted(available or [])))
+    _component_type_cache[name] = type_ids[0]
     return type_ids[0]
 
 
@@ -708,7 +722,7 @@ def _has_cooked_mesh_reference(node):
 _has_pxmesh_reference = _has_cooked_mesh_reference
 
 
-def collider_verification(prefab_path, jolt_mesh_is_asset_based=False):
+def collider_verification(prefab_path, jolt_mesh_is_asset_based=False, document=None):
     """Entity names whose mesh collider reached the file with NO geometry.
 
     Pure file I/O -- the saved prefab is the only place the truth is visible.
@@ -753,10 +767,11 @@ def collider_verification(prefab_path, jolt_mesh_is_asset_based=False):
     import json
 
     result = {"unbaked": [], "missing_asset": []}
-    if not os.path.isfile(prefab_path):
-        return result
-    with open(prefab_path, "r") as handle:
-        document = json.load(handle)
+    if document is None:
+        if not os.path.isfile(prefab_path):
+            return result
+        with open(prefab_path, "r") as handle:
+            document = json.load(handle)
     for entity in (document.get("Entities") or {}).values():
         for component in (entity.get("Components") or {}).values():
             if not isinstance(component, dict):

@@ -865,10 +865,17 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # track late bakes, and O3DE refuses a second CreatePrefabInMemory in the
     # same session. So the settle stays a constant, and this is what stops a
     # constant that is one day too small from failing in silence.
+    # The stretch below used to parse the freshly-saved prefab up to FOUR
+    # times (bake verification, ledger, conflict lookup, conflict patching) --
+    # ~1 s each on a 20 MB level, purely for want of passing the document
+    # along. Parse once; preserve_conflicts still writes the file itself.
+    with open(prefab_path, "r") as handle:
+        saved_prefab_document = json_module.load(handle)
     verification = prefab_build.collider_verification(
         prefab_path,
         jolt_mesh_is_asset_based=bool(
-            getattr(adapter, "mesh_is_asset_based", lambda: False)()))
+            getattr(adapter, "mesh_is_asset_based", lambda: False)()),
+        document=saved_prefab_document)
     unbaked = verification["unbaked"]
     report.count("colliders_cooked", bake_count - len(unbaked))
     for name in unbaked:
@@ -913,14 +920,16 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # that? -- keeps answering yes for as long as the edit exists, and the edit
     # survives indefinitely and is reported on every run.
     ledger_path = reimport_module.write_ledger(
-        prefab_path, reimport_module.build_ledger(document, prefab_path))
+        prefab_path, reimport_module.build_ledger(
+            document, prefab_path, prefab_document=saved_prefab_document))
     emit("wrote import ledger " + os.path.basename(ledger_path))
 
     # The prefab has just been rebuilt from the manifest, so any entity the
     # user had moved is now back at UE's value. Patch those few entities in
     # the saved file and say which ones, loudly.
     if reimport_plan["conflicts"]:
-        rebuilt = reimport_module.read_prefab(prefab_path)
+        rebuilt = reimport_module.read_prefab(
+            prefab_path, document=saved_prefab_document)
         for conflict in reimport_plan["conflicts"]:
             # The REBUILT prefab is keyed by the NEW manifest names, so it must
             # be looked up by `new_name`. Using the ledger's old name made
@@ -947,7 +956,8 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             # REIMPORT_CONFLICT_NOT_PRESERVED used the new one.
             report.warn("REIMPORT_ENTITY_CONFLICT", lookup, detail)
         patched = reimport_module.preserve_conflicts(
-            prefab_path, reimport_plan["conflicts"])
+            prefab_path, reimport_plan["conflicts"],
+            document=saved_prefab_document)
         report.count("reimport_preserved", len(patched))
         emit("preserved %d hand-edited transform(s)" % len(patched))
         # Reporting a conflict and then not preserving it is the worst of both

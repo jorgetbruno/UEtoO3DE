@@ -161,43 +161,62 @@ def read(path):
     raw = _unfilter(zlib.decompress(b"".join(idat)), width, height,
                     bytes_per_pixel, stride)
 
-    # Normalize to 8-bit RGBA.
-    out = bytearray(width * height * 4)
+    # Normalize to 8-bit RGBA -- with EXTENDED SLICES, not a per-pixel loop.
+    # The loop this replaces built ~4M closure objects for one 2K texture
+    # (a nested `sample()` per pixel) and ran on every PNG the exporter
+    # touches; slices do the same channel gather/scatter at C speed and are
+    # byte-identical (verified against the old implementation on random
+    # images of every colour type before it was deleted).
+    #
+    # 16-bit: PNG samples are big-endian, so the HIGH byte of each sample is
+    # simply `raw[channel_offset::step]` -- taking the high byte is what the
+    # old code did and what UE's own TGA export does.
+    count = width * height
+    out = bytearray(count * 4)
     step = samples * sample_bytes
-    for index in range(width * height):
-        base = index * step
+    opaque = bytearray(b"\xff") * count
 
-        def sample(which):
-            # 16-bit: take the high byte. Atom's image builder works from 8-bit
-            # here either way, and truncating is what UE's own TGA export does.
-            return raw[base + which * sample_bytes]
+    def channel(which):
+        return raw[which * sample_bytes::step]
 
-        if colour == 0:            # greyscale
-            value = sample(0)
-            red = green = blue = value
-            alpha = 255
-        elif colour == 2:          # RGB
-            red, green, blue, alpha = sample(0), sample(1), sample(2), 255
-        elif colour == 3:          # palette
-            entry = raw[base] * 3
-            if entry + 2 >= len(palette):
-                raise PngError("%s: palette index out of range" % path)
-            red, green, blue = palette[entry], palette[entry + 1], palette[entry + 2]
-            alpha = 255
-            if transparency is not None and raw[base] < len(transparency):
-                alpha = transparency[raw[base]]
-        elif colour == 4:          # greyscale + alpha
-            value = sample(0)
-            red = green = blue = value
-            alpha = sample(1)
-        else:                      # colour == 6, RGBA
-            red, green, blue, alpha = (sample(0), sample(1), sample(2), sample(3))
-
-        position = index * 4
-        out[position] = red
-        out[position + 1] = green
-        out[position + 2] = blue
-        out[position + 3] = alpha
+    if colour == 0:                # greyscale
+        value = channel(0)
+        out[0::4] = value
+        out[1::4] = value
+        out[2::4] = value
+        out[3::4] = opaque
+    elif colour == 2:              # RGB
+        out[0::4] = channel(0)
+        out[1::4] = channel(1)
+        out[2::4] = channel(2)
+        out[3::4] = opaque
+    elif colour == 3:              # palette
+        # The loop raised on an out-of-range index; translate() cannot, so
+        # the range check moves up front and keeps the same failure.
+        if max(raw) * 3 + 2 >= len(palette):
+            raise PngError("%s: palette index out of range" % path)
+        tables = [bytes(palette[i * 3 + c] if i * 3 + c < len(palette) else 0
+                        for i in range(256)) for c in range(3)]
+        out[0::4] = raw.translate(tables[0])
+        out[1::4] = raw.translate(tables[1])
+        out[2::4] = raw.translate(tables[2])
+        if transparency is None:
+            out[3::4] = opaque
+        else:
+            alpha_table = bytes(transparency[i] if i < len(transparency)
+                                else 255 for i in range(256))
+            out[3::4] = raw.translate(alpha_table)
+    elif colour == 4:              # greyscale + alpha
+        value = channel(0)
+        out[0::4] = value
+        out[1::4] = value
+        out[2::4] = value
+        out[3::4] = channel(1)
+    else:                          # colour == 6, RGBA
+        out[0::4] = channel(0)
+        out[1::4] = channel(1)
+        out[2::4] = channel(2)
+        out[3::4] = channel(3)
 
     return {"width": width, "height": height, "pixels": bytes(out)}
 
