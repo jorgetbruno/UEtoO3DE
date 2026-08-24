@@ -8,9 +8,21 @@ rem editor splits --runpythonargs on spaces, so the result path must not
 rem contain any; forward slashes keep AZ::StringFunc::Tokenize happy.
 rem
 rem Exit-code contract (Global Constraint 10) - CI asserts on THIS code:
-rem   editor exit code != 0            -> propagated verbatim
+rem   editor exit code != 0            -> 1 (the REAL code is echoed above;
+rem                                       see below for why it is NOT
+rem                                       propagated verbatim)
 rem   result file missing              -> 2 (no verdict is a failure)
 rem   result file lacks "RESULT: PASS" -> 3
+rem
+rem WHY NORMALIZE: a crashed editor exits with a NEGATIVE code (an access
+rem violation is -1073741819 / 0xC0000005), and every caller in this repo
+rem tests `if errorlevel 1` -- a SIGNED greater-or-equal test, so a negative
+rem code reads as SUCCESS. The caller then asserts against whatever stale
+rem prefab the last good run left behind: a deterministically crashing editor
+rem produces a fully green suite. This file used a string compare and was
+rem itself correct -- and then handed the negative code to ~26 callers that
+rem were not. Normalizing here fixes every caller at once; the diagnostic
+rem value of the original code is preserved by the echo.
 setlocal EnableExtensions
 
 if "%~1"=="" (
@@ -50,7 +62,7 @@ set "EC=%ERRORLEVEL%"
 
 echo Editor exit code: %EC%
 if not "%EC%"=="0" (
-  endlocal & exit /b %EC%
+  endlocal & exit /b 1
 )
 if not exist "%RESULT%" (
   echo RESULT FILE MISSING: %RESULT% 1>&2

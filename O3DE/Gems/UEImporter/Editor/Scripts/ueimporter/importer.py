@@ -71,6 +71,26 @@ def chunk_guard_message(entity_count, chunks, ceiling):
                      % (index, chunks) for index in range(1, chunks + 1))))
 
 
+def chunked_prefab_path(prefab_path, index, total):
+    """`.../Name.prefab` -> `.../Name_part02_of_12.prefab`.
+
+    The chunk guard PROMISES this ("each writes its own prefab", above), and
+    for a while only a test helper kept the promise: `cli.py` and `dialog.py`
+    both wrote the plain path, so chunk 2 overwrote chunk 1 and then computed
+    a re-import diff against chunk 1's ledger -- every entity "changed". The
+    suffix lives HERE, where UEO3DE_CHUNK is parsed, so every entry point
+    inherits it and none can forget.
+
+    Idempotent: a caller that already suffixed the path (the old test helper
+    did) must not end up with the suffix twice.
+    """
+    suffix = "_part%02d_of_%02d" % (index, total)
+    stem, extension = os.path.splitext(prefab_path)
+    if stem.endswith(suffix):
+        return prefab_path
+    return stem + suffix + extension
+
+
 def chunk_of(document, index, count):
     """The `index`-th of `count` slices of a manifest, split by whole subtrees.
 
@@ -291,8 +311,14 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             raise ValueError("UEO3DE_CHUNK must be i/n with 1 <= i <= n, got %r"
                              % chunk)
         document = chunk_of(document, index - 1, total)
-        emit("UEO3DE_CHUNK=%s -- %d of this manifest's entities"
-             % (chunk, len(document["entities"])))
+        if total > 1:
+            # 1/1 is the documented "import as one prefab anyway" escape and
+            # keeps the plain name; real slices each get their own file, or
+            # the level ends up as whichever chunk imported last.
+            prefab_path = chunked_prefab_path(prefab_path, index, total)
+        emit("UEO3DE_CHUNK=%s -- %d of this manifest's entities -> %s"
+             % (chunk, len(document["entities"]),
+                os.path.basename(prefab_path)))
     if max_entities is not None:
         # Diagnostic bisect knob (UEO3DE_MAX_ENTITIES): import only the first
         # N entities to localize scale- or content-dependent failures.
@@ -334,6 +360,20 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         report.warn("REIMPORT_LEDGER_MISSING", os.path.basename(prefab_path),
                     "a prefab exists at this path but has no ledger beside it; "
                     "hand edits in it cannot be detected and will be replaced")
+    if reimport and previous_ledger is not None             and not os.path.exists(prefab_path):
+        # The INVERSE orphan: a ledger with no prefab. The known way to get
+        # here is a previous import that deleted the old prefab and then
+        # failed before writing the new one -- whatever hand edits that file
+        # held are already gone, and the empty transform map below would
+        # otherwise make this import look like a clean first run. Say so
+        # instead of letting the silence stand.
+        report.warn("REIMPORT_LEDGER_MISSING", os.path.basename(prefab_path),
+                    "a ledger exists but the prefab it describes does NOT -- "
+                    "a previous import likely failed after removing the old "
+                    "file. Any hand edits it held are unrecoverable; this "
+                    "import rebuilds from the manifest alone (check for a "
+                    "%s.prev backup beside it)"
+                    % os.path.basename(prefab_path))
     for name in sorted(set(reimport_plan["name_collisions"]) | prefab_duplicates):
         report.warn("REIMPORT_NAME_COLLISION", name,
                     "more than one entity carries this name (two manifest "
@@ -794,13 +834,19 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # level with 128 baked colliders saves on the FIRST attempt. The single
     # retry stays for genuine mid-bake serialization, but a failure here now
     # means something structural, not something to wait out.
+    # Ids that already serialize belong to EARLIER imports in this editor
+    # session (chunk N-1, a previous run); the flush must never mistake one of
+    # those for the template just created -- every chunk shares the level-root
+    # marker name.
+    known_template_ids = prefab_build.snapshot_template_ids()
     try:
         prefab_build.create_prefab_in_memory([level_root], prefab_path)
     except RuntimeError:
         emit("  CreatePrefabInMemory threw; settling 900 frames and retrying once")
         general.idle_wait_frames(900)
         prefab_build.create_prefab_in_memory([level_root], prefab_path)
-    prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit)
+    prefab_build.flush_template_to_disk(prefab_path, level_root_name, log=emit,
+                                        known_template_ids=known_template_ids)
     mark("save prefab")
 
     # --- did the collider bakes actually reach the file? ---

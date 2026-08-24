@@ -113,6 +113,22 @@ check(trim_at < guard_at,
       "a deliberate small bisect of a large level would be refused for a size "
       "it never intended to import")
 
+# --- 3b. each chunk writes its OWN prefab -------------------------------------
+# The guard's message promises it, and for a while only a test helper kept the
+# promise: cli.py and dialog.py wrote the plain path, so chunk 2 overwrote
+# chunk 1 and then diffed against chunk 1's ledger. The suffix now lives in
+# import_level itself; this pins the pure path arithmetic.
+check(importer.chunked_prefab_path("C:/P/Prefabs/Level.prefab", 2, 12)
+      == "C:/P/Prefabs/Level_part02_of_12.prefab",
+      "chunk 2/12 must get its own suffixed prefab path")
+check(importer.chunked_prefab_path("C:/P/Prefabs/Level_part02_of_12.prefab", 2, 12)
+      == "C:/P/Prefabs/Level_part02_of_12.prefab",
+      "a pre-suffixed path must NOT be suffixed twice -- the old test helper "
+      "added the suffix itself and still calls import_level")
+check(importer.chunked_prefab_path("C:/P/Prefabs/Level.prefab", 11, 12)
+      != importer.chunked_prefab_path("C:/P/Prefabs/Level.prefab", 12, 12),
+      "distinct chunks must map to distinct files")
+
 # --- 4. every real fixture stays under the ceiling ----------------------------
 # If this ever fails, the guard is about to start refusing an import that works
 # today, and the ceiling -- not the fixture -- needs revisiting.

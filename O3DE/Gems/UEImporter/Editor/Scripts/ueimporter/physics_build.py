@@ -279,6 +279,13 @@ def negotiate(adapter, document, report):
 
 def _author_shape(adapter, entity_id, shape, scale, subject, report, missing,
                   cooked=None):
+    """Author one shape. Returns True if a collider was actually added.
+
+    The return value exists because the caller counts colliders, and for a
+    while it counted ATTEMPTS: an unrecognised shape kind warns and skips
+    here, yet still incremented `authored` -- so the trigger guard downstream
+    would have believed a shapeless entity had a collider.
+    """
     kind = shape["type"]
     offset = _scaled(shape.get("offset", [0.0, 0.0, 0.0]), scale) \
         if shape.get("offset") else None
@@ -328,6 +335,8 @@ def _author_shape(adapter, entity_id, shape, scale, subject, report, missing,
     else:
         report.warn("PHYS_SHAPE_APPROXIMATED", subject,
                     "shape %r has no authoring path; skipped" % kind)
+        return False
+    return True
 
 
 # A whole-mesh convex hull replaces UE's decomposition with one solid lump.
@@ -597,8 +606,9 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
     authored = 0
     for shape in _collapse_convex(physics.get("shapes") or [], subject, report,
                                   adapter):
-        _author_shape(adapter, entity_id, shape, scale, subject, report, None)
-        authored += 1
+        if _author_shape(adapter, entity_id, shape, scale, subject, report,
+                         None):
+            authored += 1
 
     source_guid = physics.get("shapes_from_asset")
     if source_guid:
@@ -610,9 +620,9 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
                     collision.get("shapes") or [], subject, report, adapter,
                     cooked=bool(cooked and cooked.get("method") == "convex"),
                     mesh_bounds=(asset or {}).get("bounds_local")):
-                _author_shape(adapter, entity_id, shape, scale, subject, report,
-                              None, cooked=cooked)
-                authored += 1
+                if _author_shape(adapter, entity_id, shape, scale, subject,
+                                 report, None, cooked=cooked):
+                    authored += 1
         elif asset is not None:
             # No simple collision: fall back to the render mesh (plan M3:
             # complex-as-simple -> triangle mesh, static bodies only; a
@@ -683,6 +693,18 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
                         "authored without a collider")
 
     if physics["is_trigger"]:
-        adapter.make_trigger(entity_id)
+        if authored:
+            adapter.make_trigger(entity_id)
+        else:
+            # Both adapters RAISE on make_trigger with zero colliders, so this
+            # used to kill the ENTIRE import -- reachable with a PhysX
+            # trimesh-only trigger, where every shape route above declines and
+            # authored stays 0. One broken trigger volume is a warning; 3,676
+            # other entities not importing because of it is not.
+            report.warn("PHYS_SHAPE_APPROXIMATED", subject,
+                        "trigger entity ended up with NO colliders (every "
+                        "shape was skipped or unsupported on this backend); "
+                        "nothing can ever fire it, and no trigger flag was "
+                        "authored")
 
     return "%s, %d shape(s)" % (body, authored)

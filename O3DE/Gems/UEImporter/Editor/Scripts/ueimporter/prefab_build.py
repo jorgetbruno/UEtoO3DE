@@ -650,11 +650,17 @@ def create_prefab_in_memory(root_entity_ids, prefab_path):
 
     os.makedirs(os.path.dirname(prefab_path), exist_ok=True)
     # CreatePrefabInMemory can throw an opaque "unknown exception" when a file
-    # with a different template already exists at the target path. Re-import
-    # over an old prefab is the normal workflow, so clear it first. M10's
-    # incremental re-import replaces this with matched updates.
+    # with a different template already exists at the target path, so the old
+    # file must move out of the way -- but MOVED, not deleted. This used to
+    # `os.remove`, and a create or flush failure after that point had
+    # destroyed the user's prefab (hand edits included) while leaving the
+    # ledger behind, so the NEXT import silently rebuilt from the manifest as
+    # if nothing had existed. The backup is removed only after the flush
+    # actually writes the replacement; until then every failure path leaves
+    # `<prefab>.prev` to restore from.
+    backup = prefab_path + ".prev"
     if os.path.exists(prefab_path):
-        os.remove(prefab_path)
+        os.replace(prefab_path, backup)
     create = prefab.PrefabPublicRequestBus(
         bus.Broadcast, 'CreatePrefabInMemory', root_entity_ids, prefab_path)
     if create is None or not create.IsSuccess():
@@ -664,7 +670,10 @@ def create_prefab_in_memory(root_entity_ids, prefab_path):
                 reason = repr(create.GetError())
             except Exception:
                 reason = "outcome reported failure with no readable error"
-        raise PrefabBuildError("CreatePrefabInMemory failed: " + reason)
+        raise PrefabBuildError(
+            "CreatePrefabInMemory failed: " + reason
+            + (". The previous prefab was preserved at %s" % backup
+               if os.path.exists(backup) else ""))
     general.idle_wait_frames(30)
     return create.GetValue()
 
@@ -779,11 +788,37 @@ def unbaked_colliders(prefab_path):
     return collider_verification(prefab_path)["unbaked"]
 
 
-def flush_template_to_disk(prefab_path, marker_entity_name, log=None):
+def snapshot_template_ids():
+    """Every template id that currently serializes. Take BEFORE creating.
+
+    `flush_template_to_disk` finds the new prefab's template by scanning, and
+    "first template containing the level-root name" is ambiguous the moment a
+    session holds more than one import of the same level: every chunk of a
+    chunked import carries the SAME root name, so chunk 2's flush could find
+    chunk 1's template and write chunk 1's JSON to chunk 2's path. A snapshot
+    taken before CreatePrefabInMemory lets the flush scan only what is NEW.
+    """
+    import azlmbr.bus as bus
+    import azlmbr.prefab as prefab
+
+    known = set()
+    for template_id in range(1, TEMPLATE_ID_SCAN_LIMIT):
+        outcome = prefab.PrefabLoaderScriptingBus(
+            bus.Broadcast, 'SaveTemplateToString', template_id)
+        if outcome and outcome.IsSuccess():
+            known.add(template_id)
+    return known
+
+
+def flush_template_to_disk(prefab_path, marker_entity_name, log=None,
+                           known_template_ids=None):
     """Write the in-memory template to `prefab_path`.
 
     See the module docstring: the scan is not a shortcut, it is the only
-    reflected route to the on-disk JSON in 26.05.
+    reflected route to the on-disk JSON in 26.05. `known_template_ids` is the
+    `snapshot_template_ids()` result from before CreatePrefabInMemory; ids in
+    it are skipped so a same-named template from an EARLIER import in this
+    session can never be flushed into this import's file.
     """
     import json
 
@@ -796,6 +831,8 @@ def flush_template_to_disk(prefab_path, marker_entity_name, log=None):
 
     template_json = None
     for template_id in range(1, TEMPLATE_ID_SCAN_LIMIT):
+        if known_template_ids and template_id in known_template_ids:
+            continue
         outcome = prefab.PrefabLoaderScriptingBus(
             bus.Broadcast, 'SaveTemplateToString', template_id)
         if not outcome or not outcome.IsSuccess():
@@ -817,6 +854,12 @@ def flush_template_to_disk(prefab_path, marker_entity_name, log=None):
 
     with open(prefab_path, "w") as handle:
         handle.write(template_json)
+    # The replacement exists on disk; the pre-import backup has served its
+    # purpose (see create_prefab_in_memory -- it exists so no failure between
+    # rename and THIS line costs the user their file).
+    backup = prefab_path + ".prev"
+    if os.path.exists(backup):
+        os.remove(backup)
     emit("  wrote %s (%d bytes, %d entities)"
          % (prefab_path, len(template_json), len(document.get("Entities", {}))))
     return prefab_path
