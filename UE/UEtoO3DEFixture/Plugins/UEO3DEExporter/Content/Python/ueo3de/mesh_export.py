@@ -402,10 +402,20 @@ def _baked_lod_chain(source_mesh, mirrored=False):
     sidecar probe on lod_probe_car.fbx -- one azmodel, four azlods, index
     buffers halving with the tri counts):
 
-      * Nanite asset:  [source geometry] + [render LOD 0..N-1]. Render LOD0
-        is the fallback (~9% of the source), which makes a natural first
-        reduction step -- SM_Car_24a comes out 90,023 / 6,770 / 3,385 /
-        1,692 / 846.
+      * Nanite asset:  [source geometry] + [source SIMPLIFIED to render LOD
+        0..N-1's triangle budgets]. NOT the render LODs themselves: on a
+        Nanite asset those are the auto fallback chain, which nobody ever
+        sees in UE (Nanite renders the source at every distance) and whose
+        per-triangle material assignment can disagree with the source
+        outright -- measured on SM_Wagon_01b, whose fallback gives the body
+        to slot 2 (paint) while the source gives it slot 1 (the junker's
+        stripped-body material). Exporting the fallback made the far LODs
+        render a clean wagon under an authored wreck ("only the far away
+        works", inverted: the near view was the faithful one).
+        Simplification preserves per-triangle material ids (measured:
+        46,500 -> 5,891 tris, identical per-id regions), so every distance
+        now shows what UE shows. SM_Car_24a still comes out
+        90,023 / 6,770 / 3,385 / 1,692 / 846.
       * non-Nanite, multiple LODs: [render LOD 0..N-1] -- the authored chain
         exactly as UE renders it.
       * single LOD, non-Nanite: [render LOD0] -- the pipeline's original
@@ -427,11 +437,31 @@ def _baked_lod_chain(source_mesh, mirrored=False):
     if lod_count <= 1 and not nanite:
         return [single]
     chain = [single]
-    first_render = 0 if nanite else 1
-    for index in range(first_render, lod_count):
-        chain.append(_baked_dyn_for_lod(
-            source_mesh, mirrored, unreal.GeometryScriptLODType.RENDER_DATA,
-            index))
+    if nanite:
+        for index in range(lod_count):
+            try:
+                target = int(source_mesh.get_num_triangles(index))
+            except Exception:
+                target = 0
+            if target <= 0:
+                continue
+            reduced = _baked_dyn_for_lod(
+                source_mesh, mirrored,
+                unreal.GeometryScriptLODType.MAX_AVAILABLE, 0)
+            reduced = _unwrap(
+                unreal.GeometryScript_MeshSimplification.
+                apply_simplify_to_triangle_count(
+                    reduced, target,
+                    unreal.GeometryScriptSimplifyMeshOptions()))
+            if reduced is None:
+                raise MeshExportError(
+                    "apply_simplify_to_triangle_count returned no mesh")
+            chain.append(reduced)
+    else:
+        for index in range(1, lod_count):
+            chain.append(_baked_dyn_for_lod(
+                source_mesh, mirrored,
+                unreal.GeometryScriptLODType.RENDER_DATA, index))
     return chain
 
 
