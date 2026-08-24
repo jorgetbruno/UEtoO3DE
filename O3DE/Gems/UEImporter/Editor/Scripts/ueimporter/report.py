@@ -47,6 +47,11 @@ CODES = {
         INFO, "A slot's material matched nothing and every model slot is "
               "already assigned: the mesh asset lists a slot that no render "
               "triangle uses, so the bake dropped it. Nothing was lost."),
+    "MAT_SLOT_DEDUP_SUFFIX": (
+        INFO, "A model slot label is an FBX name-dedup variant (MI_X_1) of an "
+              "assigned label: the UE mesh fills two slots with the same "
+              "material and the FBX export deduplicates node names. The slot "
+              "received the same material as its base label."),
     "MAT_SLOT_BY_ELIMINATION": (
         INFO, "A material matched no slot label (the mesh asset's slot has "
               "no default material, so the FBX carries no name for it), but "

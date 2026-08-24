@@ -42,7 +42,16 @@ MODEL_SLOT_ASSET = "Model Materials|[%d]|Material Asset"
 # LOD wildcard for FindMaterialAssignmentId (u32 -1).
 NO_LOD = 0xFFFFFFFF
 # The Model Materials rows exist only once the entity's model asset has
-# streamed in; how long wait_for_model_rows waits for that, total frames.
+# streamed in; how long wait_for_model_rows tolerates NO entity becoming
+# ready before giving up on the stragglers. A STALL budget, not a total:
+# as long as models keep streaming in, the wait keeps going. It was a total
+# budget of 600, tuned when every mesh was one flattened azmodel -- the LOD
+# chains quintupled the product count (65 meshes -> 325 azlods plus their
+# azbuffers) and RetroCars_Overview blew through 600 frames with 41 of 64
+# entities still streaming; each was silently degraded to one material on
+# the default slot, which the user saw as smeared cars at close range
+# ("only the far away works": the mis-materialed attachments are sub-pixel
+# at distance, so only near views showed it).
 MODEL_READY_WAIT_FRAMES = 600
 # Poll GRANULARITY, not the budget, and now the granularity of ONE shared wait
 # rather than of 1217 private ones.
@@ -420,9 +429,9 @@ def wait_for_model_rows(pairs):
     400-entity sample), so probing every pair on every round costs nothing and
     keeps the bound honest per entity rather than in aggregate.
 
-    Returns the set of INDICES into `pairs` still not ready when
-    MODEL_READY_WAIT_FRAMES ran out -- each is an entity whose caller must fall
-    back. Indices rather than the pairs themselves: an EntityComponentIdPair is
+    Returns the set of INDICES into `pairs` still not ready after no entity
+    came ready for MODEL_READY_WAIT_FRAMES straight (the stall budget) -- each
+    is an entity whose caller must fall back. Indices rather than the pairs themselves: an EntityComponentIdPair is
     an engine proxy object with no promised hashing or equality, so a caller
     matching stragglers by identity would be relying on something the binding
     never offered.
@@ -442,16 +451,23 @@ def wait_for_model_rows(pairs):
     pending = [index for index, pair in enumerate(pairs) if not ready(pair)]
     MATERIAL_STATS["material_entities_that_waited"] += len(pending)
 
-    waited = 0
-    while pending and waited < MODEL_READY_WAIT_FRAMES:
+    # MODEL_READY_WAIT_FRAMES bounds the STALL, not the total: `stalled`
+    # resets every time any entity comes ready, so a level that is slowly
+    # but steadily streaming (325 azlods on RetroCars) is waited out, while
+    # a genuinely missing model still cuts off after one quiet budget.
+    stalled = 0
+    while pending and stalled < MODEL_READY_WAIT_FRAMES:
         idle_started = time.perf_counter()
         general.idle_wait_frames(MODEL_READY_POLL_FRAMES)
         MATERIAL_STATS["material_wait_idle_s"] += time.perf_counter() - idle_started
-        waited += MODEL_READY_POLL_FRAMES
-        pending = [index for index in pending if not ready(pairs[index])]
+        stalled += MODEL_READY_POLL_FRAMES
+        MATERIAL_STATS["material_wait_frames"] += MODEL_READY_POLL_FRAMES
+        still = [index for index in pending if not ready(pairs[index])]
+        if len(still) < len(pending):
+            stalled = 0
+        pending = still
 
     MATERIAL_STATS["material_model_wait_s"] += time.perf_counter() - wait_started
-    MATERIAL_STATS["material_wait_frames"] += waited
     return set(pending)
 
 
@@ -516,6 +532,39 @@ def finish_material_slots(pair, entity_id, assignments, entity_name, report,
                                    % (entity_name, MODEL_SLOT_ASSET % row))
         used_rows.add(row)
         assigned += 1
+
+    # When a UE mesh fills two slots with the SAME material, the FBX export
+    # dedupes the material node names (MI_Van_02d, MI_Van_02d_1), so the
+    # azmodel grows a slot label no manifest assignment carries. Probe each
+    # assigned label's numeric-suffix variants and give those rows the same
+    # material (measured: sm_van_02e, whose _1 slot covered 2969 of 5602
+    # triangles and rendered the model default).
+    for label, asset_id in assignments:
+        for suffix in range(1, 9):
+            variant = "%s_%d" % (label, suffix)
+            assignment_id = render.MaterialComponentRequestBus(
+                bus.Event, 'FindMaterialAssignmentId', entity_id, NO_LOD,
+                variant)
+            stable_id = getattr(assignment_id, "materialSlotStableId", None)
+            row = None
+            if stable_id is not None:
+                for index, row_stable in enumerate(row_stable_ids):
+                    if row_stable == stable_id and index not in used_rows:
+                        row = index
+                        break
+            if row is None:
+                break
+            set_outcome = editor.EditorComponentAPIBus(
+                bus.Broadcast, 'SetComponentProperty', pair,
+                MODEL_SLOT_ASSET % row, asset_id)
+            if not set_outcome or not set_outcome.IsSuccess():
+                raise PrefabBuildError("%s: setting %s failed"
+                                       % (entity_name, MODEL_SLOT_ASSET % row))
+            used_rows.add(row)
+            assigned += 1
+            report.warn("MAT_SLOT_DEDUP_SUFFIX", entity_name,
+                        "slot %r is an FBX name-dedup of %r; assigned the "
+                        "same material" % (variant, label))
 
     # A mesh asset slot with NO default material exports with no material
     # name, so its azmodel slot label is unknowable from the manifest. When
