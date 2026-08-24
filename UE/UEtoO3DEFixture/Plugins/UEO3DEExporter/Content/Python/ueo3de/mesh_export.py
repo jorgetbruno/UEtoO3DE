@@ -188,6 +188,8 @@ def _baked_dyn_for_lod(source_mesh, mirrored, lod_type, lod_index):
     if dyn is None:
         raise MeshExportError("copy_mesh_from_static_mesh returned no mesh")
 
+    _remap_section_ids_to_slots(dyn, source_mesh, requested_lod)
+
     # ORPHANED VERTICES make the bounds lie. Measured on Docks
     # `SM_Crab_Cages_NN_02a` (Nanite, 863,082 tris): the SOURCE MODEL carries
     # vertices at X=-174.89 cm that NO TRIANGLE references -- editing
@@ -262,6 +264,54 @@ def _drop_lightmap_uvs(dyn, source_mesh):
     if count != index + 1:
         return
     unreal.GeometryScript_UVs.set_num_uv_sets(dyn, index)
+
+
+def _remap_section_ids_to_slots(dyn, source_mesh, requested_lod):
+    """Rewrite the copied mesh's material ids from SECTION ORDINALS to slot
+    indices.
+
+    `copy_mesh_from_static_mesh` numbers triangle material ids by SECTION
+    ORDER of the read LOD, not by the asset's material slot order. On most
+    meshes the two agree; where they do not, every id points at the wrong
+    slot and `_compact_slots` labels the geometry with the wrong material
+    NAME -- measured on SM_Wagon_01a, whose Nanite-source sections run
+    [(MI_Wagon_01a, slot 1), (MI_Wagon_01b, slot 0), ...]: the painted roof
+    skin exported under the interior material's name and every distance
+    rendered a fabric-bodied wagon, while its sibling SM_Wagon_01b (identity
+    section order) exported correctly. SM_Truck_02a's source sections run
+    [0,4,5,1,2,3]. The glb exports carried the same bug from the same read.
+
+    `get_section_material_list_from_static_mesh` returns each section's
+    MaterialIndex -- the slot index -- for BOTH read paths, including
+    MAX_AVAILABLE (probed on 26.05/UE 5.8). Identity maps are left alone;
+    a failed query on a permuted mesh must fail the export, not mislabel it.
+    """
+    result = unreal.GeometryScript_AssetUtils.\
+        get_section_material_list_from_static_mesh(source_mesh, requested_lod)
+    indices = None
+    outcome_ok = True
+    for item in (result if isinstance(result, tuple) else (result,)):
+        if isinstance(item, unreal.GeometryScriptOutcomePins):
+            outcome_ok = item == unreal.GeometryScriptOutcomePins.SUCCESS
+    for item in (result if isinstance(result, tuple) else (result,)):
+        if isinstance(item, unreal.Array) and len(item) and \
+                isinstance(item[0], int):
+            indices = list(item)
+    if not outcome_ok or indices is None:
+        raise MeshExportError(
+            "get_section_material_list_from_static_mesh gave no section "
+            "material indices for %s" % source_mesh.get_name())
+    if indices == list(range(len(indices))):
+        return
+    ids = _triangle_material_ids(dyn)
+    for triangle, section in enumerate(ids):
+        if section < len(indices):
+            dyn.set_triangle_material_id(triangle, indices[section])
+        else:
+            raise MeshExportError(
+                "%s: triangle %d carries section id %d beyond the %d "
+                "sections reported" % (source_mesh.get_name(), triangle,
+                                       section, len(indices)))
 
 
 def _triangle_material_ids(dyn):
