@@ -1161,14 +1161,28 @@ def export_meshes(assets, output_root, log=None):
         # mesh there has 4 LODs and already took the dyn-derived branch.
         if lod_count > 1 or (_nanite_enabled(source)
                              and not _nanite_fallback_forced()):
-            # The asset AABB is the UNION of all LODs; the bake reads LOD0
-            # only (M9's LOD_FLATTENED), so the FBX expectation must come
-            # from the baked geometry itself. dyn already carries the bake's
-            # negations, so mirror-Y of ITS bounds is the FBX-writer
-            # expectation for normal and variant entries alike.
-            box = _unwrap(unreal.GeometryScript_MeshQueries.get_mesh_bounding_box(dyn))
-            bounds_min = [box.min.x, -box.max.y, box.min.z]
-            bounds_max = [box.max.x, -box.min.y, box.max.z]
+            # The expectation must describe the WRITTEN FILE, which is the
+            # union of every exported LOD. With a chain that is not LOD0's
+            # box: quadric reduction moves vertices, and the far LODs bulge a
+            # couple of centimetres outside LOD0 (measured on SM_Car_24a: the
+            # file reached -253.43 where LOD0 ends at -251.95, and the 1e-3 cm
+            # tolerance rightly refused the export). Union over the chain's
+            # own baked boxes keeps the check EXACT rather than loosening the
+            # tolerance until a real bake error could hide in it. The dyns
+            # already carry the bake's negations, so mirror-Y of the union is
+            # the FBX-writer expectation for normal and variant entries alike.
+            union_min = [float("inf")] * 3
+            union_max = [float("-inf")] * 3
+            for lod_dyn in chain:
+                box = _unwrap(unreal.GeometryScript_MeshQueries
+                              .get_mesh_bounding_box(lod_dyn))
+                for axis, (low, high) in enumerate((
+                        (box.min.x, box.max.x), (box.min.y, box.max.y),
+                        (box.min.z, box.max.z))):
+                    union_min[axis] = min(union_min[axis], low)
+                    union_max[axis] = max(union_max[axis], high)
+            bounds_min = [union_min[0], -union_max[1], union_min[2]]
+            bounds_max = [union_max[0], -union_min[1], union_max[2]]
             exported.append({
                 "guid": guid,
                 "ue_path": asset["ue_path"],
