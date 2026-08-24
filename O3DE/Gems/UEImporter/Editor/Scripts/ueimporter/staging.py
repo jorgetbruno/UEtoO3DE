@@ -27,6 +27,44 @@ class StagingError(Exception):
     pass
 
 
+def fbx_lod_nodes(path, node_name):
+    """`[<node>_LOD0, ...]` when the staged FBX carries a LOD chain, else [].
+
+    The exporter wraps a multi-LOD bake in an FbxLODGroup whose children are
+    named `<node>_LOD<i>` (measured: probe_write_lods). Binary FBX stores
+    node names as plain strings, so a printable-strings scan finds them
+    without an FBX parser -- the same instrument that located the lightmap
+    UV layers. Contiguity from 0 is required: a file with _LOD0 and _LOD2
+    but no _LOD1 is not a chain this pipeline wrote, and treating it as one
+    would select a hole into the LodRule.
+    """
+    if not str(path).lower().endswith(".fbx"):
+        return []
+    with open(path, "rb") as handle:
+        blob = handle.read()
+    found = []
+    index = 0
+    while True:
+        marker = ("%s_LOD%d" % (node_name, index)).encode("ascii")
+        # Name strings are length-delimited, so the next byte after a real
+        # node name is never another identifier character -- this rejects
+        # `_LOD1` matching inside `_LOD10`... nothing yet writes 10 LODs,
+        # but the check costs one byte.
+        position = blob.find(marker)
+        hit = False
+        while position != -1:
+            after = blob[position + len(marker):position + len(marker) + 1]
+            if not after.isalnum() and after != b"_":
+                hit = True
+                break
+            position = blob.find(marker, position + 1)
+        if not hit:
+            break
+        found.append("%s_LOD%d" % (node_name, index))
+        index += 1
+    return found if len(found) >= 2 else []
+
+
 def product_path_for(relative_path, product_prefix):
     """`uetoo3de/a/b.fbx` -> `assets/uetoo3de/a/b.fbx.azmodel` (lowercased)."""
     return ("%s/%s.azmodel" % (product_prefix, relative_path)).lower()
@@ -364,8 +402,9 @@ def stage(document, source_root, project_assets_root, log=None):
                     % (relative_path, meshes, node_name))
             gltf_source.name_mesh_nodes(staged_fbx, node_name)
 
+        lod_nodes = fbx_lod_nodes(staged_fbx, node_name)
         sidecar = assetinfo.write(staged_fbx, node_name, physics=physics,
-                                  backends=cook_backends)
+                                  backends=cook_backends, lod_nodes=lod_nodes)
 
         record = {
             "kind": "static_mesh",

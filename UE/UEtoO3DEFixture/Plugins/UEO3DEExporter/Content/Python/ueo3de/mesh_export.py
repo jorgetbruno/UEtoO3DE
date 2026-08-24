@@ -88,11 +88,19 @@ def _unwrap(result):
     return result
 
 
-def _make_export_options():
+def _make_export_options(level_of_detail=False):
+    """FbxExportOption for the bake exports.
+
+    `level_of_detail` stays False for single-LOD bakes: True wraps even a
+    lone mesh in an FbxLODGroup, which changes EVERY node path and would
+    break every existing sidecar. Multi-LOD bakes pass True, and their
+    sidecars use the measured LODGroup paths
+    (`RootNode.<name>.<name>_LOD<i>`).
+    """
     options = unreal.FbxExportOption()
     required = {
         "collision": False,
-        "level_of_detail": False,
+        "level_of_detail": bool(level_of_detail),
     }
     for name, value in required.items():
         try:
@@ -157,31 +165,24 @@ def _baked_dynamic_mesh(source_mesh, mirrored=False):
     (measured in `Tests/ue/probe_m2_mirror2.py`) -- no manual flip in either
     path.
     """
-    dyn = unreal.DynamicMesh()
-    copy_options = unreal.GeometryScriptCopyMeshFromAssetOptions()
-    requested_lod = unreal.GeometryScriptMeshReadLOD()
-    # The render mesh is what the FBX exporter writes, so read the same thing
-    # -- EXCEPT for Nanite meshes, where RENDER_DATA is the FALLBACK mesh, not
-    # what anyone sees. Measured on VOL4 packs (every asset Nanite-enabled):
-    #
-    #     SM_Wagon_01a   RENDER_DATA  8,646 tris   MAX_AVAILABLE 93,712
-    #     SM_Car_24a     RENDER_DATA  6,770 tris   MAX_AVAILABLE 90,023
-    #     SM_Boat_17a    RENDER_DATA  1,652 tris   MAX_AVAILABLE 12,615
-    #
-    # UE's viewport renders the full Nanite geometry, so exporting the ~9%
-    # fallback shipped visibly decimated models ("something is breaking the
-    # models" -- coarse pillars, faceted shading) while every check passed:
-    # the fallback is a perfectly valid mesh, just not the one the user sees.
-    # Gated on the asset's own Nanite flag so non-Nanite meshes keep producing
-    # the exact bytes the suites pin (the fixture is non-Nanite).
-    #
-    # UEO3DE_NANITE_FALLBACK=1 restores the old read -- the fallback IS what
-    # UE itself uses for complex collision on Nanite meshes, and a 90k-tri
-    # cooked collider per car is not free. Unrecognised values raise.
     lod_type = unreal.GeometryScriptLODType.RENDER_DATA
     if _nanite_enabled(source_mesh) and not _nanite_fallback_forced():
         lod_type = unreal.GeometryScriptLODType.MAX_AVAILABLE
+    return _baked_dyn_for_lod(source_mesh, mirrored, lod_type, 0)
+
+
+def _baked_dyn_for_lod(source_mesh, mirrored, lod_type, lod_index):
+    """One LOD's geometry, copied, cleaned, and carrying the Lane B bake."""
+    dyn = unreal.DynamicMesh()
+    copy_options = unreal.GeometryScriptCopyMeshFromAssetOptions()
+    requested_lod = unreal.GeometryScriptMeshReadLOD()
+    # For LOD 0 the caller passes MAX_AVAILABLE on Nanite assets (the
+    # fallback is not what anyone sees -- SM_Wagon_01a: 8,646 fallback tris
+    # vs 93,712 real) and RENDER_DATA otherwise; higher chain entries read
+    # RENDER_DATA at their own index. UEO3DE_NANITE_FALLBACK=1 restores the
+    # old fallback read for LOD 0.
     requested_lod.set_editor_property("lod_type", lod_type)
+    requested_lod.set_editor_property("lod_index", int(lod_index))
     dyn = _unwrap(unreal.GeometryScript_AssetUtils.copy_mesh_from_static_mesh(
         source_mesh, dyn, copy_options, requested_lod))
     if dyn is None:
@@ -356,6 +357,70 @@ def _placeholder_slot(source_slot, slot_index):
     return entry
 
 
+_LOD_OPTIONS = []          # built once, on first multi-LOD export
+
+
+def _lod_export_options():
+    if not _LOD_OPTIONS:
+        _LOD_OPTIONS.append(_make_export_options(level_of_detail=True))
+    return _LOD_OPTIONS[0]
+
+
+def lod_chain_enabled():
+    """UEO3DE_LOD_CHAIN -> export the authored LOD chain (default ON).
+
+    Unrecognised values raise, per house rule.
+    """
+    value = os.environ.get("UEO3DE_LOD_CHAIN", "").strip().lower()
+    if value in _NANITE_ON or value == "":
+        return True
+    if value in _NANITE_OFF[1:]:
+        return False
+    raise MeshExportError(
+        "UEO3DE_LOD_CHAIN=%r is not one of %s"
+        % (value, ", ".join(_NANITE_ON + _NANITE_OFF[1:])))
+
+
+def _baked_lod_chain(source_mesh, mirrored=False):
+    """Every LOD the export should carry, baked, LOD0 first.
+
+    The chain, measured end to end (Tests: probe_write_lods, the LodRule
+    sidecar probe on lod_probe_car.fbx -- one azmodel, four azlods, index
+    buffers halving with the tri counts):
+
+      * Nanite asset:  [source geometry] + [render LOD 0..N-1]. Render LOD0
+        is the fallback (~9% of the source), which makes a natural first
+        reduction step -- SM_Car_24a comes out 90,023 / 6,770 / 3,385 /
+        1,692 / 846.
+      * non-Nanite, multiple LODs: [render LOD 0..N-1] -- the authored chain
+        exactly as UE renders it.
+      * single LOD, non-Nanite: [render LOD0] -- the pipeline's original
+        shape, byte-identical exports, no LODGroup wrapper (a lone mesh in a
+        group would change every node path the sidecars pin).
+
+    O3DE has no Nanite: without this chain every imported mesh renders its
+    full geometry at every distance, which is why a level of 90k-tri cars is
+    the fidelity/perf item this exists for.
+    """
+    single = _baked_dynamic_mesh(source_mesh, mirrored=mirrored)
+    if not lod_chain_enabled():
+        return [single]
+    try:
+        lod_count = int(source_mesh.get_num_lods())
+    except Exception:
+        lod_count = 1
+    nanite = _nanite_enabled(source_mesh) and not _nanite_fallback_forced()
+    if lod_count <= 1 and not nanite:
+        return [single]
+    chain = [single]
+    first_render = 0 if nanite else 1
+    for index in range(first_render, lod_count):
+        chain.append(_baked_dyn_for_lod(
+            source_mesh, mirrored, unreal.GeometryScriptLODType.RENDER_DATA,
+            index))
+    return chain
+
+
 def _bake_temp_asset(dyn, asset_name):
     """Bake to a temp StaticMesh named after the SOURCE asset.
 
@@ -371,10 +436,27 @@ def _bake_temp_asset(dyn, asset_name):
     # Collision travels in the manifest; a baked body setup would only end up
     # as UCX_ nodes in the FBX.
     options.set_editor_property("enable_collision", False)
+    chain = dyn if isinstance(dyn, list) else [dyn]
     baked = _unwrap(unreal.GeometryScript_NewAssetUtils.create_new_static_mesh_asset_from_mesh(
-        dyn, temp_path, options))
+        chain[0], temp_path, options))
     if baked is None:
         raise MeshExportError("create_new_static_mesh_asset_from_mesh failed for " + temp_path)
+    # Higher LODs are written into the asset's LOD slots; the FBX exporter
+    # then emits the LODGroup (measured: SUCCESS per write, the asset
+    # reports the full count, and the file carries <name>_LOD<i> nodes).
+    write_options = unreal.GeometryScriptCopyMeshToAssetOptions()
+    for index, lod_dyn in enumerate(chain[1:], start=1):
+        write_lod = unreal.GeometryScriptMeshWriteLOD()
+        write_lod.set_editor_property("lod_index", index)
+        outcome = unreal.GeometryScript_AssetUtils.copy_mesh_to_static_mesh(
+            lod_dyn, baked, write_options, write_lod)
+        pins = [x for x in (outcome if isinstance(outcome, tuple) else (outcome,))
+                if isinstance(x, unreal.GeometryScriptOutcomePins)]
+        if pins and pins[0] != unreal.GeometryScriptOutcomePins.SUCCESS:
+            raise MeshExportError(
+                "writing LOD %d into %s failed (%r); exporting a partial "
+                "chain would silently drop the far LODs"
+                % (index, temp_path, pins[0]))
     _disable_lightmap_uv_generation(baked, temp_path)
     return temp_path, baked
 
@@ -1039,16 +1121,28 @@ def export_meshes(assets, output_root, log=None):
         node_name = asset.get("fbx_node_name") or source.get_name()
         output_path = os.path.join(output_root, asset["o3de_relative_path"]).replace("\\", "/")
 
-        dyn = _baked_dynamic_mesh(source, mirrored=mirrored)
+        # The LOD chain is FBX-ONLY: a glb with several mesh nodes is exactly
+        # what staging refuses (it cannot name two nodes apart), so the glb
+        # container keeps the single flattened mesh and its LOD_FLATTENED
+        # report stays true there.
+        is_fbx = output_path.lower().endswith(".fbx")
+        if is_fbx:
+            chain = _baked_lod_chain(source, mirrored=mirrored)
+        else:
+            chain = [_baked_dynamic_mesh(source, mirrored=mirrored)]
+        dyn = chain[0]
         slots = _compact_slots(dyn, source)
-        temp_path, baked = _bake_temp_asset(dyn, node_name)
+        temp_path, baked = _bake_temp_asset(chain, node_name)
         try:
             # The FBX carries one material per slot, named after the UE
             # material asset -- the label the importer assigns by. Set for
             # every mesh (single-slot included) so labels are always real
             # material names, never the bake's WorldGridMaterial default.
+            # AFTER the LOD writes: copy_mesh_to_static_mesh touches the
+            # asset's material list, and the labels must win.
             baked.set_editor_property("static_materials", slots)
-            _export_fbx(baked, output_path, options)
+            _export_fbx(baked, output_path,
+                        _lod_export_options() if len(chain) > 1 else options)
         finally:
             unreal.EditorAssetLibrary.delete_asset(temp_path)
 

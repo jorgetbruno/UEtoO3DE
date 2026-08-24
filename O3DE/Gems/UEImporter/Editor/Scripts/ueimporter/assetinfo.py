@@ -257,7 +257,7 @@ def _physics_group(group_name, fbx_node_name, physics, backend,
 
 
 def build(group_name, fbx_node_name, physics=None, backends=("physx",),
-          source_path=None):
+          source_path=None, lod_nodes=None):
     """The `.assetinfo` document for a single-mesh FBX.
 
     `physics` is None or a `physics_for_asset` plan; when present, one physics
@@ -276,17 +276,45 @@ def build(group_name, fbx_node_name, physics=None, backends=("physx",),
     if not fbx_node_name:
         raise ValueError("fbx_node_name is required; without it the node "
                          "selection path cannot be built and the AP job fails")
+    # LOD CHAINS (measured on lod_probe_car.fbx, one azmodel + four azlods):
+    # a `level_of_detail=True` FBX wraps the mesh in an FbxLODGroup that
+    # SceneAPI flattens to `RootNode.<name>` with `<name>_LOD<i>` children.
+    # The render group then selects LOD0's node and the LodRule -- populated
+    # here, still bare everywhere else, exactly as the M0 note requires for
+    # single-mesh files -- selects one node per further LOD. Without a
+    # sidecar the AP fragments the group into one single-LOD model per node
+    # (measured), which is the failure the old level_of_detail=False comment
+    # predicted.
+    render_selected = gltf_source.node_path(fbx_node_name, source_path)
+    physics_node = fbx_node_name
+    lod_rule = {"$type": LOD_RULE_TYPE}
+    if lod_nodes:
+        if len(lod_nodes) < 2:
+            raise ValueError("lod_nodes needs at least LOD0 and LOD1; got %r"
+                             % (lod_nodes,))
+        base = gltf_source.node_path(fbx_node_name, source_path)
+        render_selected = "%s.%s" % (base, lod_nodes[0])
+        physics_node = "%s.%s" % (fbx_node_name, lod_nodes[0])
+        lod_rule = {
+            "$type": LOD_RULE_TYPE,
+            "nodeSelectionList": [
+                {"selectedNodes": ["%s.%s" % (base, node)],
+                 "unselectedNodes": []}
+                for node in lod_nodes[1:]
+            ],
+        }
+
     values = [{
         "$type": MESH_GROUP_TYPE,
         "name": group_name,
         "nodeSelectionList": {
-            "selectedNodes": [gltf_source.node_path(fbx_node_name, source_path)],
+            "selectedNodes": [render_selected],
             "unselectedNodes": [],
         },
         "rules": {
             "rules": [
                 {"$type": "MaterialRule"},
-                {"$type": LOD_RULE_TYPE},
+                lod_rule,
             ]
         },
     }]
@@ -294,7 +322,7 @@ def build(group_name, fbx_node_name, physics=None, backends=("physx",),
         for backend in backends:
             if backend not in BACKENDS:
                 raise ValueError("unknown physics backend %r" % (backend,))
-            values.append(_physics_group(group_name, fbx_node_name, physics,
+            values.append(_physics_group(group_name, physics_node, physics,
                                          backend, source_path=source_path))
     return {"values": values}
 
@@ -346,9 +374,11 @@ def physics_in_sidecar(sidecar_path, backend="physx"):
     return None
 
 
-def write(fbx_path, fbx_node_name, physics=None, backends=("physx",)):
+def write(fbx_path, fbx_node_name, physics=None, backends=("physx",),
+          lod_nodes=None):
     """Write `<fbx_path>.assetinfo` next to the FBX. Returns the sidecar path."""
     document = build(group_name_for(fbx_path), fbx_node_name, physics=physics,
+                     lod_nodes=lod_nodes,
                      backends=backends, source_path=fbx_path)
     sidecar_path = fbx_path + ".assetinfo"
     directory = os.path.dirname(sidecar_path)
