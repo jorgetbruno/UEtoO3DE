@@ -158,7 +158,17 @@ def main():
         if environment["type"] == "post_process":
             check('PostFX Layer' in present, '%s: no PostFX Layer' % name)
             overrides = environment.get("overrides") or {}
-            wants_exposure = 'auto_exposure_bias' in overrides
+            # Mirrors env_build's rule exactly: an out-of-range bias with no
+            # eye adaptation is DROPPED (measured: clamping it still clipped
+            # half the frame); in-range bias, or any adaptation key, authors.
+            from ueimporter import env_build as env_build_module
+            low, high = env_build_module.EXPOSURE_EV_RANGE
+            adaptation = any(k in overrides for k in (
+                "auto_exposure_min_brightness", "auto_exposure_max_brightness",
+                "auto_exposure_speed_up", "auto_exposure_speed_down"))
+            bias = overrides.get('auto_exposure_bias')
+            wants_exposure = adaptation or (
+                bias is not None and low <= float(bias) <= high)
             wants_bloom = ('bloom_intensity' in overrides
                            or 'bloom_threshold' in overrides)
             check(('Exposure Control' in present) == wants_exposure,

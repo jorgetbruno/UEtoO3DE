@@ -217,17 +217,29 @@ def test_implausible_exposure_bias_is_clamped_and_reported():
     """
     blown = dict(PPV, overrides={"auto_exposure_bias": 12.0})
     plans, warnings = env_build.plan_environment(blown, "ppv")
+    check(env_build.EXPOSURE_CONTROL not in components_of(plans),
+          "an out-of-range bias with NO eye adaptation must author NO "
+          "Exposure Control at all. Clamping it to the range edge was tried "
+          "first and MEASURED to fail: +5 EV manual still clipped 51%% of a "
+          "real level's frame to white -- without auto-exposure there is "
+          "nothing for the bias to offset, so no in-range substitute exists")
+    check(any(code == "ENV_VALUE_IMPLAUSIBLE" for code, _ in warnings),
+          "dropping the setting must be REPORTED, never silent")
+    check(any("12" in detail for _code, detail in warnings),
+          "the report must name the ORIGINAL value so it can be re-tuned")
+
+    # WITH eye adaptation the compensation offsets a normalised scene --
+    # close to UE's own semantics -- so there clamping is a usable
+    # approximation and the component is still authored.
+    adaptive_blown = dict(PPV, overrides={"auto_exposure_bias": 12.0,
+                                          "auto_exposure_speed_up": 2.0})
+    plans, warnings = env_build.plan_environment(adaptive_blown, "ppv")
     compensation = value_at(plans, env_build.EXPOSURE_CONTROL,
                             env_build.P_EXPOSURE_COMPENSATION)
     low, high = env_build.EXPOSURE_EV_RANGE
-    check(low <= compensation <= high,
-          "an exposure compensation of 12 EV is 4096x and must be clamped "
-          "into %r; got %r" % (env_build.EXPOSURE_EV_RANGE, compensation))
-    check(any(code == "ENV_VALUE_IMPLAUSIBLE" for code, _ in warnings),
-          "clamping must be REPORTED -- a silently altered value is a second "
-          "invisible failure, not a fix")
-    check(any("12" in detail for _code, detail in warnings),
-          "the report must name the ORIGINAL value so it can be re-tuned")
+    check(compensation is not None and low <= compensation <= high,
+          "with eye adaptation present the bias is clamped into %r, not "
+          "dropped; got %r" % (env_build.EXPOSURE_EV_RANGE, compensation))
 
     # The other direction: a plausible value must pass through untouched, or
     # the guard would quietly flatten every artist's grading.
@@ -240,11 +252,13 @@ def test_implausible_exposure_bias_is_clamped_and_reported():
           "a plausible value must not be reported as implausible")
 
     negative = dict(PPV, overrides={"auto_exposure_bias": -30.0})
-    plans, _warnings = env_build.plan_environment(negative, "ppv")
-    check(value_at(plans, env_build.EXPOSURE_CONTROL,
-                   env_build.P_EXPOSURE_COMPENSATION) == low,
-          "an implausibly DARK bias must clamp too; a level that imports "
-          "pure black is no better than one that imports pure white")
+    plans, warnings = env_build.plan_environment(negative, "ppv")
+    check(env_build.EXPOSURE_CONTROL not in components_of(plans),
+          "an implausibly DARK bias is dropped by the same rule as a bright "
+          "one -- a level that imports pure black is no better than pure "
+          "white, and -30 EV has no translatable manual value either")
+    check(any(code == "ENV_VALUE_IMPLAUSIBLE" for code, _ in warnings),
+          "the dark drop must be reported too")
 
 
 def test_exposure_brightness_limits_are_luminance_not_ev():

@@ -347,13 +347,41 @@ def plan_environment(environment, subject, sky_already_authored=False,
         ]}]
 
         exposure = []
+        eye_adaptation = any(key in overrides for key in (
+            "auto_exposure_min_brightness", "auto_exposure_max_brightness",
+            "auto_exposure_speed_up", "auto_exposure_speed_down"))
         if "auto_exposure_bias" in overrides:
-            exposure.append((P_EXPOSURE_COMPENSATION, KIND_FLOAT,
-                             _clamped_value(
-                                 float(overrides["auto_exposure_bias"]),
-                                 EXPOSURE_EV_RANGE, "auto_exposure_bias",
-                                 "Manual Compensation", "EV stops from zero",
-                                 warnings)))
+            bias = float(overrides["auto_exposure_bias"])
+            low, high = EXPOSURE_EV_RANGE
+            if low <= bias <= high:
+                exposure.append((P_EXPOSURE_COMPENSATION, KIND_FLOAT, bias))
+            elif eye_adaptation:
+                # With adaptation on, the compensation offsets a NORMALISED
+                # scene -- close to what UE's bias means -- so clamping into
+                # range is a usable approximation.
+                exposure.append((P_EXPOSURE_COMPENSATION, KIND_FLOAT,
+                                 _clamped_value(bias, EXPOSURE_EV_RANGE,
+                                                "auto_exposure_bias",
+                                                "Manual Compensation",
+                                                "EV stops from zero",
+                                                warnings)))
+            else:
+                # MEASURED, and it killed the clamp-and-hope approach: this
+                # exact value CLAMPED to +5 EV still clipped 51% of a real
+                # level's frame to white (Docks Demonstration, the render
+                # check). Without eye adaptation, Atom's Manual Compensation
+                # multiplies the RAW scene -- there is no auto-exposure for
+                # the bias to offset, so no in-range substitute exists. An
+                # untranslatable setting is dropped LOUDLY, not translated
+                # wrongly.
+                warnings.append((
+                    "ENV_VALUE_IMPLAUSIBLE",
+                    "UE auto_exposure_bias is %.4g EV with no eye-adaptation "
+                    "settings; as MANUAL compensation that is a raw 2^%.3g "
+                    "multiply of the scene (clamping to the range edge was "
+                    "measured to clip half the frame to white). No Exposure "
+                    "Control is authored -- set exposure in O3DE for this "
+                    "level." % (bias, bias)))
         # Luminance clamps are CONVERTED (log2); speeds are the same kind of
         # quantity in both engines and pass through.
         for key, path in (("auto_exposure_min_brightness", P_EXPOSURE_MIN),
@@ -378,9 +406,6 @@ def plan_environment(environment, subject, sky_already_authored=False,
                 "overlapping unbound volumes by priority into one result -- if "
                 "this one should win, raise its priority in UE and re-export"))
         elif exposure:
-            eye_adaptation = any(key in overrides for key in (
-                "auto_exposure_min_brightness", "auto_exposure_max_brightness",
-                "auto_exposure_speed_up", "auto_exposure_speed_down"))
             head = [
                 (P_EXPOSURE_ENABLE, KIND_BOOL, True),
                 (P_EXPOSURE_TYPE, KIND_INT,
