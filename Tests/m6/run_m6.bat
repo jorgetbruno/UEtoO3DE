@@ -21,10 +21,21 @@ echo === 1/2  offline environment mapping rules ===
 %PY% "%REPO%\Tests\m6\test_env_build.py"
 if errorlevel 1 goto :failed
 
-echo === 2/2  environment in the saved prefab (editor) ===
+echo === 2/3  environment in the saved prefab (editor) ===
 call "%REPO%\Tests\o3de\run_o3de_python.bat" "%REPO%\Tests\m6\m6_acceptance.py" "%REPO%\Tests\m6\results\m6_acceptance_result.txt"
 if errorlevel 1 (
   echo   see Tests\m6\results\m6_acceptance_result.txt
+  goto :failed
+)
+
+echo === 3/3  the imported level RENDERS A PICTURE (editor) ===
+rem The check written after a level imported pure white while every
+rem structural assertion passed -- and then sat referenced by NO runner,
+rem guarding nothing, until an external review noticed. Control first: an
+rem all-white capture and a capture that never happened look identical.
+call "%REPO%\Tests\o3de\run_o3de_python.bat" "%REPO%\Tests\m6\m6_level_renders.py" "%REPO%\Tests\m6\results\m6_level_renders_result.txt"
+if errorlevel 1 (
+  echo   see Tests\m6\results\m6_level_renders_result.txt
   goto :failed
 )
 

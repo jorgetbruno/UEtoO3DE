@@ -49,6 +49,12 @@ if %ERRORLEVEL% NEQ 0 goto :failed
 if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_frame_stats.py"
 if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_chunk.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_png.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_orphan_tests.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
 
 echo === 1/1  live: a real level, every authored bake accounted for ===
 if not exist "%UEO3DE_EXPORT%\manifest.json" (
