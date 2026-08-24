@@ -29,7 +29,10 @@ DEFAULTS = {
     "prefab": "",
     "backend": "",
     "report": "",
-    "level": "DefaultLevel",
+    # Empty means "the dedicated scratch level" (importer.scratch_level_name).
+    # DefaultLevel was the default until an import stripped a user's scene out
+    # of the DefaultLevel they were building in.
+    "level": "",
     "reimport": "1",
     "timeout": "180",
 }
@@ -104,7 +107,7 @@ def run(options, log=print):
         source_assets_root=os.path.join(export_root, "Assets"),
         project_assets_root=os.path.join(project_root, "Assets"),
         prefab_path=prefab_path,
-        level_name=options["level"],
+        level_name=options["level"] or None,
         asset_timeout=float(options["timeout"]),
         backend=(options["backend"] or None),
         reimport=options["reimport"] not in ("0", "false", "no"),

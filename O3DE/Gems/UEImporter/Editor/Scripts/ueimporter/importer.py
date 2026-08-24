@@ -71,6 +71,118 @@ def chunk_guard_message(entity_count, chunks, ceiling):
                      % (index, chunks) for index in range(1, chunks + 1))))
 
 
+SCRATCH_LEVEL_NAME = "UEO3DE_Scratch"
+# The engine template's DefaultLevel is ~9 entity names (sun, sky, camera,
+# grid, container). Anything well beyond that is someone's WORK.
+SCRATCH_MAX_ENTITY_NAMES = 24
+
+
+def scratch_level_name(environ=None):
+    """The level imports author in. UEO3DE_SCRATCH_LEVEL overrides."""
+    source = os.environ if environ is None else environ
+    return (source.get("UEO3DE_SCRATCH_LEVEL") or "").strip() or SCRATCH_LEVEL_NAME
+
+
+def level_prefab_path(project_root, level_name):
+    return os.path.join(project_root, "Levels", level_name,
+                        level_name + ".prefab")
+
+
+def _engine_template_level():
+    """The stock empty level shipped with the installed engine, or None.
+
+    Levels cannot be created from Python on this build -- create_level and
+    create_level_no_prompt both return None and write nothing (probed on
+    26.05, Tests/o3de/probe_create_level.py) -- so the scratch level is
+    SEEDED by copying the engine's own project-template DefaultLevel. That
+    file is 12.7 KB, nine stock entities, and contains no reference to its
+    own name, so a plain copy under a new name is a complete level.
+    """
+    import glob as glob_module
+    manifest = os.path.join(os.path.expanduser("~"), ".o3de",
+                            "o3de_manifest.json")
+    try:
+        import json as json_module
+        with open(manifest, "r") as handle:
+            engines = json_module.load(handle).get("engines") or []
+    except (OSError, ValueError):
+        engines = []
+    for engine in engines:
+        root = engine.get("path") if isinstance(engine, dict) else engine
+        if not root:
+            continue
+        hits = glob_module.glob(os.path.join(
+            str(root), "Templates", "*", "Template", "Levels", "DefaultLevel",
+            "DefaultLevel.prefab"))
+        if hits:
+            return sorted(hits)[0]
+    return None
+
+
+def ensure_scratch_level(project_root, level_name, template_path=None):
+    """Seed `Levels/<name>/<name>.prefab` from the engine template if absent.
+
+    Only ever creates the DEDICATED scratch level; any other name is the
+    caller's own level and is left exactly as found.
+    """
+    target = level_prefab_path(project_root, level_name)
+    if os.path.isfile(target):
+        return target
+    if level_name != scratch_level_name():
+        return target          # not ours to create; the editor will complain
+    template = template_path or _engine_template_level()
+    if template is None:
+        raise RuntimeError(
+            "no engine project template found to seed the scratch level "
+            "'%s' from, and levels cannot be created from Python on this "
+            "build. Create Levels/%s/%s.prefab once by hand (File > New "
+            "Level) and re-run." % (level_name, level_name, level_name))
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    import shutil as shutil_module
+    shutil_module.copyfile(template, target)
+    return target
+
+
+def refuse_populated_level(project_root, level_name, environ=None):
+    """Raise before an import authors inside a level holding real work.
+
+    THE INCIDENT THIS GUARDS (2026-08-23): imports use their level as
+    disposable scratch -- they open it with no save prompt, REMOVE placed
+    instances of the prefab being rebuilt, and the level gets saved. That
+    machinery ran against the level the user was building in, and their
+    placed scene was stripped and saved over. The content came back only
+    because the editor keeps .bak files.
+
+    The check is a plain file read, no editor: a level file with more than
+    SCRATCH_MAX_ENTITY_NAMES entity names is somebody's work, whatever it is
+    called. UEO3DE_SCRATCH_OK=1 overrides for someone who genuinely means it.
+    """
+    source = os.environ if environ is None else environ
+    if str(source.get("UEO3DE_SCRATCH_OK", "")).strip().lower() in (
+            "1", "on", "true", "yes"):
+        return
+    path = level_prefab_path(project_root, level_name)
+    if not os.path.isfile(path):
+        return                 # nothing there to destroy
+    try:
+        import json as json_module
+        with open(path, "r") as handle:
+            names = json_module.dumps(json_module.load(handle)).count('"Name"')
+    except (OSError, ValueError):
+        return                 # unreadable: let the editor's own open fail it
+    if names <= SCRATCH_MAX_ENTITY_NAMES:
+        return
+    raise RuntimeError(
+        "REFUSING to import inside level %r: it holds ~%d entities and looks "
+        "like real work, not a scratch level. The import authors in this "
+        "level, REMOVES existing instances of the target prefab from it, and "
+        "the level can end up saved that way -- this exact sequence stripped "
+        "a user's scene out of the level they were building in. Import into "
+        "the dedicated scratch level instead (the default), or set "
+        "UEO3DE_SCRATCH_OK=1 if this level really is disposable."
+        % (level_name, names))
+
+
 def chunked_prefab_path(prefab_path, index, total):
     """`.../Name.prefab` -> `.../Name_part02_of_12.prefab`.
 
@@ -246,7 +358,7 @@ def stage_only(manifest_path, source_assets_root, project_assets_root, log=None)
 
 
 def import_level(manifest_path, source_assets_root, project_assets_root,
-                 prefab_path, level_name="DefaultLevel", asset_timeout=180.0,
+                 prefab_path, level_name=None, asset_timeout=180.0,
                  restage=False, backend=None, log=None, max_entities=None,
                  reimport=True):
     """Import a manifest into a saved `.prefab`. Returns (report, prefab_path).
@@ -414,6 +526,10 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # about to rewrite makes CreatePrefabInMemory throw, and no amount of
     # settling helps. See prefab_build.detach_conflicting_instances.
     project_root = os.path.dirname(os.path.normpath(project_assets_root))
+    if level_name is None:
+        level_name = scratch_level_name()
+    ensure_scratch_level(project_root, level_name)
+    refuse_populated_level(project_root, level_name)
     report.count("stale_instances_removed",
                  prefab_build.detach_conflicting_instances(
                      project_root, level_name, prefab_path, log=emit))

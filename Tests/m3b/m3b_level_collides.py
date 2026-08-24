@@ -144,7 +144,11 @@ def main():
     from ueimporter.adapters import detect_in_editor, make_adapter
 
     general.idle_enable(True)
-    general.open_level_no_prompt("DefaultLevel")
+    # Honour the scratch-level env: on a project whose DefaultLevel holds the
+    # user's real scene, opening it here discards their unsaved edits with no
+    # prompt. Test projects keep the stock default.
+    general.open_level_no_prompt(
+        os.environ.get("UEO3DE_SCRATCH_LEVEL", "").strip() or "DefaultLevel")
     general.idle_wait_frames(30)
 
     expected_backend = os.environ.get("UEO3DE_EXPECT_BACKEND", "").strip() or None

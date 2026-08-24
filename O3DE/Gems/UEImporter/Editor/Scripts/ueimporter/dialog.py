@@ -278,7 +278,8 @@ def run_import_dialog(parent=None):
     # is data loss: a user with unsaved work in the level they are standing in
     # loses it the moment they press Import, with no warning and no undo. So
     # the UI asks first. (The batch path is unchanged; it has no user to ask.)
-    scratch_level = os.environ.get("UEO3DE_SCRATCH_LEVEL", "DefaultLevel")
+    from . import importer as importer_module
+    scratch_level = importer_module.scratch_level_name()
     proceed = QtWidgets.QMessageBox.warning(
         None, "Import UE Manifest",
         "Importing opens the '%s' level to build the prefab in.\n\n"
