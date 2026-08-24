@@ -192,7 +192,61 @@ def _baked_dynamic_mesh(source_mesh, mirrored=False):
         dyn, unreal.Vector(bake_x, -1.0, 1.0), unreal.Vector(0.0, 0.0, 0.0)))
     if dyn is None:
         raise MeshExportError("scale_mesh returned no mesh")
+
+    _drop_lightmap_uvs(dyn, source_mesh)
     return dyn
+
+
+def _drop_lightmap_uvs(dyn, source_mesh):
+    """Discard the lightmap UV set so it cannot become the FBX's UV0.
+
+    UE'S FBX WRITER EMITS THE LIGHTMAP SET FIRST. Measured on 20 of 20 VOL4
+    meshes, the exported FBX's UV layers read, in file order:
+
+        LayerElementUV -> "LightMapUV"   <- becomes uv0
+        LayerElementUV -> "UVmap_1"      <- becomes uv1
+
+    SceneAPI takes them in order and Atom samples UV0, so every texture was
+    sampled through a LIGHTMAP parameterisation -- each face landing on its
+    own scrap of the atlas. That is the "wheels and gauges smeared across the
+    bodywork" the user photographed. glTF is unaffected: its writer emits
+    TEXCOORD_0 as the texture set (measured: TEXCOORD_0 tiles past [0,1] while
+    TEXCOORD_1 sits entirely inside it, which is the lightmap's signature).
+
+    The SOURCE is not at fault -- `light_map_coordinate_index` is 1 on every
+    asset checked, so UE has the texture UVs at 0 exactly where they belong.
+    Only the writer reorders. Dropping the set the asset itself nominates as
+    the lightmap leaves the texture UVs alone and gives the writer nothing to
+    put first.
+
+    Non-destructive by construction: O3DE builds its own lightmaps and never
+    consumes UE's, so this removes data the importer has no use for.
+    """
+    index = None
+    try:
+        index = int(source_mesh.get_editor_property("light_map_coordinate_index"))
+    except Exception:
+        return              # unreadable: leave the mesh exactly as it was
+    if index <= 0:
+        # 0 would mean the asset nominates the TEXTURE set as its lightmap;
+        # trimming there would throw away the only UVs the material has.
+        return
+
+    try:
+        count = _unwrap(unreal.GeometryScript_MeshQueries.get_num_uv_sets(dyn))
+        count = int(count)
+    except Exception:
+        return
+    if count <= index:
+        return              # no lightmap set present on the baked mesh
+
+    # set_num_uv_sets TRUNCATES, so this only works when the lightmap is the
+    # last set -- which is the measured shape (texture 0, lightmap 1). A mesh
+    # with sets beyond the lightmap keeps them all rather than silently
+    # discarding a set some material might use.
+    if count != index + 1:
+        return
+    unreal.GeometryScript_UVs.set_num_uv_sets(dyn, index)
 
 
 def _triangle_material_ids(dyn):
@@ -307,7 +361,54 @@ def _bake_temp_asset(dyn, asset_name):
         dyn, temp_path, options))
     if baked is None:
         raise MeshExportError("create_new_static_mesh_asset_from_mesh failed for " + temp_path)
+    _disable_lightmap_uv_generation(baked, temp_path)
     return temp_path, baked
+
+
+def _disable_lightmap_uv_generation(baked, temp_path):
+    """Stop the temp asset's BUILD from inventing a lightmap UV set.
+
+    THE LIGHTMAP SET IN THE FBX IS NOT COPIED FROM THE SOURCE -- IT IS
+    GENERATED HERE. Probed on SM_Car_24a: the source asset nominates UV 1 as
+    its lightmap, yet the dynamic mesh copied from it carries exactly ONE UV
+    set -- and the FBX still came out with layers [LightMapUV, UVmap_1], 63
+    files of 63. UE's default StaticMesh build settings have
+    `generate_lightmap_u_vs` ON, so the freshly built temp asset grows a new
+    lightmap set at build time, and UE's FBX writer emits that set FIRST.
+    SceneAPI reads UV sets in file order and Atom samples UV0, so every
+    texture was sampled through a lightmap parameterisation -- the "wheels
+    and gauges smeared across the bodywork" failure. (glTF is unaffected: its
+    writer keeps the texture set first, which is why the glb path rendered
+    correctly with no importer change.)
+
+    An earlier attempt trimmed the DYNAMIC MESH instead
+    (`GeometryScript_UVs.set_num_uv_sets`); it verified clean in isolation
+    and changed nothing in the written FBX, because it ran before the thing
+    it was trying to prevent. The build settings are where the set is born,
+    so this is where it is turned off.
+
+    FAILS LOUDLY. O3DE never consumes UE lightmaps, so the set is pure noise
+    -- but if this knob cannot be set, the export must not quietly ship the
+    smeared-texture FBX again. Silent fallback here is how the first fix
+    "worked" without working.
+    """
+    try:
+        subsystem = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+        for lod_index in range(subsystem.get_lod_count(baked)):
+            build = subsystem.get_lod_build_settings(baked, lod_index)
+            if not build.get_editor_property("generate_lightmap_u_vs"):
+                continue
+            build.set_editor_property("generate_lightmap_u_vs", False)
+            # Setting build settings through the subsystem triggers the
+            # rebuild that makes them take effect in the render data the FBX
+            # writer reads.
+            subsystem.set_lod_build_settings(baked, lod_index, build)
+    except Exception as exc:
+        raise MeshExportError(
+            "could not disable lightmap UV generation on %s (%s): the "
+            "exported FBX would carry LightMapUV as its FIRST uv set, and "
+            "every texture in O3DE would sample through the lightmap "
+            "parameterisation" % (temp_path, exc))
 
 
 def _make_gltf_export_options():
