@@ -295,10 +295,37 @@ class TextureBank:
         return None, None, None
 
     def discard(self, key):
-        """Un-plan an export. Used when a whole-texture request is replaced
-        by channel splits -- otherwise the full RGB copy is still written and
-        the manifest carries a texture nothing references."""
-        self._records.pop(key, None)
+        """MARK a request as replaced by channel splits; pruned at end of walk.
+
+        This used to pop the record immediately, which was order-dependent
+        and wrong: the bank dedupes by (texture, role), so when material A
+        (roughness only -> whole-texture request) classified BEFORE material B
+        (same texture on three roles -> split), B's discard removed the very
+        record A's already-emitted spec referenced. A's manifest guid then
+        pointed at a texture that was never exported -- and whether that
+        happened depended on nothing but classification order. The record is
+        only dropped if, once EVERY material is classified, no spec still
+        references it (`prune_unreferenced`).
+        """
+        self._discarded = getattr(self, "_discarded", set())
+        self._discarded.add(key)
+
+    def prune_unreferenced(self, referenced_guids):
+        """Drop discard-marked records nothing references. Call after the walk.
+
+        Returns the pruned entries' guids, for the caller's log.
+        """
+        pruned = []
+        for key in sorted(getattr(self, "_discarded", set())):
+            record = self._records.get(key)
+            if record is None:
+                continue
+            if record["entry"]["guid"] in referenced_guids:
+                continue
+            pruned.append(record["entry"]["guid"])
+            del self._records[key]
+        self._discarded = set()
+        return pruned
 
     def _run_export_task(self, texture, path):
         task = unreal.AssetExportTask()
@@ -357,8 +384,16 @@ class TextureBank:
             ue_path = record["entry"]["ue_path"]
             if ue_path in raw_by_path:
                 continue
+            # The filename must be injective per SOURCE ASSET. The old
+            # flattened path ("/"->"_") mapped /Game/Foo/Bar/T and
+            # /Game/Foo_Bar/T onto one file, so whichever exported second
+            # silently overwrote the first and both materials split channels
+            # out of the SAME raw image. The asset guid is already unique per
+            # ue_path, so it disambiguates; the readable stem stays for humans.
             raw_path = os.path.join(
-                raw_root, naming.sanitize_path(ue_path).replace("/", "_") + ".tga")
+                raw_root, "%s_%s.tga" % (
+                    naming.sanitize_path(ue_path).replace("/", "_"),
+                    naming.asset_guid(ue_path)[:8]))
             raw_by_path[ue_path] = self._export_raw(
                 record["texture"], ue_path, raw_path, log=log)
 
@@ -725,7 +760,6 @@ def _classify_material_attributes(master, instance, bank, warnings, subject):
                                    warnings, subject)
         if spec is not None:
             properties[key] = spec
-    split_shared_packed_texture(properties, bank, warnings, subject)
     return properties
 
 
@@ -866,6 +900,14 @@ def build_material_data(material, bank, warnings):
             spec = classify_property(master, instance, prop, bank, role, warnings, subject)
             if spec is not None:
                 properties[key] = spec
+
+    # BOTH branches, one call. This ran only on the use_material_attributes
+    # path at first, so a PLAIN master driving roughness/metallic/AO from one
+    # unmasked texture still exported three byte-identical full-RGB TGAs with
+    # the wrong data in every slot -- the exact RetroCars failure, reachable
+    # by the other road. No-op-safe: single-role and already-channelled specs
+    # pass through untouched.
+    split_shared_packed_texture(properties, bank, warnings, subject)
 
     if not properties:
         warnings.add("MAT_EXPR_UNSUPPORTED", subject,

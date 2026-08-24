@@ -773,15 +773,47 @@ def _physics_block(component, shapes_from_asset, subject, warnings):
 
     mass_override = bool(_field(body, "override_mass", False))
     shapes = []
+    # Shape components own their geometry rather than borrowing a mesh
+    # asset's. This handled ONLY BoxComponent for a while, so a TriggerSphere
+    # or TriggerCapsule exported `is_trigger: true, shapes: []` -- a trigger
+    # nothing can ever fire (and, once the importer stopped crashing on it, a
+    # loudly-reported dead volume). The radii are right on the component.
     box_component = getattr(unreal, "BoxComponent", None)
+    sphere_component = getattr(unreal, "SphereComponent", None)
+    capsule_component = getattr(unreal, "CapsuleComponent", None)
     if box_component is not None and isinstance(component, box_component):
-        # Trigger volumes own their shape rather than borrowing a mesh asset's.
         half = [lane_a.convert_length(v)
                 for v in _vec3(component.get_unscaled_box_extent())]
         _flag_degenerate("trigger box", half, subject, warnings)
         shapes.append({
             "type": "box",
             "half_extents": half,
+            "offset": [0.0, 0.0, 0.0],
+            "rotation": [0.0, 0.0, 0.0, 1.0],
+        })
+    elif sphere_component is not None and isinstance(component, sphere_component):
+        radius = lane_a.convert_length(component.get_unscaled_sphere_radius())
+        _flag_degenerate("trigger sphere", [radius], subject, warnings)
+        shapes.append({
+            "type": "sphere",
+            "radius": radius,
+            "offset": [0.0, 0.0, 0.0],
+        })
+    elif capsule_component is not None and isinstance(component, capsule_component):
+        # NB: CapsuleComponent must be tested AFTER SphereComponent only if it
+        # were a base class -- it is not (both derive from ShapeComponent), so
+        # elif order carries no trap here. UE's half-height is centre-to-END
+        # (hemisphere tip included); the manifest's `total_height` is the full
+        # end-to-end height, which is what both adapters author from.
+        radius = lane_a.convert_length(component.get_unscaled_capsule_radius())
+        half_height = lane_a.convert_length(
+            component.get_unscaled_capsule_half_height())
+        _flag_degenerate("trigger capsule", [radius, half_height], subject,
+                         warnings)
+        shapes.append({
+            "type": "capsule",
+            "radius": radius,
+            "total_height": 2.0 * half_height,
             "offset": [0.0, 0.0, 0.0],
             "rotation": [0.0, 0.0, 0.0, 1.0],
         })
@@ -1717,6 +1749,19 @@ def export_level(map_path, output_path, load=True):
     except ExportAborted as exc:
         abort_reason = str(exc)
         entities = []
+
+    # End-of-walk prune: whole-texture requests that a packed-map split
+    # replaced are dropped ONLY if no material classified in this walk still
+    # references them. Pruning eagerly inside the split was order-dependent --
+    # material A (single role, whole texture) before material B (packed) lost
+    # A's texture. See TextureBank.discard.
+    referenced = set()
+    for entry in assets.entries():
+        data = entry.get("material_data") or {}
+        for spec in (data.get("properties") or {}).values():
+            if isinstance(spec, dict) and spec.get("texture_guid"):
+                referenced.add(spec["texture_guid"])
+    assets.texture_bank.prune_unreferenced(referenced)
 
     document = manifest_module.build(
         level=level_info,
