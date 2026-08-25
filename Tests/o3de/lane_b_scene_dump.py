@@ -7,11 +7,16 @@ import os
 import sys
 import traceback
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))          # .../Tests
+from paths import PATHS  # noqa: E402
+
 RESULT_PATH = (
     sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-")
-    else r"D:/Gamedev/UEtoO3DE/Tests/o3de/results/lane_b_scene_result.txt"
+    else os.path.join(_HERE, "results", "lane_b_scene_result.txt")
 )
-FBX_PATH = r"C:/Users/jorge/O3DE/Projects/UEtoO3DETest-Jolt/Assets/UEtoO3DE/SM_LetterF.fbx"
+FBX_PATH = os.path.join(PATHS["O3DE_PROJECT_JOLT"], "Assets", "UEtoO3DE",
+                        "SM_LetterF.fbx").replace("\\", "/")
 
 lines = []
 

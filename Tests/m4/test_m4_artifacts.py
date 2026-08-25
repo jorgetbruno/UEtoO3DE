@@ -35,7 +35,12 @@ from ueimporter import manifest_io  # noqa: E402
 
 MANIFEST_PATH = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "manifest.json")
 EXPORT_ASSETS = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "Assets")
-DEFAULT_PROJECT = r"C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+sys.path.insert(0, os.path.join(REPO_ROOT, "Tests"))
+from paths import PATHS  # noqa: E402
+
+# Tests/paths.config (or the env var) -- a hardcoded home directory is a
+# fallback onto someone else's disk on every machine but one.
+DEFAULT_PROJECT = PATHS.get("O3DE_PROJECT_JOLT")
 
 failures = []
 
@@ -469,6 +474,10 @@ def test_staged_materials(document, project):
 
 def main():
     project = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PROJECT
+    if not project:
+        print("FAIL: no project argument and O3DE_PROJECT_JOLT is not "
+              "configured (Tests/paths.config or environment)")
+        return 1
     scratch = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results", "tga")
     os.makedirs(scratch, exist_ok=True)
 

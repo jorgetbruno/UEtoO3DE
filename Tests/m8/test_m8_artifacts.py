@@ -33,9 +33,18 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "Tests", "lib"))
 
 import fbx_reader  # noqa: E402
 
-DEFAULT_PROJECT = r"C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+sys.path.insert(0, os.path.join(REPO_ROOT, "Tests"))
+from paths import PATHS  # noqa: E402
+
+# Tests/paths.config (or the env var) -- a hardcoded home directory is a
+# fallback onto someone else's disk on every machine but one.
+DEFAULT_PROJECT = PATHS.get("O3DE_PROJECT_JOLT")
 
 PROJECT = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PROJECT
+if not PROJECT:
+    print("FAIL: no project argument and O3DE_PROJECT_JOLT is not "
+          "configured (Tests/paths.config or environment)")
+    sys.exit(1)
 EXPORT_DIR = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
     REPO_ROOT, "Exports", "Fixture_01")
 REFERENCE_PATH = os.path.join(REPO_ROOT, "Tests", "m8", "skel_reference.json")

@@ -43,7 +43,10 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))   # .../Tests/o3de/<this> -> repo
 
-DEFAULT_PROJECT = r"C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+sys.path.insert(0, os.path.join(REPO_ROOT, "Tests"))
+from paths import PATHS  # noqa: E402
+
+DEFAULT_PROJECT = PATHS.get("O3DE_PROJECT_JOLT")
 PROJECT = (sys.argv[1] if len(sys.argv) > 1 else
            os.environ.get("O3DE_PROJECT_JOLT") or DEFAULT_PROJECT)
 CACHE = os.path.join(PROJECT, "Cache", "pc", "assets", "uetoo3de")

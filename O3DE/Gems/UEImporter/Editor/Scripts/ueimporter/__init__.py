@@ -18,4 +18,4 @@ registration, so the pipeline is testable before the gem is enabled in a
 project; M10 wires the editor menu, which is what actually needs registration.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.6.0"

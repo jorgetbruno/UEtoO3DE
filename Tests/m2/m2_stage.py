@@ -27,7 +27,14 @@ if GEM_SCRIPTS not in sys.path:
 
 from ueimporter import importer, manifest_io, staging  # noqa: E402
 
-DEFAULT_PROJECT = r"C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+if os.path.join(REPO_ROOT, "Tests") not in sys.path:
+    sys.path.insert(0, os.path.join(REPO_ROOT, "Tests"))
+from paths import PATHS  # noqa: E402
+
+# From Tests/paths.config (or the O3DE_PROJECT_JOLT env var) -- never a
+# hardcoded home directory: a default that only exists on one machine is a
+# fallback onto someone else's disk everywhere else.
+DEFAULT_PROJECT = PATHS.get("O3DE_PROJECT_JOLT")
 MANIFEST_PATH = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "manifest.json")
 SOURCE_ASSETS = os.path.join(REPO_ROOT, "Exports", "Fixture_01", "Assets")
 STAGED_SUBFOLDER = "uetoo3de"
@@ -94,6 +101,10 @@ def main(argv=None):
     parser.add_argument("--cold", action="store_true",
                         help="delete THIS manifest's staged files and cache products first")
     args = parser.parse_args(argv)
+    if not args.project:
+        parser.error("no --project given and O3DE_PROJECT_JOLT is not "
+                     "configured -- set it in Tests/paths.config or the "
+                     "environment")
 
     project_assets = os.path.join(args.project, "Assets")
 

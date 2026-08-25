@@ -38,7 +38,10 @@ from ueimporter import assetinfo, gltf_source  # noqa: E402
 FIXTURE = os.path.join(REPO_ROOT, "Tests", "ue", "data", "SM_LetterF.glb")
 STAGE_REL = os.path.join("Assets", "uetoo3de", "glbprobe")
 NODE_NAME = "SM_LetterF"
-DEFAULT_PROJECT = r"C:\Users\jorge\O3DE\Projects\UEtoO3DETest-Jolt"
+sys.path.insert(0, os.path.join(REPO_ROOT, "Tests"))
+from paths import PATHS  # noqa: E402
+
+DEFAULT_PROJECT = PATHS.get("O3DE_PROJECT_JOLT")
 
 
 def main(argv):
