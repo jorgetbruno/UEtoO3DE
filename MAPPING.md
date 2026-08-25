@@ -222,6 +222,7 @@ separate because they are fixed in different places.
 | `LIGHT_TYPE_UNSUPPORTED` | warn | UE light class (rect/area) has no v1 mapping. |
 | `MAT_SLOT_UNUSED` | info | A slot matched nothing and every model slot is already assigned — the asset lists a slot no render triangle uses. Nothing was lost. |
 | `MAT_SLOT_BY_ELIMINATION` | info | A material matched no slot label (the asset's slot carries no default material, so the FBX has no name for it) but exactly one model slot was unclaimed. |
+| `MAT_SLOT_DEDUP_SUFFIX` | info | A model slot label is an FBX name-dedup variant (`MI_X_1`: two UE slots filled with the same material); it received the base label's material. |
 | `DECAL_MATERIAL_UNCONVERTED` | warn | A decal's material did not convert; the decal imports with its volume and sort key but no material. |
 | `ENV_SKYLIGHT_APPROX` | warn | UE's image-based skylight has no exportable irradiance images, so a Physical Sky stands in. Lighting is approximate. |
 | `ENV_SKY_ATMOSPHERE_APPROX` | warn | SkyAtmosphere scattering has no Atom equivalent; a default-turbidity Physical Sky stands in. |
@@ -359,7 +360,7 @@ through `export_fixture.bat` (full editor, result-file contract), same as
 |---|---|---|
 | ISM/HISM components (incl. foliage) | one child entity **per instance**, all sharing one mesh asset | Atom re-instances identical models at render time, but the EDITOR does not scale to six figures of entities: per-component ceiling `UEO3DE_MAX_INSTANCES` (default 2000), excess dropped loudly → `ACTOR_INSTANCES_EXPANDED` / `INSTANCES_TRUNCATED`. (The measured showcase `InstancedFoliageActor` is empty; Fixture_02 carries the canary) |
 | `SplineMeshComponent` | a child entity over a `#spline` baked asset | `copy_mesh_from_component` DOES return the deformed geometry (measured — unlike its landscape behaviour); baked in COMPONENT-LOCAL space through the normal Lane B pipeline, so the entity stays movable → `SPLINE_BAKED`. Collision source "none" → the render-mesh trimesh path, and the render mesh IS the deformed bake |
-| static mesh LODs | LOD0 only | `LOD_FLATTENED` once per multi-LOD asset; a real LOD chain is follow-on work (`.assetinfo` LOD rules) |
+| static mesh LODs | a LOD chain on the FBX path: `FbxLODGroup` → `RootNode.<name>.<name>_LOD<i>`, render group selects `_LOD0`, `LodRule` selects one node per further LOD → one `.azmodel` + N `.azlod` | Nanite meshes default to UE's fallback mesh + render LODs (`UEO3DE_NANITE_FALLBACK`, on); `=0` reads the Nanite source and simplifies far LODs through UE's reducer (`UEO3DE_LOD_RATIOS`, `UEO3DE_LOD0_RATIO`). glb exports stay flattened → `LOD_FLATTENED`. Details and measurements: LODS_AND_COLLISION.md |
 | `DecalActor` | Atom **Decal** component | UE projects along local +X with `decal_size` HALF-extents (x = depth); Atom projects along local −Z over a unit box scaled by entity scale. The importer composes a local Ry(−90) and scale `(2hz, 2hy, 2hx)` (decal_build, matrix-identity tested). The material converts through StandardPBR, not an Atom decal material type → `DECAL_MATERIAL_APPROX`; `Sort Key` maps from `sort_order` |
 | `CameraActor` | **Camera** component | UE `field_of_view` is HORIZONTAL; O3DE takes VERTICAL: `2·atan(tan(h/2)/aspect)` with the manifest carrying both raw numbers. Orthographic → `CAMERA_UNSUPPORTED_MODE`, transform-only entity |
 
@@ -446,11 +447,17 @@ the fallback for meshes that got no product.
 cook time for multi-element meshes, trading Asset Processor time for collision
 that approximates the concavities UE decomposed away. It gates **both**
 backends — `UEO3DE_PHYSX_DECOMPOSE` is the historical name and still works.
-V-HACD is the only route available: UE's *actual* hulls cannot be read from
-Python at all (`KConvexElem` exposes no vertex accessor — measured,
-`Tests/ue/probe_convex_elems.py`), so the real decomposition cannot be
-exported however much one would prefer it. No non-licensed fixture has a
-multi-convex asset, so this path has unit coverage only.
+V-HACD is no longer the only route. `KConvexElem`'s fields are protected
+from Python (measured, `Tests/ue/probe_convex_elems.py`), but the whole
+`AggGeom` struct assigns onto the baked temp asset, and UE's FBX writer then
+emits the elements as one `UCX_<node>` mesh — so every FBX now carries UE's
+hulls, and `UEO3DE_COLLISION=ue` at staging cooks them (selected by the
+physics group, re-split into at most the element count, rotated back into
+the bake's frame by a `CoordinateSystemRule`; `vhacd` and the default
+`single` remain). The measurements are in LODS_AND_COLLISION.md §4. No
+non-licensed fixture has a multi-convex asset, so unit coverage pins the
+sidecar (`Tests/perf/test_collision_modes.py`) and the RetroCars fleet is
+the live check.
 
 Two cooked-trimesh restrictions are the backend's, and both stay reported
 rather than authored: PhysX refuses triangle-mesh geometry on a **simulated

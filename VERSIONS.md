@@ -65,3 +65,13 @@ Keep v1 at 5.8. Widening is a follow-on with a clear shape and one hard
 prerequisite (a 5.4-authored fixture), and it should be driven by an actual user
 on 5.4 rather than speculatively — the version-specific breaks found so far were
 all discovered by *running* against a version, never by reading the API.
+
+## Tool version
+
+One number, everywhere: the exporter's `TOOL_VERSION` (stamped into every
+manifest), the O3DE gem's `gem.json`, the importer package's `__version__`
+and the UE plugin's `VersionName` all read **0.6.0** as of 2026-08-25. They
+had drifted (0.6.0 / 0.3.0 / 0.2.0 / 0.1.0), and a project that pins the gem
+with a specifier (`UEImporter==0.3.0` was found in one `project.json`) refuses
+a gem whose `gem.json` says otherwise — prefer the bare gem name in
+`gem_names`, which is what `install_gem.py` writes.

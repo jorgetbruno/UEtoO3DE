@@ -221,15 +221,45 @@ a **trigger shape** — in both cases the entity is reported
 (`PHYS_SHAPE_APPROXIMATED`, naming the blocker) instead of receiving a collider
 that looks healthy and does nothing. Convex cooks work everywhere.
 
-Knobs:
+Knobs (full reference and the measurements behind each in
+[LODS_AND_COLLISION.md](LODS_AND_COLLISION.md)):
 
 ```
+rem -- export time (UE) --
+set UEO3DE_MESH_FORMAT=glb       rem export STATIC meshes as glTF binary instead of FBX (no LOD chain)
+set UEO3DE_NANITE_FALLBACK=0     rem read the Nanite SOURCE for LOD 0 (default: UE's fallback mesh + its LODs)
+set UEO3DE_LOD0_RATIO=0.5        rem source read: keep this share of the source at LOD 0
+set UEO3DE_LOD_RATIOS=0.2,0.08,0.03,0.012   rem source read: far-LOD shares of the source
+set UEO3DE_LOD_CHAIN=0           rem LOD 0 only
+rem -- staging time --
+set UEO3DE_COLLISION=ue          rem single (default) | vhacd | ue -- how multi-hull collision is cooked
 set UEO3DE_DECOMPOSE=1           rem or a hull cap, e.g. 64 -- V-HACD at cook time, BOTH backends
 set UEO3DE_PHYSX_COOK=1          rem force cooking on when PhysX is activated transitively
+rem -- import time --
+set UEO3DE_SCRATCH_LEVEL=UEO3DE_Scratch   rem the level editor checks open on a USER project
 set UEO3DE_CHUNK=3/12            rem import one slice of a level too big for a single prefab
 set UEO3DE_CHUNK_CEILING=6000    rem raise the refuse-to-import threshold (default 4000, measured)
-set UEO3DE_MESH_FORMAT=glb       rem export STATIC meshes as glTF binary instead of FBX
 ```
+
+**LODs.** An FBX export carries a LOD chain (`FbxLODGroup` → one `.azmodel`
+with N `.azlod` products). For a Nanite mesh the default is the **non-Nanite
+read**: UE's fallback mesh as LOD 0 and its render LODs beneath it, the same
+geometry a non-Nanite asset gets and 6–9 % of the source's triangles.
+`UEO3DE_NANITE_FALLBACK=0` reads the Nanite source instead — what Nanite
+actually renders — and simplifies the far LODs from it through UE's own
+reducer at `UEO3DE_LOD_RATIOS` budgets, with `UEO3DE_LOD0_RATIO` as the
+middle ground (half the source at LOD 0, say). O3DE's LOD switch distances
+are its own defaults; UE's per-LOD screen sizes are not authored yet.
+
+**Collision.** UE decomposes a body into several convex elements. Three
+representations, chosen at staging with `UEO3DE_COLLISION`: `single` (one
+hull over the whole render mesh — the default, concavities fill in), `vhacd`
+(cook-time decomposition capped at UE's element count, from LOD 1), and `ue`
+(UE's own elements: every FBX carries them as a `UCX_` node, the physics
+group selects it, re-splits it into at most the element count, and rotates
+it back into the bake's frame — tow truck 10 of 10 hulls, box truck 5 of 10
+where elements overlap; products 4–8 KB against 5.7 MB). Mirrored `#mx`
+variants keep the whole-mesh hull.
 
 `UEO3DE_MESH_FORMAT` is set at **export** time (`export_level.bat`), not at
 import. It moves static meshes only — skeletal meshes and animations stay FBX,
@@ -247,8 +277,10 @@ Decomposition approximates the concavities UE decomposed away (better fidelity
 than a single whole-mesh hull) in exchange for Asset Processor time; it is off
 by default, gates both backends despite the historical name, and anything the
 parser does not recognise fails loudly rather than guessing a direction. It is
-also the *only* route: UE's real convex hulls cannot be read from Python, so
-its actual decomposition cannot be exported.
+no longer the only route: `UEO3DE_COLLISION=ue` cooks UE's own hull elements
+(the `KConvexElem` fields are protected from Python, but the whole `AggGeom`
+struct copies onto the baked asset and UE's FBX writer emits it as a `UCX_`
+node — see LODS_AND_COLLISION.md §4).
 
 **A level too large for one prefab is refused, not attempted.** Measured: 4,000
 entities import in 126 s at a 4.8 GB peak, and roughly three times that kills
