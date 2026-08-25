@@ -92,6 +92,15 @@ hulls = fake_fbx(["SM_Truck", "UCX_SM_Truck_00", "UCX_SM_Truck_01",
 check(staging.fbx_hull_nodes(hulls, "SM_Truck")
       == ["UCX_SM_Truck_00", "UCX_SM_Truck_01", "UCX_SM_Truck_02"],
       "three hull nodes must be found in order")
+# The MEASURED shape: one merged node beside the LOD chain.
+merged = fake_fbx(["SM_Truck", "SM_Truck_LOD0", "UCX_SM_Truck_LOD0",
+                   "SM_Truck_LOD1"])
+check(staging.fbx_hull_nodes(merged, "SM_Truck") == ["UCX_SM_Truck_LOD0"],
+      "UE's merged collision node beside a LOD chain must be found; got %r"
+      % staging.fbx_hull_nodes(merged, "SM_Truck"))
+check(staging.fbx_hull_nodes(fake_fbx(["SM_Truck", "UCX_SM_Truck"]),
+                             "SM_Truck") == ["UCX_SM_Truck"],
+      "and the merged node of a single-LOD export")
 check(staging.fbx_hull_nodes(fake_fbx(["SM_Truck"]), "SM_Truck") == [],
       "no hull nodes -> []")
 check(staging.fbx_hull_nodes(fake_fbx(["UCX_SM_Truck_00", "UCX_SM_Truck_02"]),
@@ -120,7 +129,43 @@ check(jolt["NodeSelectionList"]["selectedNodes"]
       % jolt["NodeSelectionList"]["selectedNodes"])
 check(jolt["export method"] == assetinfo.JOLT_EXPORT_CONVEX
       and "DecomposeMeshes" not in jolt,
-      "ue: convex, one hull per node, no decomposition")
+      "ue with one node per hull: convex, no decomposition")
+
+doc_merged = assetinfo.build("sm_truck", "SM_Truck", physics=ue,
+                             backends=("jolt",), source_path="x/sm_truck.fbx",
+                             lod_nodes=lods, hull_nodes=["UCX_SM_Truck_LOD0"])
+jolt_merged = doc_merged["values"][1]
+check(jolt_merged["NodeSelectionList"]["selectedNodes"]
+      == ["RootNode.UCX_SM_Truck_LOD0"]
+      and jolt_merged.get("DecomposeMeshes") is True
+      and jolt_merged["ConvexDecompositionParams"]["MaxConvexHulls"] == 7,
+      "ue with UE's single merged collision node: select it and re-split "
+      "it into the element count; got %r" % (jolt_merged,))
+rules = [r for r in jolt.get("rules", {}).get("rules", [])
+         if r.get("$type") == "CoordinateSystemRule"]
+check(len(rules) == 1 and rules[0]["useAdvancedData"] is True
+      and rules[0]["rotation"] == [0.0, 0.0, 1.0, 0.0]
+      and rules[0]["scale"] == 1.0,
+      "ue: the physics group carries a half-turn-about-Z CoordinateSystemRule "
+      "(verbatim source-space hulls vs the 180-degree-yawed bake); got %r"
+      % (rules,))
+check("rules" not in render or not any(
+      r.get("$type") == "CoordinateSystemRule"
+      for r in render["rules"]["rules"]),
+      "the RENDER group must never carry a CoordinateSystemRule "
+      "(SceneAPI owns its conversion; pinned by test_m2_artifacts)")
+
+mirrored = assetinfo.physics_for_asset(
+    dict(asset, ue_path="/Game/X/SM_Dock#mx"), decompose=0, mode="ue")
+check(mirrored["hull_nodes"] is False,
+      "a mirrored (#mx) variant cannot use hull nodes -- a reflection is not "
+      "a rotation -- and keeps the whole-mesh hull; got %r" % (mirrored,))
+doc_mx = assetinfo.build("sm_dock_mx", "SM_Dock_MX", physics=mirrored,
+                         backends=("jolt",), source_path="x/sm_dock_mx.fbx",
+                         hull_nodes=["UCX_SM_Dock_MX_00"])
+check(doc_mx["values"][1]["NodeSelectionList"]["selectedNodes"]
+      == ["RootNode.SM_Dock_MX"] and "rules" not in doc_mx["values"][1],
+      "mirrored: hull nodes present in the file are still ignored")
 
 doc_fallback = assetinfo.build("sm_truck", "SM_Truck", physics=ue,
                                backends=("jolt",), source_path="x/sm_truck.fbx",

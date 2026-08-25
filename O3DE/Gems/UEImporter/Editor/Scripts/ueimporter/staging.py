@@ -69,31 +69,37 @@ def fbx_hull_nodes(path, node_name):
     """`[UCX_<node>_00, UCX_<node>_01, ...]` when the staged FBX carries UE's
     hull elements as collision nodes, else [].
 
-    UE's FBX writer names simple-collision convex elements
-    `UCX_<mesh>_<index>` with a two-digit index from 00 (its own import
-    convention, read back the same way). Same printable-strings scan and the
-    same contiguity/boundary rules as `fbx_lod_nodes`: a hole means a file
-    this pipeline did not write, and `_01` must not match inside `_010`.
+    MEASURED (probe_hull_export2 on SM_Truck_02a, 10 convex elements): UE's
+    FBX writer emits the copied elements as ONE collision node named after
+    the mesh node -- `UCX_<node>_LOD0` beside a LOD chain, `UCX_<node>`
+    without one -- with every hull inside it (132 vertices), not one
+    `UCX_<node>_NN` node per element as its import convention would
+    suggest. Both shapes are recognised: the merged node first, then a
+    contiguous `_NN` series from 00 should a writer ever split them. Same
+    printable-strings scan and identifier-boundary rule as `fbx_lod_nodes`.
     """
     if not str(path).lower().endswith(".fbx"):
         return []
     with open(path, "rb") as handle:
         blob = handle.read()
-    found = []
-    index = 0
-    while True:
-        marker = ("UCX_%s_%02d" % (node_name, index)).encode("ascii")
+
+    def present(name):
+        marker = name.encode("ascii")
         position = blob.find(marker)
-        hit = False
         while position != -1:
             after = blob[position + len(marker):position + len(marker) + 1]
             if not after.isalnum() and after != b"_":
-                hit = True
-                break
+                return True
             position = blob.find(marker, position + 1)
-        if not hit:
-            break
-        found.append(marker.decode("ascii"))
+        return False
+
+    for merged in ("UCX_%s_LOD0" % node_name, "UCX_%s" % node_name):
+        if present(merged):
+            return [merged]
+    found = []
+    index = 0
+    while present("UCX_%s_%02d" % (node_name, index)):
+        found.append("UCX_%s_%02d" % (node_name, index))
         index += 1
     return found
 

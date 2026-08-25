@@ -173,9 +173,13 @@ def collision_mode(environ=None):
               element count (or UEO3DE_DECOMPOSE when that is a number);
               cooks from LOD1 when a chain exists, or dense Nanite sources
               turn into minutes per mesh
-      ue      UE's own hull elements, exported as UCX_ nodes and cooked one
-              convex per node -- exact, no decomposition cost; falls back
-              to `single` for a file that carries no UCX_ nodes
+      ue      UE's own hull elements, exported as a UCX_ node and re-split
+              at cook time into at most UE's element count -- measured on
+              RetroCars: tow truck 10 of 10, pickup 9 of 10, box truck 5
+              of 10 (V-HACD merges elements that overlap), products 4-8 KB
+              against 5.7 MB for the whole-mesh hull; falls back to
+              `single` for a file that carries no UCX_ node and for `#mx`
+              mirrored variants
 
     Unset means `single`. Anything else raises: this changes sidecar bytes
     for every mesh in the level, so a typo must not silently pick a mode.
@@ -229,9 +233,13 @@ def physics_for_asset(asset, decompose=None, mode=None):
         if decompose and convex_count > 1:
             cap = decompose if decompose > 1 else 64
             hulls = min(convex_count, cap)
+        # A mirrored variant (`#mx`) is baked under a reflection, which a
+        # CoordinateSystemRule cannot express (it rotates); its hulls would
+        # land mirrored, so it keeps the whole-mesh hull.
+        mirrored = "#mx" in str(asset.get("ue_path", ""))
         return {"method": "convex", "elements": convex_count,
                 "decompose_hulls": hulls,
-                "hull_nodes": mode == "ue"}
+                "hull_nodes": mode == "ue" and not mirrored}
     if collision.get("source") == "none":
         return {"method": "trimesh", "elements": 0, "decompose_hulls": None,
                 "hull_nodes": False}
@@ -279,6 +287,24 @@ def _physics_group(group_name, fbx_node_name, physics, backend,
                           if backend == "physx"
                           else (JOLT_EXPORT_CONVEX if convex else JOLT_EXPORT_TRIMESH)),
     }
+    if node_paths:
+        # The hull nodes are UE's elements copied VERBATIM onto the baked
+        # asset (KConvexElem's transform is protected from Python, so they
+        # cannot be baked like the render geometry, which carries the
+        # exporter's diag(-1,-1,1) = 180-degree yaw). SceneAPI converts both
+        # identically, so the hulls arrive yawed 180 degrees relative to the
+        # render mesh; this rule turns the physics group -- and only it --
+        # back into alignment. The mesh exporters honour it through
+        # DetermineWorldTransform(scene, node, ruleContainer). Quaternion
+        # [x, y, z, w] for a half-turn about Z.
+        group["rules"] = {"rules": [{
+            "$type": "CoordinateSystemRule",
+            "useAdvancedData": True,
+            "originNodeName": "",
+            "rotation": [0.0, 0.0, 1.0, 0.0],
+            "translation": [0.0, 0.0, 0.0],
+            "scale": 1.0,
+        }]}
     if physics.get("decompose_hulls"):
         group["DecomposeMeshes"] = True
         if backend == "physx":
@@ -362,12 +388,21 @@ def build(group_name, fbx_node_name, physics=None, backends=("physx",),
     if physics is not None:
         node_paths = None
         if physics.get("hull_nodes") and hull_nodes:
-            # UE's hull elements, one UCX_ node each, siblings of the mesh
-            # node under the root: the physics group selects all of them and
-            # the render group never sees them (it selects by explicit path).
+            # UE's hull elements as UCX_ node(s), siblings of the mesh node
+            # under the root: the physics group selects them and the render
+            # group never sees them (it selects by explicit path). UE writes
+            # every element into ONE node (measured), which alone would cook
+            # back into one hull -- so when the asset has several elements
+            # the group also decomposes, capped at that count: V-HACD over a
+            # ~100-vertex cloud of convex pieces recovers the disjoint ones
+            # and merges overlapping ones (measured: 10 -> 10, 9, 5 across
+            # the fleet) in milliseconds, unlike the 100k-triangle render
+            # mesh.
             root = gltf_source.root_path(source_path)
             prefix = (root[0] + ".") if root else ""
             node_paths = [prefix + hull for hull in hull_nodes]
+            if len(hull_nodes) == 1 and physics.get("elements", 0) > 1:
+                physics = dict(physics, decompose_hulls=physics["elements"])
         elif physics.get("decompose_hulls") and lod_nodes and len(lod_nodes) > 1:
             # V-HACD on the full Nanite source is minutes per mesh; LOD1
             # (20% of the source under the exporter's default budgets) keeps

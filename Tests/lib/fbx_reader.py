@@ -104,23 +104,51 @@ def read(path):
         raise FbxError("not a binary FBX: " + path)
 
     settings = {}
-    vertices = []
-
-    polygons = []
+    # Per-geometry arrays in file order, so collision geometry can be left
+    # out: the exporter now writes UE's hull elements as a `UCX_<node>`
+    # mesh (verbatim source space, deliberately NOT under the bake -- see
+    # mesh_export._copy_source_hulls), and a bounds check that swept those
+    # vertices in with the render mesh reported every hull-bearing car as
+    # mirrored. Geometry is tied to its Model through the `C` connections;
+    # a geometry connected to a `UCX_`-named model is collision.
+    geometries = []          # [(geometry id, vertices, polygon indices)]
+    models = {}              # model id -> name
+    parents = {}             # child object id -> parent object id
 
     def visit(node):
-        name, properties, _children = node
+        name, properties, children = node
         if name == "P" and properties and isinstance(properties[0], bytes):
             key = properties[0].decode("ascii", "replace")
             if key in GLOBAL_SETTING_KEYS:
                 settings[key] = properties[4:]
-        elif name == "Vertices" and properties and isinstance(properties[0], list):
-            vertices.extend(properties[0])
-        elif name == "PolygonVertexIndex" and properties and isinstance(properties[0], list):
-            polygons.extend(properties[0])
+        elif name == "Geometry" and properties:
+            verts, polys = [], []
+            for child_name, child_properties, _grandchildren in children:
+                if (child_name == "Vertices" and child_properties
+                        and isinstance(child_properties[0], list)):
+                    verts = child_properties[0]
+                elif (child_name == "PolygonVertexIndex" and child_properties
+                        and isinstance(child_properties[0], list)):
+                    polys = child_properties[0]
+            geometries.append((properties[0], verts, polys))
+        elif name == "Model" and len(properties) > 1 and isinstance(properties[1], bytes):
+            models[properties[0]] = properties[1].split(b"\x00")[0].decode("ascii", "replace")
+        elif name == "C" and len(properties) >= 3:
+            parents[properties[1]] = properties[2]
 
     for node in _top_level_nodes(data):
         _walk(node, visit)
+
+    def is_collision(geometry_id):
+        return models.get(parents.get(geometry_id), "").startswith("UCX_")
+
+    vertices = []
+    polygons = []
+    for geometry_id, verts, polys in geometries:
+        if is_collision(geometry_id):
+            continue
+        vertices.extend(verts)
+        polygons.extend(polys)
 
     return {"global_settings": settings, "vertices": vertices,
             "polygon_vertex_index": polygons}

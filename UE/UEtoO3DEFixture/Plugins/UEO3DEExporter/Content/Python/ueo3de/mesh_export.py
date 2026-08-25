@@ -88,7 +88,7 @@ def _unwrap(result):
     return result
 
 
-def _make_export_options(level_of_detail=False):
+def _make_export_options(level_of_detail=False, collision=False):
     """FbxExportOption for the bake exports.
 
     `level_of_detail` stays False for single-LOD bakes: True wraps even a
@@ -96,10 +96,17 @@ def _make_export_options(level_of_detail=False):
     break every existing sidecar. Multi-LOD bakes pass True, and their
     sidecars use the measured LODGroup paths
     (`RootNode.<name>.<name>_LOD<i>`).
+
+    `collision` is True only when the temp asset carries the source's hull
+    elements (`_copy_source_hulls`): UE then writes them as one
+    `UCX_<node>` / `UCX_<node>_LOD0` node the staging scanner recognises.
+    A file with no hulls copied must not ask for collision, or the writer
+    would emit an empty UCX node the sidecar could select into a failed
+    AP job.
     """
     options = unreal.FbxExportOption()
     required = {
-        "collision": False,
+        "collision": bool(collision),
         "level_of_detail": bool(level_of_detail),
     }
     for name, value in required.items():
@@ -421,13 +428,55 @@ def _placeholder_slot(source_slot, slot_index):
     return entry
 
 
-_LOD_OPTIONS = []          # built once, on first multi-LOD export
 
 
-def _lod_export_options():
-    if not _LOD_OPTIONS:
-        _LOD_OPTIONS.append(_make_export_options(level_of_detail=True))
-    return _LOD_OPTIONS[0]
+def _lod_export_options(collision=False):
+    key = bool(collision)
+    cache = _LOD_OPTIONS_BY_COLLISION
+    if key not in cache:
+        cache[key] = _make_export_options(level_of_detail=True, collision=key)
+    return cache[key]
+
+
+_LOD_OPTIONS_BY_COLLISION = {}
+
+
+def _copy_source_hulls(baked, source_mesh, log=None):
+    """Put the source's simple-collision convex elements on the temp asset.
+
+    Copied VERBATIM: `KConvexElem.transform` is protected from Python, so the
+    elements cannot be baked like the render geometry; the importer's
+    physics group carries a CoordinateSystemRule that turns them back into
+    alignment (assetinfo._physics_group). Measured on SM_Truck_02a: the
+    `agg_geom` struct assigns onto the temp BodySetup intact (10 of 10
+    elements) and `collision=True` then writes them as one merged
+    `UCX_<node>_LOD0` node. Returns the element count copied -- 0 when the
+    source has no convex elements or the copy fails, in which case the
+    export proceeds without collision rather than failing a level over a
+    collider the importer can still approximate.
+    """
+    try:
+        body = source_mesh.get_editor_property("body_setup")
+        agg = body.get_editor_property("agg_geom") if body else None
+        elements = list(agg.get_editor_property("convex_elems") or []) if agg else []
+        if not elements:
+            return 0
+        temp_body = baked.get_editor_property("body_setup")
+        if temp_body is None:
+            baked.create_body_setup()
+            temp_body = baked.get_editor_property("body_setup")
+        temp_body.set_editor_property("agg_geom", agg)
+        copied = list(temp_body.get_editor_property("agg_geom")
+                      .get_editor_property("convex_elems") or [])
+        if len(copied) != len(elements):
+            raise MeshExportError("copied %d of %d convex elements"
+                                  % (len(copied), len(elements)))
+        return len(copied)
+    except Exception as exc:  # noqa: BLE001 -- collision is optional data
+        if log is not None:
+            log("  %s: hull elements not exported (%s); the importer keeps "
+                "its whole-mesh hull" % (source_mesh.get_name(), exc))
+        return 0
 
 
 def lod_chain_enabled():
@@ -1312,8 +1361,18 @@ def export_meshes(assets, output_root, log=None):
             # AFTER the LOD writes: copy_mesh_to_static_mesh touches the
             # asset's material list, and the labels must win.
             baked.set_editor_property("static_materials", slots)
-            _export_fbx(baked, output_path,
-                        _lod_export_options() if len(chain) > 1 else options)
+            # UE's own hull elements ride along as a UCX_ node (FBX only;
+            # glTF has no collision convention). Staging decides whether to
+            # cook them (UEO3DE_COLLISION=ue); an export that carries none
+            # simply keeps the whole-mesh hull it always had.
+            hulls = _copy_source_hulls(baked, source, log=emit) if is_fbx else 0
+            if len(chain) > 1:
+                export_options = _lod_export_options(collision=hulls > 0)
+            elif hulls > 0:
+                export_options = _make_export_options(collision=True)
+            else:
+                export_options = options
+            _export_fbx(baked, output_path, export_options)
         finally:
             unreal.EditorAssetLibrary.delete_asset(temp_path)
 
