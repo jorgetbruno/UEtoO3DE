@@ -230,10 +230,12 @@ def asset(kind="static_mesh", source="simple", shapes=None):
 
 convex3 = [{"type": "convex"}] * 3
 check(assetinfo.physics_for_asset(asset(shapes=convex3), decompose=0)
-      == {"method": "convex", "elements": 3, "decompose_hulls": None},
+      == {"method": "convex", "elements": 3, "decompose_hulls": None,
+          "hull_nodes": False},
       "3 convex elements should plan a convex cook")
 check(assetinfo.physics_for_asset(asset(source="none"))
-      == {"method": "trimesh", "elements": 0, "decompose_hulls": None},
+      == {"method": "trimesh", "elements": 0, "decompose_hulls": None,
+          "hull_nodes": False},
       "source 'none' (no simple collision / complex-as-simple) should plan a "
       "trimesh cook")
 check(assetinfo.physics_for_asset(asset(shapes=[{"type": "box"}])) is None,

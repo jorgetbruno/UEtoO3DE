@@ -160,7 +160,37 @@ def decompose_setting(value=None):
     return number if number > 0 else 0
 
 
-def physics_for_asset(asset, decompose=None):
+_COLLISION_MODES = ("single", "vhacd", "ue")
+_COLLISION_ENV = "UEO3DE_COLLISION"
+
+
+def collision_mode(environ=None):
+    """UEO3DE_COLLISION -> how a multi-hull UE collision is represented.
+
+      single  one convex hull over the whole render mesh (the original
+              behaviour; concavities such as truck beds fill in)
+      vhacd   V-HACD decomposition at cook time, hull count capped by the
+              element count (or UEO3DE_DECOMPOSE when that is a number);
+              cooks from LOD1 when a chain exists, or dense Nanite sources
+              turn into minutes per mesh
+      ue      UE's own hull elements, exported as UCX_ nodes and cooked one
+              convex per node -- exact, no decomposition cost; falls back
+              to `single` for a file that carries no UCX_ nodes
+
+    Unset means `single`. Anything else raises: this changes sidecar bytes
+    for every mesh in the level, so a typo must not silently pick a mode.
+    """
+    environ = os.environ if environ is None else environ
+    value = str(environ.get(_COLLISION_ENV, "")).strip().lower()
+    if not value:
+        return "single"
+    if value in _COLLISION_MODES:
+        return value
+    raise ValueError("%s=%r is not one of %s"
+                     % (_COLLISION_ENV, value, ", ".join(_COLLISION_MODES)))
+
+
+def physics_for_asset(asset, decompose=None, mode=None):
     """What PhysX mesh group (if any) this manifest asset's sidecar carries.
 
     Decided from the ASSET's own collision data alone -- never from which
@@ -191,20 +221,25 @@ def physics_for_asset(asset, decompose=None):
     shapes = collision.get("shapes") or []
     convex_count = sum(1 for shape in shapes if shape.get("type") == "convex")
     if collision.get("source") == "simple" and convex_count:
+        mode = collision_mode() if mode is None else mode
         decompose = decompose_setting(decompose)
+        if mode == "vhacd" and not decompose:
+            decompose = 1
         hulls = None
         if decompose and convex_count > 1:
             cap = decompose if decompose > 1 else 64
             hulls = min(convex_count, cap)
         return {"method": "convex", "elements": convex_count,
-                "decompose_hulls": hulls}
+                "decompose_hulls": hulls,
+                "hull_nodes": mode == "ue"}
     if collision.get("source") == "none":
-        return {"method": "trimesh", "elements": 0, "decompose_hulls": None}
+        return {"method": "trimesh", "elements": 0, "decompose_hulls": None,
+                "hull_nodes": False}
     return None
 
 
 def _physics_group(group_name, fbx_node_name, physics, backend,
-                   source_path=None):
+                   source_path=None, node_paths=None):
     """One backend's physics mesh group for `build`.
 
     The two gems' groups are the same shape -- node list, numeric
@@ -228,8 +263,14 @@ def _physics_group(group_name, fbx_node_name, physics, backend,
         # this way and the other spelling is silently ignored. The PATH shape
         # is source-format dependent: an FBX graph is rooted at `RootNode`, a
         # glTF graph's root is unnamed (measured, see gltf_source).
+        # Several selected nodes on a CONVEX group cook one hull per node
+        # (JoltMeshExporter iterates its per-node export data for convex
+        # groups and only merges for triangle-mesh/primitive groups; PhysX
+        # behaves the same) -- which is how UE's hull elements arrive as
+        # separate shapes in one cooked asset.
         "NodeSelectionList": {
-            "selectedNodes": [gltf_source.node_path(fbx_node_name, source_path)],
+            "selectedNodes": list(node_paths) if node_paths else
+                             [gltf_source.node_path(fbx_node_name, source_path)],
             "unselectedNodes": gltf_source.root_path(source_path),
         },
         # Always explicit: omitting it would mean triangle mesh on PhysX and
@@ -257,7 +298,7 @@ def _physics_group(group_name, fbx_node_name, physics, backend,
 
 
 def build(group_name, fbx_node_name, physics=None, backends=("physx",),
-          source_path=None, lod_nodes=None):
+          source_path=None, lod_nodes=None, hull_nodes=None):
     """The `.assetinfo` document for a single-mesh FBX.
 
     `physics` is None or a `physics_for_asset` plan; when present, one physics
@@ -319,11 +360,25 @@ def build(group_name, fbx_node_name, physics=None, backends=("physx",),
         },
     }]
     if physics is not None:
+        node_paths = None
+        if physics.get("hull_nodes") and hull_nodes:
+            # UE's hull elements, one UCX_ node each, siblings of the mesh
+            # node under the root: the physics group selects all of them and
+            # the render group never sees them (it selects by explicit path).
+            root = gltf_source.root_path(source_path)
+            prefix = (root[0] + ".") if root else ""
+            node_paths = [prefix + hull for hull in hull_nodes]
+        elif physics.get("decompose_hulls") and lod_nodes and len(lod_nodes) > 1:
+            # V-HACD on the full Nanite source is minutes per mesh; LOD1
+            # (20% of the source under the exporter's default budgets) keeps
+            # every concavity a hull can represent at a fraction of the cost.
+            physics_node = "%s.%s" % (fbx_node_name, lod_nodes[1])
         for backend in backends:
             if backend not in BACKENDS:
                 raise ValueError("unknown physics backend %r" % (backend,))
             values.append(_physics_group(group_name, physics_node, physics,
-                                         backend, source_path=source_path))
+                                         backend, source_path=source_path,
+                                         node_paths=node_paths))
     return {"values": values}
 
 
@@ -375,10 +430,10 @@ def physics_in_sidecar(sidecar_path, backend="physx"):
 
 
 def write(fbx_path, fbx_node_name, physics=None, backends=("physx",),
-          lod_nodes=None):
+          lod_nodes=None, hull_nodes=None):
     """Write `<fbx_path>.assetinfo` next to the FBX. Returns the sidecar path."""
     document = build(group_name_for(fbx_path), fbx_node_name, physics=physics,
-                     lod_nodes=lod_nodes,
+                     lod_nodes=lod_nodes, hull_nodes=hull_nodes,
                      backends=backends, source_path=fbx_path)
     sidecar_path = fbx_path + ".assetinfo"
     directory = os.path.dirname(sidecar_path)

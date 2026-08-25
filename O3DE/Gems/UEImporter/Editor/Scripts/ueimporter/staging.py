@@ -65,6 +65,39 @@ def fbx_lod_nodes(path, node_name):
     return found if len(found) >= 2 else []
 
 
+def fbx_hull_nodes(path, node_name):
+    """`[UCX_<node>_00, UCX_<node>_01, ...]` when the staged FBX carries UE's
+    hull elements as collision nodes, else [].
+
+    UE's FBX writer names simple-collision convex elements
+    `UCX_<mesh>_<index>` with a two-digit index from 00 (its own import
+    convention, read back the same way). Same printable-strings scan and the
+    same contiguity/boundary rules as `fbx_lod_nodes`: a hole means a file
+    this pipeline did not write, and `_01` must not match inside `_010`.
+    """
+    if not str(path).lower().endswith(".fbx"):
+        return []
+    with open(path, "rb") as handle:
+        blob = handle.read()
+    found = []
+    index = 0
+    while True:
+        marker = ("UCX_%s_%02d" % (node_name, index)).encode("ascii")
+        position = blob.find(marker)
+        hit = False
+        while position != -1:
+            after = blob[position + len(marker):position + len(marker) + 1]
+            if not after.isalnum() and after != b"_":
+                hit = True
+                break
+            position = blob.find(marker, position + 1)
+        if not hit:
+            break
+        found.append(marker.decode("ascii"))
+        index += 1
+    return found
+
+
 def product_path_for(relative_path, product_prefix):
     """`uetoo3de/a/b.fbx` -> `assets/uetoo3de/a/b.fbx.azmodel` (lowercased)."""
     return ("%s/%s.azmodel" % (product_prefix, relative_path)).lower()
@@ -403,8 +436,19 @@ def stage(document, source_root, project_assets_root, log=None):
             gltf_source.name_mesh_nodes(staged_fbx, node_name)
 
         lod_nodes = fbx_lod_nodes(staged_fbx, node_name)
+        hull_nodes = []
+        if physics and physics.get("hull_nodes"):
+            hull_nodes = fbx_hull_nodes(staged_fbx, node_name)
+            if not hull_nodes:
+                # UEO3DE_COLLISION=ue on a file exported without hull nodes:
+                # say so and cook the whole-mesh hull rather than a group
+                # that selects nothing (which fails the AP job outright).
+                emit("  %s: UEO3DE_COLLISION=ue but the FBX carries no UCX_ "
+                     "hull nodes (exported before hull export, or the asset "
+                     "has none); cooking a single hull" % relative_path)
         sidecar = assetinfo.write(staged_fbx, node_name, physics=physics,
-                                  backends=cook_backends, lod_nodes=lod_nodes)
+                                  backends=cook_backends, lod_nodes=lod_nodes,
+                                  hull_nodes=hull_nodes)
 
         record = {
             "kind": "static_mesh",
