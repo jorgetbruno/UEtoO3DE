@@ -42,21 +42,31 @@ every distance — 90,023 tris on SM_Car_24a, 157,892 on the box truck) and a
 truck's is `[10732, 5365, 2682, 1342]`). The Static Mesh Editor's LOD
 dropdown shows the fallback chain; `r.Nanite 0` shows it in a level.
 
-Two read paths exist and the default changed on 2026-08-25 at the user's
-request:
+Two read paths exist:
 
 | `UEO3DE_NANITE_FALLBACK` | LOD 0 | far LODs | when |
 |---|---|---|---|
-| unset / `1` (**default**) | UE's fallback mesh (`RENDER_DATA` LOD 0) | UE's render LODs 1..N verbatim | light scenes; same geometry a non-Nanite asset gets |
-| `0` | the Nanite **source** (`MAX_AVAILABLE`), optionally reduced by `UEO3DE_LOD0_RATIO` | the source simplified to `UEO3DE_LOD_RATIOS` budgets | full detail up close |
+| unset / `0` (**default**) | the Nanite **source** (`MAX_AVAILABLE`), reduced to `UEO3DE_LOD0_RATIO` (0.25) | the source simplified to `UEO3DE_LOD_RATIOS` budgets (10/4/1.5/0.6 %) | always, unless you know the fallback is sound |
+| `1` | UE's fallback mesh (`RENDER_DATA` LOD 0) | UE's render LODs 1..N verbatim | **hazard, see below** |
 
-Under the source read the far LODs are **simplified from the source**, not
-read from the fallback chain. Measured reason: the fallback sections on some
-assets disagree with the source about material assignment (that turned out to
-be the section-ordinal bug of §3 wearing a different hat, but the simplified
-chain also keeps every distance derived from the geometry UE displays).
-Budgets default to 20/8/3/1.2 % of the source, floored by the fallback count
-and capped at LOD 0's count; the reduction runs through
+**The fallback mesh's material sections are wrong on this pack** — measured
+on 2026-08-25 after a day of the fallback as default brought the black
+wagons back at LOD 0 only. Per-id regions of the `RENDER_DATA` LOD 0 copy
+and the LOD 1 copy, same read path, same space: the wagon's fallback id 1
+covers the chassis (z −1..69 cm) where LOD 1's id 1 is the body (z 24..153);
+the box truck's fallback id 2 is the box body where LOD 1's id 2 is the
+undercarriage. Triangle counts per id still halve neatly from LOD 0 to LOD 1,
+so counts hide it. It happens on exactly the nine meshes whose source
+sections are permuted (§3), and `get_section_material_list` reports the
+identity for the fallback, so no remap can be derived from the API. Nanite
+never renders the fallback, and LOD 1..3 are generated from the source
+description rather than from it, which is how a pack ships with a broken
+LOD 0 nobody has seen. Until a rule is measured, the fallback read is opt-in
+and documented as such; the light default is the source read, reduced.
+
+Under the source read the far LODs are **simplified from the source**, never
+read from the fallback chain, floored by the fallback count and capped at
+LOD 0's count; the reduction runs through
 `apply_editor_simplify_to_triangle_count` — the same quadric reducer UE's
 own LOD generation uses (no options object; editor-only, which the export
 session always is). At the fallback-chain budgets (~9 % at LOD 1) and the
@@ -66,16 +76,25 @@ GeometryScript reducer, LOD 1 already collapsed hoods at moderate range —
 Measured chains on SM_Truck_02a (157,892 source tris):
 
 ```
-default (fallback read)                  [10732, 5365, 2682, 1342]
-UEO3DE_NANITE_FALLBACK=0                 [157892, 31578, 12630, 4736, 1894]
-  + UEO3DE_LOD0_RATIO=0.5                [78946, 31578, 12630, 4736, 1894]
-  + UEO3DE_LOD0_RATIO=0.25
-    UEO3DE_LOD_RATIOS=0.15,0.05          [39473, 23684, 7894, 3947, 3947]
+UEO3DE_NANITE_FALLBACK=1 (fallback read)  [10732, 5365, 2682, 1342]   materials WRONG at LOD 0
+source read, LOD0 1.0, ratios .2/.08/.03/.012   [157892, 31578, 12630, 4736, 1894]
+source read, LOD0 0.5                     [78946, 31578, 12630, 4736, 1894]
+source read, LOD0 0.25, ratios .15/.05    [39473, 23684, 7894, 3947, 3947]
+default (LOD0 0.25, ratios .1/.04/.015/.006)  ~[39473, 15789, 6316, 2368, 947]
+```
+
+And the default measured on the exported fleet (the fallback-count floor
+takes over where a ratio would drop below UE's own chain):
+
+```
+sm_tow_truck_01b (100,554 source)  [25136, 10054, 4717, 2358, 1179]
+sm_wagon_01a      (93,712 source)  [23427,  9370, 4323, 2162, 1081]
+sm_car_24a        (90,023 source)  [22504,  9001, 3599, 1692,  845]
 ```
 
 Every LOD beyond the ratio list uses half the last entry. The far ladder is
 budgeted against the **original** source count, so reducing LOD 0 does not
-shrink LOD 1..N with it.
+shrink LOD 1..N with it; `UEO3DE_LOD0_RATIO=1.0` restores the full source.
 
 Not yet done: O3DE switches LODs on its own screen-coverage defaults. UE
 stores per-LOD screen sizes on every mesh (`EditorStaticMeshLibrary.
@@ -220,9 +239,9 @@ Export time (UE session; `export_level.bat` passes the environment through):
 |---|---|---|
 | `UEO3DE_MESH_FORMAT` | `fbx` | `glb` exports static meshes as glTF binary (no LOD chain, no hull nodes) |
 | `UEO3DE_LOD_CHAIN` | on | `0` exports LOD 0 only |
-| `UEO3DE_NANITE_FALLBACK` | on | `0` reads the Nanite source for LOD 0 and simplifies the far LODs |
-| `UEO3DE_LOD0_RATIO` | `1.0` | source read only: LOD 0's share of the source, in (0, 1] |
-| `UEO3DE_LOD_RATIOS` | `0.20,0.08,0.03,0.012` | source read only: far-LOD shares of the source, LOD 1 outward; floored by the fallback count, capped at LOD 0 |
+| `UEO3DE_NANITE_FALLBACK` | off | `1` exports UE's fallback mesh + render LODs instead of the source (materials measured wrong at LOD 0 on permuted-section meshes) |
+| `UEO3DE_LOD0_RATIO` | `0.25` | LOD 0's share of the Nanite source, in (0, 1]; `1.0` = full source |
+| `UEO3DE_LOD_RATIOS` | `0.10,0.04,0.015,0.006` | far-LOD shares of the source, LOD 1 outward; floored by the fallback count, capped at LOD 0 |
 
 Staging time (`m2_stage.py` / the import dialog):
 

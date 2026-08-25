@@ -133,20 +133,24 @@ _NANITE_OFF = ("", "0", "off", "false", "no")
 
 
 def _nanite_fallback_forced():
-    """UEO3DE_NANITE_FALLBACK -> export the fallback mesh (DEFAULT) or not.
+    """UEO3DE_NANITE_FALLBACK -> True to export UE's fallback mesh instead.
 
-    The default flipped on 2026-08-25 at the user's request: unset means
-    the fallback read -- UE's own fallback mesh as LOD 0 and its render
-    LODs 1..N as the chain, the same geometry a non-Nanite asset gets and
-    6-9% of the source's triangles (wagon 8,646 vs 93,712). Set it to
-    0/off/false to read the Nanite SOURCE for LOD 0 (what Nanite renders,
-    simplified for the far LODs under UEO3DE_LOD_RATIOS) when a level
-    needs the full detail. Unrecognised values raise, per house rule.
+    OFF by default, and measured to stay off: the fallback mesh's material
+    sections are WRONG on exactly the meshes whose source sections are
+    permuted (9 of 63 on RetroCars -- probed per-id regions of the RENDER
+    LOD 0 copy against the RENDER LOD 1 copy in the same space: the wagon's
+    fallback id 1 covers the chassis where LOD 1's id 1 is the body, and
+    get_section_material_list reports identity for it, so no remap can be
+    derived). Nanite never renders the fallback, so nobody ever saw it. The
+    light default the user asked for is the SOURCE read reduced instead:
+    UEO3DE_LOD0_RATIO (0.25) and UEO3DE_LOD_RATIOS through UE's own
+    reducer, which keeps the source's (correct) material ids.
+    Unrecognised values raise, per house rule.
     """
     value = os.environ.get("UEO3DE_NANITE_FALLBACK", "").strip().lower()
-    if value in _NANITE_ON or value == "":
+    if value in _NANITE_ON:
         return True
-    if value in _NANITE_OFF[1:]:
+    if value in _NANITE_OFF:
         return False
     raise MeshExportError(
         "UEO3DE_NANITE_FALLBACK=%r is not one of %s"
@@ -195,8 +199,8 @@ def _baked_dyn_for_lod(source_mesh, mirrored, lod_type, lod_index):
     # For LOD 0 the caller passes MAX_AVAILABLE on Nanite assets (the
     # fallback is not what anyone sees -- SM_Wagon_01a: 8,646 fallback tris
     # vs 93,712 real) and RENDER_DATA otherwise; higher chain entries read
-    # RENDER_DATA at their own index. UEO3DE_NANITE_FALLBACK (default on)
-    # keeps the fallback read for LOD 0; =0 opts into the source read.
+    # RENDER_DATA at their own index. UEO3DE_NANITE_FALLBACK=1 opts into
+    # the fallback read for LOD 0 (measured unreliable -- see the knob).
     requested_lod.set_editor_property("lod_type", lod_type)
     requested_lod.set_editor_property("lod_index", int(lod_index))
     dyn = _unwrap(unreal.GeometryScript_AssetUtils.copy_mesh_from_static_mesh(
@@ -510,9 +514,9 @@ def _baked_lod_chain(source_mesh, mirrored=False):
     sidecar probe on lod_probe_car.fbx -- one azmodel, four azlods, index
     buffers halving with the tri counts):
 
-      * Nanite asset, UEO3DE_NANITE_FALLBACK=0 (opt-in source read):
-        [source geometry] + [source SIMPLIFIED to render LOD
-        0..N-1's triangle budgets]. NOT the render LODs themselves: on a
+      * Nanite asset (default -- the source read): [source geometry, reduced
+        to UEO3DE_LOD0_RATIO] + [source SIMPLIFIED to the UEO3DE_LOD_RATIOS
+        budgets]. NOT the render LODs themselves: on a
         Nanite asset those are the auto fallback chain, which nobody ever
         sees in UE (Nanite renders the source at every distance) and whose
         per-triangle material assignment can disagree with the source
@@ -537,10 +541,11 @@ def _baked_lod_chain(source_mesh, mirrored=False):
         the SAME reducer UE's own LOD generation uses (takes no options;
         editor-only, which the export session is), falling back to the
         GeometryScript simplifier only if the editor one is unavailable.
-      * non-Nanite, multiple LODs -- and every Nanite asset under the
-        DEFAULT fallback read: [render LOD 0..N-1] -- the authored chain
-        exactly as UE renders it (for Nanite: its fallback mesh and the
-        auto LODs beneath it, 6-9% of the source).
+      * non-Nanite, multiple LODs -- and a Nanite asset under the opt-in
+        UEO3DE_NANITE_FALLBACK=1: [render LOD 0..N-1] -- the authored chain
+        exactly as UE renders it. For Nanite that is the fallback mesh and
+        the auto LODs beneath it, and the fallback's material sections are
+        measured wrong on permuted-section meshes (see the knob).
       * single LOD, non-Nanite: [render LOD0] -- the pipeline's original
         shape, byte-identical exports, no LODGroup wrapper (a lone mesh in a
         group would change every node path the sidecars pin).
@@ -601,7 +606,12 @@ def _baked_lod_chain(source_mesh, mirrored=False):
 # The auto-fallback counts (~6/3/1.5/0.7%) are sized for a chain UE never
 # renders; at those budgets LOD1 already collapsed hoods at moderate range
 # ("it gets worse when I fall back more, this is lod 1").
-_LOD_RATIOS_DEFAULT = (0.20, 0.08, 0.03, 0.012)
+# Sized beneath a LOD 0 that is itself reduced to _LOD0_RATIO_DEFAULT: each
+# step keeps ~40% of the previous, and the fallback-count floor takes over
+# where a ratio would drop below UE's own chain -- SM_Tow_Truck_01b
+# (100,554 source tris) measures 25,136 / 10,054 / 4,717 / 2,358 / 1,179.
+_LOD_RATIOS_DEFAULT = (0.10, 0.04, 0.015, 0.006)
+_LOD0_RATIO_DEFAULT = 0.25
 _LOD_RATIOS_CACHE = []
 
 
@@ -609,17 +619,20 @@ _LOD0_RATIO_CACHE = []
 
 
 def _lod0_ratio():
-    """UEO3DE_LOD0_RATIO -> LOD 0's share of the Nanite source, default 1.0.
+    """UEO3DE_LOD0_RATIO -> LOD 0's share of the Nanite source, default 0.25.
 
-    Only meaningful under the source read (UEO3DE_NANITE_FALLBACK=0); the
-    default fallback read takes UE's fallback mesh as LOD 0 and ignores
-    this. A fraction in (0, 1]; anything else raises, per house rule.
+    The light default: a quarter of the Nanite source through UE's reducer
+    (the tow truck's 100k becomes ~25k, the density UE's own LOD generation
+    settles on for a mesh this size). 1.0 exports the full source. Only
+    meaningful under the source read; the opt-in fallback read takes UE's
+    fallback mesh as LOD 0 and ignores this. A fraction in (0, 1]; anything
+    else raises, per house rule.
     """
     if _LOD0_RATIO_CACHE:
         return _LOD0_RATIO_CACHE[0]
     value = os.environ.get("UEO3DE_LOD0_RATIO", "").strip()
     if not value:
-        ratio = 1.0
+        ratio = _LOD0_RATIO_DEFAULT
     else:
         try:
             ratio = float(value)

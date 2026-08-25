@@ -227,9 +227,9 @@ Knobs (full reference and the measurements behind each in
 ```
 rem -- export time (UE) --
 set UEO3DE_MESH_FORMAT=glb       rem export STATIC meshes as glTF binary instead of FBX (no LOD chain)
-set UEO3DE_NANITE_FALLBACK=0     rem read the Nanite SOURCE for LOD 0 (default: UE's fallback mesh + its LODs)
-set UEO3DE_LOD0_RATIO=0.5        rem source read: keep this share of the source at LOD 0
-set UEO3DE_LOD_RATIOS=0.2,0.08,0.03,0.012   rem source read: far-LOD shares of the source
+set UEO3DE_LOD0_RATIO=1.0        rem LOD 0's share of the Nanite source (default 0.25; 1.0 = full detail)
+set UEO3DE_LOD_RATIOS=0.1,0.04,0.015,0.006  rem far-LOD shares of the source (the default ladder)
+set UEO3DE_NANITE_FALLBACK=1     rem export UE's fallback mesh + LODs instead (its LOD 0 materials are WRONG on some meshes)
 set UEO3DE_LOD_CHAIN=0           rem LOD 0 only
 rem -- staging time --
 set UEO3DE_COLLISION=ue          rem single (default) | vhacd | ue -- how multi-hull collision is cooked
@@ -242,14 +242,15 @@ set UEO3DE_CHUNK_CEILING=6000    rem raise the refuse-to-import threshold (defau
 ```
 
 **LODs.** An FBX export carries a LOD chain (`FbxLODGroup` → one `.azmodel`
-with N `.azlod` products). For a Nanite mesh the default is the **non-Nanite
-read**: UE's fallback mesh as LOD 0 and its render LODs beneath it, the same
-geometry a non-Nanite asset gets and 6–9 % of the source's triangles.
-`UEO3DE_NANITE_FALLBACK=0` reads the Nanite source instead — what Nanite
-actually renders — and simplifies the far LODs from it through UE's own
-reducer at `UEO3DE_LOD_RATIOS` budgets, with `UEO3DE_LOD0_RATIO` as the
-middle ground (half the source at LOD 0, say). O3DE's LOD switch distances
-are its own defaults; UE's per-LOD screen sizes are not authored yet.
+with N `.azlod` products). For a Nanite mesh the chain is derived from the
+Nanite **source** — what Nanite actually renders — through UE's own reducer:
+LOD 0 keeps `UEO3DE_LOD0_RATIO` of it (default a quarter; `1.0` for full
+detail) and the far LODs follow `UEO3DE_LOD_RATIOS`. UE's fallback mesh is
+deliberately *not* used: its material sections are measured wrong on meshes
+whose source sections are permuted, and Nanite never displays it, so nobody
+sees that in UE (`UEO3DE_NANITE_FALLBACK=1` opts into it anyway). O3DE's
+LOD switch distances are its own defaults; UE's per-LOD screen sizes are
+not authored yet.
 
 **Collision.** UE decomposes a body into several convex elements. Three
 representations, chosen at staging with `UEO3DE_COLLISION`: `single` (one
