@@ -470,7 +470,8 @@ def _baked_lod_chain(source_mesh, mirrored=False):
         sized for a chain UE never displays -- and exporting at those
         budgets read as "geometry is still weird when zooming out"
         (SM_Tow_Truck_01a's hood collapsing at moderate range). Each far
-        LOD now targets max(fallback count, source * _LOD_RATIOS[i]):
+        LOD now targets max(fallback count, source * ratio[i])
+        (UEO3DE_LOD_RATIOS overrides the ratio ladder; see _lod_ratios):
         20/8/3/1.2% -- SM_Tow_Truck_01b (100,554 source tris) comes out
         20,110 / 8,044 / 3,016 / 1,206 instead of 9,434 / ... / 1,180.
         The reduction runs through apply_editor_simplify_to_triangle_count,
@@ -500,13 +501,14 @@ def _baked_lod_chain(source_mesh, mirrored=False):
     chain = [single]
     if nanite:
         source_tris = int(single.get_triangle_count())
+        ratios = _lod_ratios()
         for index in range(lod_count):
             try:
                 fallback_tris = int(source_mesh.get_num_triangles(index))
             except Exception:
                 fallback_tris = 0
-            ratio = (_LOD_RATIOS[index] if index < len(_LOD_RATIOS)
-                     else _LOD_RATIOS[-1] / 2.0)
+            ratio = (ratios[index] if index < len(ratios)
+                     else ratios[-1] / 2.0)
             target = max(fallback_tris, int(source_tris * ratio))
             target = min(target, source_tris)
             if target <= 0:
@@ -528,7 +530,38 @@ def _baked_lod_chain(source_mesh, mirrored=False):
 # The auto-fallback counts (~6/3/1.5/0.7%) are sized for a chain UE never
 # renders; at those budgets LOD1 already collapsed hoods at moderate range
 # ("it gets worse when I fall back more, this is lod 1").
-_LOD_RATIOS = (0.20, 0.08, 0.03, 0.012)
+_LOD_RATIOS_DEFAULT = (0.20, 0.08, 0.03, 0.012)
+_LOD_RATIOS_CACHE = []
+
+
+def _lod_ratios():
+    """UEO3DE_LOD_RATIOS -> far-LOD budgets, e.g. "0.25,0.10,0.04,0.015".
+
+    Comma-separated fractions of the source triangle count, LOD1 outward;
+    a chain longer than the list continues at half the last entry, and every
+    budget is still floored by the asset's own fallback count and capped at
+    the source count. Empty/unset keeps the measured default. Unparseable
+    values or fractions outside (0, 1] raise, per house rule: a typo must
+    fail the export, not silently reshape every LOD in the level.
+    """
+    if _LOD_RATIOS_CACHE:
+        return _LOD_RATIOS_CACHE[0]
+    value = os.environ.get("UEO3DE_LOD_RATIOS", "").strip()
+    if not value:
+        ratios = _LOD_RATIOS_DEFAULT
+    else:
+        try:
+            ratios = tuple(float(part) for part in value.split(","))
+        except ValueError:
+            raise MeshExportError(
+                "UEO3DE_LOD_RATIOS=%r is not a comma-separated list of "
+                "numbers" % value)
+        if not ratios or any(not (0.0 < r <= 1.0) for r in ratios):
+            raise MeshExportError(
+                "UEO3DE_LOD_RATIOS=%r: every entry must be a fraction in "
+                "(0, 1]" % value)
+    _LOD_RATIOS_CACHE.append(ratios)
+    return ratios
 
 
 def _simplify_to_triangle_count(dyn, target):
