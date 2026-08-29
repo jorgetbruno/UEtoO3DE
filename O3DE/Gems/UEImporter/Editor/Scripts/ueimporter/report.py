@@ -22,6 +22,10 @@ CODES = {
     "XFORM_NONUNIFORM_SCALE_COMPONENT": (
         INFO, "AZ::Transform carries a single uniform scale, so a non-uniform "
               "UE scale is placed on an EditorNonUniformScaleComponent."),
+    "XFORM_SCALE_CLAMPED": (
+        WARN, "A scale axis is below the engine minimum (AZ::MinTransformScale, "
+              "0.01) and was clamped to it; the entity is slightly thicker "
+              "than in UE."),
     "XFORM_NONUNIFORM_SCALE_NOT_INHERITED": (
         WARN, "O3DE applies non-uniform scale at the component rather than in "
               "the transform hierarchy, so it does not reach child entities "

@@ -28,6 +28,8 @@ import os
 # Code/Framework/AzToolsFramework/AzToolsFramework/ToolsComponents/
 # EditorNonUniformScaleComponent.h in the 26.05 SDK.
 NON_UNIFORM_SCALE_TYPE_ID = "{2933FB4F-B3DA-4CD1-8106-F37300730777}"
+# AZ::MinTransformScale (1e-2f): the engine clamps any scale axis below it.
+MIN_NONUNIFORM_SCALE = 0.01
 
 MESH_COMPONENT_NAME = "Mesh"
 MODEL_ASSET_PROPERTY = "Controller|Configuration|Model Asset"
@@ -193,16 +195,30 @@ def _apply_transform(entity_id, transform, report, entity_name, has_children):
             "could not be added: %s"
             % (entity_name, scale, outcome.GetError() if outcome else "no outcome"))
 
+    # The engine clamps every axis to AZ::MinTransformScale (1e-2f in
+    # AzCore/Math/Transform.h): a UE actor squashed to 0.003 on Z (NYC's
+    # `Cylinder2`, a flattened primitive) read back as 0.01 and failed the
+    # round-trip check, which aborted a 4,000-entity chunk over one
+    # degenerate scale. Clamp on this side, report it, and keep the
+    # round-trip check honest against the clamped request.
+    requested = [max(float(value), MIN_NONUNIFORM_SCALE) for value in scale]
+    if requested != [float(value) for value in scale]:
+        report.warn("XFORM_SCALE_CLAMPED", entity_name,
+                    "scale %r has an axis below the engine minimum %g; clamped "
+                    "to %r" % (scale, MIN_NONUNIFORM_SCALE, requested))
+
     import azlmbr.entity as entity_module
     entity_module.NonUniformScaleRequestBus(
         bus.Event, 'SetScale', entity_id,
-        math.Vector3(float(scale[0]), float(scale[1]), float(scale[2])))
+        math.Vector3(requested[0], requested[1], requested[2]))
 
     read_back = entity_module.NonUniformScaleRequestBus(bus.Event, 'GetScale', entity_id)
-    if read_back is None or any(abs(getattr(read_back, axis) - float(value)) > 1e-4
-                                for axis, value in zip("xyz", scale)):
+    if read_back is None or any(abs(getattr(read_back, axis) - value) > 1e-4
+                                for axis, value in zip("xyz", requested)):
         raise PrefabBuildError(
-            "%s: non-uniform scale did not round-trip (wrote %r)" % (entity_name, scale))
+            "%s: non-uniform scale did not round-trip (wrote %r, read %r)"
+            % (entity_name, requested,
+               None if read_back is None else [read_back.x, read_back.y, read_back.z]))
 
     report.warn("XFORM_NONUNIFORM_SCALE_COMPONENT", entity_name,
                 "scale %r carried on an EditorNonUniformScaleComponent because "

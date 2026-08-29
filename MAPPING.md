@@ -215,6 +215,7 @@ separate because they are fixed in different places.
 |---|---|---|
 | `XFORM_NONUNIFORM_SCALE_COMPONENT` | info | Non-uniform scale moved onto an `EditorNonUniformScaleComponent`. |
 | `XFORM_NONUNIFORM_SCALE_NOT_INHERITED` | warn | Non-uniformly scaled entity has children; O3DE does not propagate the scale to them, UE does. |
+| `XFORM_SCALE_CLAMPED` | warn | A scale axis below the engine minimum (`AZ::MinTransformScale`, 0.01) was clamped to it; the entity is slightly thicker than in UE. |
 | `MESH_MISSING` | warn | Static mesh actor with no mesh reference; imported as a transform-only placeholder. |
 | `ENTITY_KIND_DEFERRED` | info | Recognized entity kind owned by a later milestone. |
 | `MAT_SLOT_UNMATCHED` | warn | A converted material had no matching slot label on the model. |
