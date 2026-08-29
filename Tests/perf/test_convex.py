@@ -73,10 +73,11 @@ HULLING = FakeAdapter(True)      # Jolt: render-mesh hull, element ignored
 BOXING = FakeAdapter(False)      # PhysX: per-element AABB box
 
 
-def collapse(shapes, subject="Thing", adapter=HULLING, cooked=False):
+def collapse(shapes, subject="Thing", adapter=HULLING, cooked=False,
+             decomposed=None):
     report = Report()
     kept = physics_build._collapse_convex(shapes, subject, report, adapter,
-                                          cooked=cooked)
+                                          cooked=cooked, decomposed=decomposed)
     codes = [r["code"] for r in report.records()]
     return kept, codes, report
 
@@ -112,6 +113,26 @@ check(kept == mixed,
 # fact, and it must override the capability answer in one direction only.
 many = [shape("convex", i) for i in range(340)]
 kept, codes, _ = collapse(many, adapter=BOXING, cooked=True)
+
+# --- A DECOMPOSED PRODUCT IS NOT A WHOLE-MESH HULL --------------------------
+# ue/vhacd staging asks the cooker to decompose: the product keeps the
+# concavities, so the collapse still keeps one convex (one collider references
+# the product) but must report PHYS_SHAPE_DECOMPOSED, not the filled-in
+# warning. Measured on NYC_Level_WC: 1,685 of 1,743 "one is authored"
+# warnings pointed at products that had decomposed.
+kept_d, codes_d, report_d = collapse(many, adapter=HULLING, cooked=True, decomposed=34)
+check(len([s for s in kept_d if s.get("type") == "convex"]) == 1,
+      "a decomposed product still collapses to one convex reference, got %d"
+      % len([s for s in kept_d if s.get("type") == "convex"]))
+check(codes_d == ["PHYS_SHAPE_DECOMPOSED"],
+      "a decomposed product must report PHYS_SHAPE_DECOMPOSED, not the "
+      "whole-mesh-hull warning; got %r" % (codes_d,))
+check("34" in report_d.records()[0].get("detail", "34"),
+      "the decomposition cap belongs in the detail")
+kept_n, codes_n, _ = collapse(many, adapter=HULLING, cooked=True, decomposed=None)
+check(codes_n == ["PHYS_SHAPE_APPROXIMATED"],
+      "without a decomposing sidecar the whole-mesh-hull warning stays; got %r"
+      % (codes_n,))
 check(len(kept) == 1,
       "a cooked whole-mesh asset should collapse 340 identical colliders to "
       "one, got %d" % len(kept))
