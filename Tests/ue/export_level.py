@@ -108,6 +108,13 @@ def verify_fbx_intermediate(record):
 
     deltas = [max(abs(stats["min"][i] - expected_min[i]),
                   abs(stats["max"][i] - expected_max[i])) for i in range(3)]
+    # The bake goes through float32 geometry: at 392 m from the origin (the
+    # NYC city's tram cables) one ulp is ~0.004 cm, and a fixed 1e-3 cm
+    # tolerance failed a file whose bounds were off by 0.0014 cm. A mirror
+    # error moves bounds by the coordinate itself, so a tolerance that grows
+    # with magnitude (float32 epsilon x 64, ~4e-6 relative) cannot hide one.
+    magnitude = max(abs(v) for v in list(expected_min) + list(expected_max)) or 0.0
+    tolerance = max(tolerance, magnitude * 4e-6)
     if max(deltas) > tolerance:
         raise RuntimeError(
             "%s: %s does not match its expected intermediate bounds.\n"
