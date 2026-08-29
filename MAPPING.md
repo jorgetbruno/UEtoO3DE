@@ -469,6 +469,15 @@ passes no dimensions and deliberately does not set Asset Scale on top of it.
 
 ## Materials (M4) — graph subset → StandardPBR
 
+Parameter values are read from the LEAF instance through a getter chosen by
+its type: `MaterialInstanceConstant` through `MaterialEditingLibrary`, and a
+`MaterialInstanceDynamic` (a runtime instance a Blueprint construction
+script made -- common on marketplace props; the NYC city's traffic lights
+ended the first export this way) through its own K2 getters, which resolve
+overrides along the parent chain. A static switch cannot be overridden on a
+dynamic instance, so it is read from the nearest constant ancestor.
+
+
 Recognition is **per property, not per material** (spike S4.0 measured most
 "unsupported" materials failing on a single channel): each of BaseColor /
 Normal / Roughness / Metallic / AO / Opacity(Mask) is classified independently,
