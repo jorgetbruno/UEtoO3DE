@@ -184,10 +184,16 @@ on codes, never on English strings.
 | `PHYS_DEGENERATE_SHAPE` | warn | Collision primitive with a zero/near-zero dimension. |
 | `PHYS_SHAPE_UNSUPPORTED` | warn | Collision primitive kind with no v1 mapping. |
 | `MAT_EXPR_UNSUPPORTED` | warn | Material property driven by an expression outside the v1 subset. Base colour → whole material falls back; otherwise only that property drops. |
+| `MAT_PACKED_TEXTURE_SPLIT` | info | One texture drove two or more of roughness/metallic/AO with no channel mask (a packed map); it was split by channel into grayscale PNGs. |
+| `MAT_PACKED_ORDER_ASSUMED` | warn | A packed AO/roughness/metallic texture parameter names no ORM/ARM/RMA/MRA convention, so ORM channel order was assumed. |
 | `MAT_BLEND_UNSUPPORTED` | warn | UE blend mode outside Opaque/Masked/Translucent; imported as translucent. |
 | `MAT_FUNCTION_PASSTHROUGH` | info | Channel driven by unsupported math (function call, contrast, blend chain); approximated by the nearest texture beneath it. |
 | `ENV_POSTPROCESS_UNMAPPED` | info | A post-process setting the artist overrode has no M6 mapping; carried in the manifest, not authored. |
 | `ENV_VOLUME_BOUNDS_UNKNOWN` | warn | A bounded post-process volume's extents could not be read, so the importer cannot size the equivalent volume. |
+| `ENV_VALUE_IMPLAUSIBLE` | warn | A UE post-process value is outside the plausible range of the Atom property it maps to (the engines do not share that unit's meaning); clamped, or dropped where clamping still clips the frame (exposure bias), and reported. |
+| `ENV_EXPOSURE_LIMIT_CONVERTED` | info | UE's auto-exposure min/max brightness is a luminance; Atom's clamp is in EV, so it is imported as log2(value). |
+| `ENV_EXPOSURE_LIMIT_APPROX` | warn | UE's auto-exposure brightness clamp is zero or negative and has no logarithm; Atom's EV clamp is set to its floor. |
+| `ENV_EXPOSURE_ALREADY_AUTHORED` | warn | More than one level-wide post-process volume carries exposure settings; exposure is global, so only the highest-priority volume authors it. |
 | `TERRAIN_BAKED_TO_MESH` | info | Landscape baked to a world-space grid mesh sampled from its heightfield collision (the M7 v1 path). |
 | `TERRAIN_LAYERS_FLATTENED` | info | Landscape layer blending has no O3DE equivalent; the terrain renders with one converted material. |
 | `ANIM_ROOT_MOTION_DROPPED` | warn | AnimSequence has root motion; Simple Motion does not extract it to entity movement, so the character animates in place. |
