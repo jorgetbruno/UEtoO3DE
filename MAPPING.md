@@ -240,6 +240,7 @@ separate because they are fixed in different places.
 | `ENV_BLOOM_THRESHOLD_APPROX` | info | UE's negative bloom threshold is a "no threshold" sentinel with no Atom equivalent; 0.0 is used. |
 | `ENV_TYPE_UNSUPPORTED` | warn | Environment actor type has no v1 mapping; the entity keeps its transform only. |
 | `PHYS_SHAPE_APPROXIMATED` | warn | A shape could not be authored exactly **on this backend** and was substituted. The same UE level legitimately differs per backend; this makes it visible. |
+| `PHYS_SHAPE_DECOMPOSED` | info | UE decomposes this collision into several convex pieces and the staged sidecar (`ue`/`vhacd` mode) asks the cooker to decompose as well, so the cooked product keeps the concavities; one collider references it. |
 | `PHYS_PROFILE_FALLBACK` | warn | A collision profile reached an entity and **no filtering was applied** — neither adapter implements the `layer` argument, so every imported body collides with everything. Reported once per distinct profile, not per body. |
 | `PHYS_MESH_FROM_RENDER` | info | No simple primitives; a mesh collider was baked from the render geometry (triangle mesh static, convex hull dynamic). |
 | `PHYS_COLLIDER_NOT_BAKED` | error | A mesh collider reached the saved prefab with no baked geometry, so it collides with nothing. The bake runs on the component's tick and had not finished when the prefab was serialized. Re-import with a larger `UEO3DE_SETTLE_FRAMES`; it cannot be recovered afterwards. |

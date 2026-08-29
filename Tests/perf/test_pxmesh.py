@@ -325,6 +325,14 @@ fbx = os.path.join(scratch, "sm_thing.fbx")
 sidecar = assetinfo.write(fbx, "SM_Thing", physics=convex_plan)
 check(assetinfo.physics_in_sidecar(sidecar) == {"method": "convex"},
       "physics_in_sidecar failed to read back a convex group")
+# A decomposing group (ue/vhacd staging) reports its cap, so the import
+# report can tell a decomposed product from a whole-mesh hull.
+sidecar = assetinfo.write(fbx, "SM_Thing",
+                          physics={"method": "convex", "elements": 34,
+                                   "decompose_hulls": 34})
+check(assetinfo.physics_in_sidecar(sidecar) == {"method": "convex", "decompose_hulls": 34},
+      "physics_in_sidecar must carry the decomposition cap of a decomposing group, got %r"
+      % (assetinfo.physics_in_sidecar(sidecar),))
 sidecar = assetinfo.write(fbx, "SM_Thing",
                           physics={"method": "trimesh", "elements": 0,
                                    "decompose_hulls": None})

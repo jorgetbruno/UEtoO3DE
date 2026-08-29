@@ -22,6 +22,11 @@ CODES = {
     "XFORM_NONUNIFORM_SCALE_COMPONENT": (
         INFO, "AZ::Transform carries a single uniform scale, so a non-uniform "
               "UE scale is placed on an EditorNonUniformScaleComponent."),
+    "PHYS_SHAPE_DECOMPOSED": (
+        INFO, "UE decomposes this collision into several convex pieces and "
+              "the staged sidecar (`ue`/`vhacd` collision mode) asks the "
+              "cooker to decompose as well, so the cooked product keeps the "
+              "concavities; one collider references it."),
     "XFORM_SCALE_CLAMPED": (
         WARN, "A scale axis is below the engine minimum (AZ::MinTransformScale, "
               "0.01) and was clamped to it; the entity is slightly thicker "

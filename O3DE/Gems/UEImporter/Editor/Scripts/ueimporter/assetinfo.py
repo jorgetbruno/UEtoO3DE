@@ -451,7 +451,8 @@ def physics_in_sidecar(sidecar_path, backend="physx"):
     legitimately carry both and they can disagree (a mesh whose Jolt group is
     convex and whose PhysX group is convex still cooks two different products).
 
-    Returns None or `{"method": "convex"|"trimesh"}`.
+    Returns None or `{"method": "convex"|"trimesh"}`; a convex group that
+    asks the cooker to decompose also carries `"decompose_hulls": <cap>`.
     """
     wanted = PHYSX_MESH_GROUP_TYPE if backend == "physx" else JOLT_MESH_GROUP_TYPE
     convex_value = PHYSX_EXPORT_CONVEX if backend == "physx" else JOLT_EXPORT_CONVEX
@@ -468,7 +469,14 @@ def physics_in_sidecar(sidecar_path, backend="physx"):
             continue
         method = group.get("export method")
         if method == convex_value:
-            return {"method": "convex"}
+            plan = {"method": "convex"}
+            # `ue`/`vhacd` staging asks the cooker to decompose; the import
+            # report needs to know, or it blames a whole-mesh hull for
+            # concavities the product actually kept.
+            if group.get("DecomposeMeshes"):
+                params = group.get("ConvexDecompositionParams") or {}
+                plan["decompose_hulls"] = int(params.get("MaxConvexHulls") or 0) or None
+            return plan
         if method == trimesh_value:
             return {"method": "trimesh"}
         return None

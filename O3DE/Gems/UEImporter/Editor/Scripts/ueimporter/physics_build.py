@@ -431,7 +431,7 @@ def convex_per_element(environ=None):
 
 
 def _collapse_convex(shapes, subject, report, adapter, cooked=False,
-                     mesh_bounds=None, per_element=None):
+                     mesh_bounds=None, per_element=None, decomposed=None):
     """N convex elements -> one, but ONLY where they are genuinely identical.
 
     `_author_shape` has two kinds of answer for a `convex` element and they
@@ -525,6 +525,22 @@ def _collapse_convex(shapes, subject, report, adapter, cooked=False,
                 continue
             seen = True
         kept.append(shape)
+    if decomposed:
+        # `ue`/`vhacd` staging: the cooked product is NOT one whole-mesh hull.
+        # The sidecar handed the cooker UE's merged hull node (or the render
+        # mesh) with DecomposeMeshes on, so the product holds up to
+        # `decomposed` hulls and keeps the concavities. One collider
+        # references that product; nothing is filled in. Measured on NYC
+        # (2026-08-29): 1,685 of 1,743 "one is authored" warnings pointed at
+        # products that had in fact decomposed (SM_Tomato_Stack 34 -> 11
+        # hulls, SM_NYCB_34 206 -> 78).
+        report.warn("PHYS_SHAPE_DECOMPOSED", subject,
+                    "UE decomposes this collision into %d convex pieces; the "
+                    "staged sidecar asks the cooker to decompose it too (up to "
+                    "%d hulls, overlapping pieces merge), so the cooked product "
+                    "keeps the concavities and one collider references it"
+                    % (len(convex), decomposed))
+        return kept
     report.warn("PHYS_SHAPE_APPROXIMATED", subject,
                 "UE decomposes this collision into %d convex pieces; this "
                 "backend's convex collider covers the whole render mesh, so "
@@ -619,7 +635,9 @@ def author_entity_physics(adapter, entity_id, item, assets_by_guid, report,
             for shape in _collapse_convex(
                     collision.get("shapes") or [], subject, report, adapter,
                     cooked=bool(cooked and cooked.get("method") == "convex"),
-                    mesh_bounds=(asset or {}).get("bounds_local")):
+                    mesh_bounds=(asset or {}).get("bounds_local"),
+                    decomposed=(cooked or {}).get("decompose_hulls")
+                    if cooked and cooked.get("method") == "convex" else None):
                 if _author_shape(adapter, entity_id, shape, scale, subject,
                                  report, None, cooked=cooked):
                     authored += 1

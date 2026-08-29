@@ -696,7 +696,8 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                             "the cook error" % (product, cook_timeout))
                 continue
             cooked_mesh_ids[asset["guid"]] = {"asset_id": pxmesh_id,
-                                              "method": plan["method"]}
+                                              "method": plan["method"],
+                                              "decompose_hulls": plan.get("decompose_hulls")}
         report.count("cooked_physics_meshes", len(cooked_mesh_ids))
         mark("wait for cooked physics meshes")
 
