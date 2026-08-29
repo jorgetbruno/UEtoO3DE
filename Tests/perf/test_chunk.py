@@ -164,3 +164,29 @@ check(len(mixed["entities"]) == before,
 print("")
 print("RESULT: " + ("PASS" if not failures else "FAIL (%d)" % len(failures)))
 sys.exit(1 if failures else 0)
+
+# --- an oversized subtree is split by its direct children ----------------------
+# Measured on NYC_Level_WC: an InstancedFoliageActor root with 13,964 flat
+# children (foliage instances expanded into entities) landed whole in one
+# 13,965-entity chunk, against a crash boundary near 12,000. A root larger
+# than the ceiling is split by its direct children's subtrees; the root rides
+# along in every piece so no child loses its parent.
+os.environ["UEO3DE_CHUNK_CEILING"] = "4000"
+big = {"entities": [{"id": "foliage", "parent_id": None, "name": "InstancedFoliageActor"}]
+       + [{"id": "inst%05d" % i, "parent_id": "foliage", "name": "i"} for i in range(9000)]
+       + [{"id": "lone%d" % i, "parent_id": None, "name": "l"} for i in range(50)]}
+chunks_big = split(big, 3)
+child_ids = [e["id"] for c in chunks_big for e in c["entities"] if e["id"] != "foliage"]
+check(sorted(child_ids) == sorted(e["id"] for e in big["entities"] if e["id"] != "foliage"),
+      "every child of an oversized root must appear exactly once across chunks")
+check(len(child_ids) == len(set(child_ids)), "no child may be duplicated")
+for c in chunks_big:
+    ids = {e["id"] for e in c["entities"]}
+    check(all(e["parent_id"] in ids for e in c["entities"] if e["parent_id"]),
+          "a child's parent must be present in the child's own chunk")
+    check(len(c["entities"]) <= 4000 + 1,
+          "no chunk may exceed the ceiling (plus the duplicated root); got %d"
+          % len(c["entities"]))
+check(sum(1 for c in chunks_big if any(e["id"] == "foliage" for e in c["entities"])) >= 3,
+      "the oversized root must ride along in every piece")
+del os.environ["UEO3DE_CHUNK_CEILING"]

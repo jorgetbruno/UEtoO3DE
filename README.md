@@ -188,7 +188,10 @@ Each chunk becomes `<Level>_partNN_of_NN.prefab`. Every chunk's container sits a
 the origin, so instantiating all of them in one level reproduces the level exactly.
 
 The split is by **whole root subtree**, never by entity index, and that is the
-load-bearing detail: an index range would cut parents away from children, and an
+load-bearing detail (one exception, measured on a 51,773-entity city whose
+`InstancedFoliageActor` root carried 13,964 flat children: a root subtree
+larger than the ceiling is split by its direct children, and the transform-only
+root rides along in every piece so no child loses its parent): an index range would cut parents away from children, and an
 orphaned child does not fail — it imports at the level root. A building's windows
 scattered at the origin, in a prefab that saved without a warning. The partition
 is deterministic, covers every entity exactly once, and never separates a child

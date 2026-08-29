@@ -244,7 +244,33 @@ def chunk_of(document, index, count):
     # Manifest order decides ties, so the same manifest always splits the same
     # way -- a chunk that moved between runs would make re-import meaningless.
     groups = [subtree(root) for root in children.get(None, ())]
-    groups.sort(key=lambda g: (-len(g), g[0]["id"]))
+
+    # A subtree larger than what one import can hold cannot be binned whole.
+    # Measured on NYC_Level_WC: one InstancedFoliageActor root with 13,964
+    # flat children -- foliage instances expanded into entities -- landed
+    # in a single chunk of 13,965 against a crash boundary near 12,000.
+    # Such a root is split by its DIRECT children's subtrees, and the root
+    # itself (a transform-only container) rides along in every piece, so no
+    # child ever loses the parent it was exported with. The root therefore
+    # appears once per piece; re-import matches it by id in each chunk's
+    # own ledger, and the copies are invisible placeholders at one place.
+    ceiling = chunk_ceiling()
+    split = []
+    for group in groups:
+        if len(group) <= ceiling:
+            split.append(group)
+            continue
+        root = group[0]
+        piece = [root]
+        for child in children.get(root["id"], ()):
+            branch = subtree(child)
+            if len(piece) > 1 and len(piece) + len(branch) > ceiling:
+                split.append(piece)
+                piece = [root]
+            piece.extend(branch)
+        split.append(piece)
+    groups = split
+    groups.sort(key=lambda g: (-len(g), g[0]["id"], g[1]["id"] if len(g) > 1 else ""))
 
     bins = [[] for _ in range(count)]
     sizes = [0] * count
