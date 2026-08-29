@@ -22,6 +22,14 @@ what staging refuses), so the chain is FBX-only.
 
 Rules the chain writer learned the hard way:
 
+* **Five LODs total, on both sides.** Of 2,272 NYC meshes the Asset
+  Processor failed exactly two — the only two with six LOD nodes (five UE
+  render LODs plus the source): Atom's `ModelAssetCreator::AddLodAsset`
+  crashed the AssetBuilder outright (0xC0000005, no error message).
+  Atom's `LodCountMax` is 10, so the sixth trips something deeper; five is
+  the measured ceiling. The exporter emits LOD 0 + four reductions, and
+  the sidecar selects at most five nodes from a file that carries more.
+
 * `ScriptProcessorRule` must be a top-level manifest entry — nested in a
   group's rules it is silently ignored.
 * The export's intermediate bounds expectation is the **union** of every
