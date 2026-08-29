@@ -97,11 +97,20 @@ def _switch_value(node, instance):
     kind = _expression_kind(node)
     if kind == "MaterialExpressionStaticSwitchParameter":
         name = node.get_editor_property("parameter_name")
-        if instance is not None:
+        # Static switches cannot be overridden on a dynamic instance, so a
+        # MaterialInstanceDynamic answers through its nearest constant
+        # ancestor (the getter takes MaterialInstanceConstant only).
+        constant = instance
+        while constant is not None and _is_dynamic(constant):
+            try:
+                constant = constant.get_editor_property("parent")
+            except Exception:
+                constant = None
+        if isinstance(constant, unreal.MaterialInstanceConstant):
             try:
                 return bool(unreal.MaterialEditingLibrary
                             .get_material_instance_static_switch_parameter_value(
-                                instance, name))
+                                constant, name))
             except Exception:
                 pass
         return bool(node.get_editor_property("default_value"))
@@ -196,6 +205,39 @@ def _base_material_and_instance(material):
     return material, None
 
 
+def _is_dynamic(instance):
+    return isinstance(instance, unreal.MaterialInstanceDynamic)
+
+
+def _instance_scalar(instance, name):
+    """A scalar parameter through the right getter for the instance type.
+
+    MaterialEditingLibrary's getters take MaterialInstanceConstant only --
+    handing them a MaterialInstanceDynamic (a runtime instance a Blueprint
+    construction script made, common on marketplace props) raises a
+    TypeError and used to end the whole export. The dynamic instance's own
+    K2 getters resolve its overrides through its parent chain.
+    """
+    if _is_dynamic(instance):
+        return instance.get_scalar_parameter_value(name)
+    return unreal.MaterialEditingLibrary.get_material_instance_scalar_parameter_value(
+        instance, name)
+
+
+def _instance_vector(instance, name):
+    if _is_dynamic(instance):
+        return instance.get_vector_parameter_value(name)
+    return unreal.MaterialEditingLibrary.get_material_instance_vector_parameter_value(
+        instance, name)
+
+
+def _instance_texture(instance, name):
+    if _is_dynamic(instance):
+        return instance.get_texture_parameter_value(name)
+    return unreal.MaterialEditingLibrary.get_material_instance_texture_parameter_value(
+        instance, name)
+
+
 def _linear_color_to_rgb(value):
     return [float(value.r), float(value.g), float(value.b)]
 
@@ -207,8 +249,7 @@ def _scalar_of(node, instance):
     if kind == "MaterialExpressionScalarParameter":
         name = node.get_editor_property("parameter_name")
         if instance is not None:
-            return float(unreal.MaterialEditingLibrary
-                         .get_material_instance_scalar_parameter_value(instance, name))
+            return float(_instance_scalar(instance, name))
         return float(node.get_editor_property("default_value"))
     return None
 
@@ -220,9 +261,7 @@ def _color_of(node, instance):
     if kind == "MaterialExpressionVectorParameter":
         name = node.get_editor_property("parameter_name")
         if instance is not None:
-            return _linear_color_to_rgb(
-                unreal.MaterialEditingLibrary
-                .get_material_instance_vector_parameter_value(instance, name))
+            return _linear_color_to_rgb(_instance_vector(instance, name))
         return _linear_color_to_rgb(node.get_editor_property("default_value"))
     return None
 
@@ -235,8 +274,7 @@ def _texture_of(node, instance):
                 "MaterialExpressionTextureObjectParameter"):
         name = node.get_editor_property("parameter_name")
         if instance is not None:
-            found = (unreal.MaterialEditingLibrary
-                     .get_material_instance_texture_parameter_value(instance, name))
+            found = _instance_texture(instance, name)
             if found is not None:
                 return found
         return node.get_editor_property("texture")
@@ -772,7 +810,7 @@ def _resolve_texture_parameter(master, instance, name):
     mel = unreal.MaterialEditingLibrary
     if instance is not None:
         try:
-            value = mel.get_material_instance_texture_parameter_value(instance, name)
+            value = _instance_texture(instance, name)
             if value is not None:
                 return value
         except Exception:

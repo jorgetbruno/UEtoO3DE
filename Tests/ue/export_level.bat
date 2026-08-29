@@ -51,7 +51,7 @@ if exist "%RESULT%" del /q "%RESULT%"
 rem GeometryScripting is required by the exporter's bake (LANE_B.md) and is
 rem not enabled by default in most projects; -EnablePlugins turns it on for
 rem this run only, without touching the target .uproject.
-"%UE_EDITOR%" "%UPROJECT%" -ExecutePythonScript="%SCRIPT%" -EnablePlugins=GeometryScripting -unattended -nop4 -nosplash
+"%UE_EDITOR%" "%UPROJECT%" -ExecutePythonScript="%SCRIPT%" -EnablePlugins=GeometryScripting,PythonScriptPlugin -unattended -nop4 -nosplash
 
 if not exist "%RESULT%" (
   echo RESULT FILE MISSING: %RESULT% 1>&2
