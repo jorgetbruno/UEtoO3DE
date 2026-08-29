@@ -360,8 +360,11 @@ def build(group_name, fbx_node_name, physics=None, backends=("physx",),
     if lod_nodes and len(lod_nodes) > LOD_NODES_MAX:
         # A sixth LOD crashed Atom's ModelAssetCreator::AddLodAsset on the
         # two NYC meshes that carried one (0xC0000005 in the AssetBuilder);
-        # five is what every shipped chain has. Extra nodes stay in the
-        # file, unselected.
+        # five is what every shipped chain has. This cap keeps the sidecar
+        # honest, but it is NOT a cure for such a file: SceneAPI takes the
+        # LODGroup's children as LODs regardless of the selection (measured
+        # -- the capped sidecar crashed identically), so the exporter's own
+        # cap is the fix and a six-node file must be re-exported.
         lod_nodes = list(lod_nodes)[:LOD_NODES_MAX]
     if lod_nodes:
         if len(lod_nodes) < 2:
