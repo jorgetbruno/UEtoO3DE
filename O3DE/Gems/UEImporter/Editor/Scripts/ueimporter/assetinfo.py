@@ -63,6 +63,8 @@ PHYSX_EXPORT_CONVEX = 1
 #     its parameter block is Jolt's own -- MaxConvexHulls / Resolution /
 #     MaxNumVerticesPerConvexHull / Concavity, NOT PhysX's v2 field set.
 JOLT_MESH_GROUP_TYPE = "JoltMeshGroup"
+# Total LOD nodes a sidecar selects (LOD0 + LodRule entries); measured limit.
+LOD_NODES_MAX = 5
 JOLT_EXPORT_TRIMESH = 0
 JOLT_EXPORT_CONVEX = 1
 
@@ -355,6 +357,12 @@ def build(group_name, fbx_node_name, physics=None, backends=("physx",),
     render_selected = gltf_source.node_path(fbx_node_name, source_path)
     physics_node = fbx_node_name
     lod_rule = {"$type": LOD_RULE_TYPE}
+    if lod_nodes and len(lod_nodes) > LOD_NODES_MAX:
+        # A sixth LOD crashed Atom's ModelAssetCreator::AddLodAsset on the
+        # two NYC meshes that carried one (0xC0000005 in the AssetBuilder);
+        # five is what every shipped chain has. Extra nodes stay in the
+        # file, unselected.
+        lod_nodes = list(lod_nodes)[:LOD_NODES_MAX]
     if lod_nodes:
         if len(lod_nodes) < 2:
             raise ValueError("lod_nodes needs at least LOD0 and LOD1; got %r"

@@ -111,6 +111,21 @@ check(jolt["NodeSelectionList"]["selectedNodes"]
       "same collider the flattened export produced; got %r"
       % jolt["NodeSelectionList"]["selectedNodes"])
 
+# --- 2b. a sixth LOD is never selected ------------------------------------------
+# Measured on NYC_Level_WC: the only two meshes with six LOD nodes crashed
+# Atom's ModelAssetCreator::AddLodAsset in the AssetBuilder (0xC0000005);
+# every five-LOD chain cooks. The sidecar caps its selection at five.
+six = ["SM_Six_LOD%d" % i for i in range(6)]
+doc6 = assetinfo.build("sm_six", "SM_Six", physics=physics, backends=("jolt",),
+                       source_path="x/sm_six.fbx", lod_nodes=six)
+rule6 = [r for r in doc6["values"][0]["rules"]["rules"]
+         if r.get("$type") == assetinfo.LOD_RULE_TYPE][0]
+check(len(rule6["nodeSelectionList"]) == 4,
+      "six LOD nodes must select LOD0 + four, never a sixth; got %d entries"
+      % len(rule6["nodeSelectionList"]))
+check(rule6["nodeSelectionList"][-1]["selectedNodes"] == ["RootNode.SM_Six.SM_Six_LOD4"],
+      "the last selected LOD must be LOD4")
+
 # --- 3. without lod_nodes, nothing moves ---------------------------------------
 plain = assetinfo.build("sm_car_24a", "SM_Car_24a", physics=physics,
                         backends=("jolt",), source_path="x/sm_car_24a.fbx")

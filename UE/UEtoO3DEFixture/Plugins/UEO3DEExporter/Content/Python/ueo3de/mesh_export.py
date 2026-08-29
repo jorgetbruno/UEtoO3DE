@@ -564,6 +564,12 @@ def _baked_lod_chain(source_mesh, mirrored=False):
     nanite = _nanite_enabled(source_mesh) and not _nanite_fallback_forced()
     if lod_count <= 1 and not nanite:
         return [single]
+    # Atom's ModelAssetCreator::AddLodAsset crashed the AssetBuilder
+    # (0xC0000005) on the only two NYC meshes carrying SIX LOD nodes -- five
+    # UE render LODs plus the source -- while every five-LOD fleet cooks
+    # clean, so the chain is capped at LOD 0 + four reductions on this side
+    # and the sidecar caps its selection the same way (assetinfo).
+    lod_count = min(lod_count, LOD_CHAIN_MAX - 1 if nanite else LOD_CHAIN_MAX)
     chain = [single]
     if nanite:
         source_tris = int(single.get_triangle_count())
@@ -611,6 +617,9 @@ def _baked_lod_chain(source_mesh, mirrored=False):
 # where a ratio would drop below UE's own chain -- SM_Tow_Truck_01b
 # (100,554 source tris) measures 25,136 / 10,054 / 4,717 / 2,358 / 1,179.
 _LOD_RATIOS_DEFAULT = (0.10, 0.04, 0.015, 0.006)
+# Total LODs in an exported chain (LOD 0 included); measured: six crashes
+# Atom's model builder on 26.05, five is what every shipped chain has.
+LOD_CHAIN_MAX = 5
 _LOD0_RATIO_DEFAULT = 0.25
 _LOD_RATIOS_CACHE = []
 
