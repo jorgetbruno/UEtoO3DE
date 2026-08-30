@@ -242,6 +242,7 @@ rem -- import time --
 set UEO3DE_SCRATCH_LEVEL=UEO3DE_Scratch   rem the level editor checks open on a USER project
 set UEO3DE_CHUNK=3/12            rem import one slice of a level too big for a single prefab
 set UEO3DE_CHUNK_CEILING=6000    rem raise the refuse-to-import threshold (default 4000, measured)
+set UEO3DE_CHUNK_ORDER=spatial   rem size (default) | spatial -- chunks as compact patches of the map
 ```
 
 **LODs.** An FBX export carries a LOD chain (`FbxLODGroup` → one `.azmodel`
@@ -293,6 +294,18 @@ discovering that twenty minutes in, the importer computes the split and stops,
 printing the exact `UEO3DE_CHUNK=i/n` command for every slice; chunks split by
 whole subtrees, so no entity is separated from its parent. `UEO3DE_CHUNK=1/1`
 imports as one prefab anyway.
+
+By default the slices are balanced by entity count alone, so on a level of
+single-actor roots each chunk is every n-th building spread over the whole
+map: loading one part shows a sieve, and finishing one street needs all of
+them. `UEO3DE_CHUNK_ORDER=spatial` walks the roots along a Hilbert curve over
+the level's XY extent and cuts it into contiguous runs instead, so each chunk
+is a compact patch -- a few blocks -- and its prefab can stand alone. A contiguous
+walk packs a little less tightly, so the guard recommends a chunk or two more
+(NYC_Level_WC: 15 instead of 13; the median chunk shrinks from the whole map to
+a third of it). It is
+opt-in because it changes which entities land in which chunk; set it before
+the first slice and keep it for every slice and re-import of that level.
 
 `UEO3DE_PHYSX_COOK` exists because O3DE activates gems
 transitively: a project that gets PhysX through another gem's dependency runs

@@ -161,9 +161,6 @@ check(len(mixed["entities"]) == before,
       "chunk_of mutated the document it was given (%d -> %d entities)"
       % (before, len(mixed["entities"])))
 
-print("")
-print("RESULT: " + ("PASS" if not failures else "FAIL (%d)" % len(failures)))
-sys.exit(1 if failures else 0)
 
 # --- an oversized subtree is split by its direct children ----------------------
 # Measured on NYC_Level_WC: an InstancedFoliageActor root with 13,964 flat
@@ -190,3 +187,169 @@ for c in chunks_big:
 check(sum(1 for c in chunks_big if any(e["id"] == "foliage" for e in c["entities"])) >= 3,
       "the oversized root must ride along in every piece")
 del os.environ["UEO3DE_CHUNK_CEILING"]
+
+# --- spatial order: each chunk is a compact patch of the map -------------------
+# Measured on NYC_Level_WC (51,776 entities, 13 chunks): the size order spread
+# every chunk over the whole map -- "the nearest part" was every thirteenth
+# building, and one finished street needed all thirteen prefabs. The spatial
+# order walks the roots along a Hilbert curve and cuts it into contiguous
+# runs. The property: a chunk's XY extent is a FRACTION of the level's, and
+# the partition guarantees above hold unchanged.
+
+
+def grid(side, spacing=10.0):
+    """side x side singleton actors on a grid, with manifest transforms."""
+    entities = []
+    for gy in range(side):
+        for gx in range(side):
+            entities.append({"id": "g%02d_%02d" % (gx, gy), "name": "b", "parent_id": None,
+                             "transform": {"world": {"translation": [gx * spacing, gy * spacing, 0.0],
+                                                     "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}}})
+    return {"schema_version": 7, "level": {"name": "G"}, "assets": [], "entities": entities}
+
+
+def extent(chunk):
+    xs = [e["transform"]["world"]["translation"][0] for e in chunk["entities"]]
+    ys = [e["transform"]["world"]["translation"][1] for e in chunk["entities"]]
+    return (max(xs) - min(xs), max(ys) - min(ys)) if xs else (0.0, 0.0)
+
+
+board = grid(16)                                   # 256 actors, 150 m square
+spatial = [importer.chunk_of(board, i, 4, order="spatial") for i in range(4)]
+by_size = [importer.chunk_of(board, i, 4, order="size") for i in range(4)]
+
+check(sorted(len(c["entities"]) for c in spatial) == [64, 64, 64, 64],
+      "spatial chunks of a uniform grid must be even; got %r"
+      % sorted(len(c["entities"]) for c in spatial))
+ids = sorted(e["id"] for c in spatial for e in c["entities"])
+check(ids == sorted(e["id"] for e in board["entities"]),
+      "the spatial partition must cover every entity exactly once")
+for c in spatial:
+    ex, ey = extent(c)
+    check(ex <= 80.0 and ey <= 80.0,
+          "a spatial chunk must be a compact patch (quadrant of a 150 m grid); "
+          "got extent %.0f x %.0f m" % (ex, ey))
+# CONTROL: the same grid under the size order spreads every chunk over the
+# whole map -- if it did not, the spatial assertion above would prove nothing.
+check(all(max(extent(c)) >= 140.0 for c in by_size),
+      "control: the size order should spread each chunk over the whole grid")
+
+# the environment knob selects it, and the default stays `size`
+os.environ["UEO3DE_CHUNK_ORDER"] = "spatial"
+try:
+    via_env = [importer.chunk_of(board, i, 4) for i in range(4)]
+    check([sorted(e["id"] for e in c["entities"]) for c in via_env]
+          == [sorted(e["id"] for e in c["entities"]) for c in spatial],
+          "UEO3DE_CHUNK_ORDER=spatial must select the spatial order")
+    assert_partition(mixed, 4, "mixed, spatial order")
+    # the oversized root rides along in every piece BY DESIGN, so it is the
+    # one entity `assert_partition` must not hold to "exactly once"
+    chunks_big_s = split(big, 3)
+    child_ids_s = [e["id"] for c in chunks_big_s for e in c["entities"] if e["id"] != "foliage"]
+    check(sorted(child_ids_s) == sorted(e["id"] for e in big["entities"] if e["id"] != "foliage"),
+          "spatial order: every child of an oversized root must appear exactly once")
+    for c in chunks_big_s:
+        ids = {e["id"] for e in c["entities"]}
+        check(all(e["parent_id"] in ids for e in c["entities"] if e["parent_id"]),
+              "spatial order: a child's parent must be present in the child's own chunk")
+        check(len(c["entities"]) <= 4000 + 1,
+              "spatial order: no chunk may exceed the ceiling (plus the duplicated root); got %d"
+              % len(c["entities"]))
+    first = [sorted(e["id"] for e in c["entities"]) for c in split(mixed, 4)]
+    second = [sorted(e["id"] for e in c["entities"]) for c in split(mixed, 4)]
+    check(first == second, "the spatial order must be deterministic across calls")
+finally:
+    del os.environ["UEO3DE_CHUNK_ORDER"]
+# --- the ceiling holds under the spatial order, whatever the walk looks like -
+# Five 60-entity families in a row at a ceiling of 100: the size order packs
+# them into 3 chunks (300/100), a contiguous walk cannot put two neighbours
+# together without crossing 100, so it needs 5. The fill must never exceed
+# the ceiling to "make it fit", and a count it cannot honour must be refused
+# with the count it needs -- silently overflowing is how NYC's first spatial
+# try put 5,982 entities in one chunk.
+os.environ["UEO3DE_CHUNK_CEILING"] = "100"
+row = {"entities": []}
+for f in range(5):
+    row["entities"].append({"id": "fam%d" % f, "parent_id": None, "name": "f",
+                            "transform": {"world": {"translation": [f * 50.0, 0.0, 0.0]}}})
+    row["entities"].extend({"id": "fam%d_%02d" % (f, k), "parent_id": "fam%d" % f, "name": "k",
+                            "transform": {"world": {"translation": [f * 50.0 + k * 0.1, 0.0, 0.0]}}}
+                           for k in range(59))
+check(importer.recommended_chunks(len(row["entities"]), 100) == 3,
+      "control: the size order recommends 3 chunks for 300 entities at 100")
+check(importer.spatial_chunks(row, 100) == 5,
+      "five 60-entity neighbours need 5 contiguous runs at a ceiling of 100; got %d"
+      % importer.spatial_chunks(row, 100))
+try:
+    importer.chunk_of(row, 0, 3, order="spatial")
+    check(False, "a count the spatial walk cannot honour must raise, not overflow")
+except ValueError as error:
+    check("5" in str(error) and "UEO3DE_CHUNK=i/5" in str(error),
+          "the refusal must name the count the spatial order needs; got %r" % (str(error),))
+five = [importer.chunk_of(row, i, 5, order="spatial") for i in range(5)]
+check(all(len(c["entities"]) == 60 for c in five),
+      "at the count it needs, each spatial chunk is one family; got %r"
+      % [len(c["entities"]) for c in five])
+check(all(len({e["parent_id"] for e in c["entities"] if e["parent_id"]}) == 1 for c in five),
+      "no family may be split across spatial chunks")
+# the same 300 with a roomier ceiling: contiguous AND even
+os.environ["UEO3DE_CHUNK_CEILING"] = "200"
+three = [importer.chunk_of(row, i, 3, order="spatial") for i in range(3)]
+check(sorted(len(c["entities"]) for c in three) == [60, 120, 120],
+      "at a ceiling of 200 the walk cuts into 120/120/60 and never over; got %r"
+      % sorted(len(c["entities"]) for c in three))
+del os.environ["UEO3DE_CHUNK_CEILING"]
+
+# --- an oversized root's pieces are compact patches too -----------------------
+# NYC's InstancedFoliageActor: 13,964 flat children cut into ~4,000-entity
+# pieces in EXPORT order spanned 52% of the map each, against 25% for the
+# ordinary chunks. Under the spatial order the children are walked along the
+# curve before they are cut, so a piece is a patch of foliage, not a sample
+# of all of it.
+os.environ["UEO3DE_CHUNK_CEILING"] = "100"
+meadow = {"entities": [{"id": "foliage", "parent_id": None, "name": "InstancedFoliageActor",
+                        "transform": {"world": {"translation": [0.0, 0.0, 0.0]}}}]}
+# 400 instances on a 20 x 20 grid, listed in a shuffled-but-deterministic order
+cells = [(gx, gy) for gy in range(20) for gx in range(20)]
+cells.sort(key=lambda c: (c[0] * 7 + c[1] * 13) % 400)
+for n, (gx, gy) in enumerate(cells):
+    meadow["entities"].append({"id": "inst%03d" % n, "parent_id": "foliage", "name": "i",
+                               "transform": {"world": {"translation": [gx * 10.0, gy * 10.0, 0.0]}}})
+needed = importer.spatial_chunks(meadow, 100)
+pieces = [importer.chunk_of(meadow, i, needed, order="spatial") for i in range(needed)]
+child_ids = [e["id"] for c in pieces for e in c["entities"] if e["id"] != "foliage"]
+check(sorted(child_ids) == sorted(e["id"] for e in meadow["entities"] if e["id"] != "foliage"),
+      "spatial pieces: every instance must appear exactly once")
+for c in pieces:
+    inst = [e for e in c["entities"] if e["id"] != "foliage"]
+    xs = [e["transform"]["world"]["translation"][0] for e in inst]
+    ys = [e["transform"]["world"]["translation"][1] for e in inst]
+    check(len(c["entities"]) <= 101, "a piece may not exceed the ceiling plus its root")
+    check(max(xs) - min(xs) <= 120.0 and max(ys) - min(ys) <= 120.0,
+          "a spatial piece of an oversized root must be a compact patch (a Hilbert run is a blob, "
+          "not a square: under two thirds of the 190 m meadow); got %.0f x %.0f m" % (max(xs) - min(xs), max(ys) - min(ys)))
+# CONTROL: the same meadow cut in export order spans the whole meadow
+loose = [importer.chunk_of(meadow, i, needed, order="size") for i in range(needed)]
+check(any(max(e["transform"]["world"]["translation"][0] for e in c["entities"])
+          - min(e["transform"]["world"]["translation"][0] for e in c["entities"]) >= 180.0
+          for c in loose if len(c["entities"]) > 1),
+      "control: export-order pieces should span the whole meadow")
+del os.environ["UEO3DE_CHUNK_CEILING"]
+
+check(importer.chunk_order({}) == "size", "the default chunk order must stay `size`")
+check(importer.chunk_order({"UEO3DE_CHUNK_ORDER": " Spatial "}) == "spatial",
+      "the knob must accept case and whitespace")
+try:
+    importer.chunk_order({"UEO3DE_CHUNK_ORDER": "nearest"})
+    check(False, "a garbage UEO3DE_CHUNK_ORDER must raise, not fall back")
+except ValueError:
+    pass
+# a transform-less manifest (placeholders, old exports) still partitions
+bare = [importer.chunk_of(mixed, i, 4, order="spatial") for i in range(4)]
+check(sorted(e["id"] for c in bare for e in c["entities"])
+      == sorted(e["id"] for e in mixed["entities"]),
+      "a manifest without transforms must still partition under the spatial order")
+
+print("")
+print("RESULT: " + ("PASS" if not failures else "FAIL (%d)" % len(failures)))
+sys.exit(1 if failures else 0)

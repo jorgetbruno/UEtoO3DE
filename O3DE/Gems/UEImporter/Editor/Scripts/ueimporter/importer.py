@@ -46,6 +46,93 @@ def chunk_ceiling(environ=None):
     return value
 
 
+CHUNK_ORDERS = ("size", "spatial")
+
+
+def chunk_order(environ=None):
+    """How `chunk_of` assigns subtrees to chunks: `size` or `spatial`.
+
+    `size` (default) packs largest-first onto the emptiest bin: even chunks,
+    but position never enters into it, so on a level of singleton actors each
+    chunk is every n-th building spread over the whole map -- loading one
+    part shows a sieve, and finishing one street needs all of them.
+    `spatial` walks the roots along a Hilbert curve over the level's XY extent
+    and cuts the walk into `count` contiguous runs, so each chunk is a compact
+    patch of the map. Opt-in, because it changes which entities land in which
+    chunk, and a chunk that moved between runs would make re-import
+    meaningless.
+    """
+    environ = os.environ if environ is None else environ
+    raw = str(environ.get("UEO3DE_CHUNK_ORDER", "")).strip().lower()
+    if not raw:
+        return CHUNK_ORDERS[0]
+    if raw not in CHUNK_ORDERS:   # a garbage order must raise, never fall back
+        raise ValueError("UEO3DE_CHUNK_ORDER must be one of %s, got %r"
+                         % ("|".join(CHUNK_ORDERS), raw))
+    return raw
+
+
+def _hilbert_index(x, y, order):
+    """Position of integer cell (x, y) along a Hilbert curve with 2**order
+    cells per side. Neighbouring indices are neighbouring cells, which is the
+    whole point: a contiguous run of indices is a compact patch of the map."""
+    index = 0
+    side = 1 << (order - 1)
+    while side > 0:
+        rx = 1 if (x & side) else 0
+        ry = 1 if (y & side) else 0
+        index += side * side * ((3 * rx) ^ ry)
+        if ry == 0:
+            if rx == 1:
+                x = side - 1 - x
+                y = side - 1 - y
+            x, y = y, x
+        side >>= 1
+    return index
+
+
+def _world_xy(entity):
+    """An entity's world XY, or None when the manifest carries no transform
+    (test documents, transform-only placeholders)."""
+    transform = entity.get("transform") or {}
+    for space in ("world", "local"):
+        translation = (transform.get(space) or {}).get("translation")
+        if translation and len(translation) >= 2:
+            return float(translation[0]), float(translation[1])
+    return None
+
+
+def _spatial_keys(groups):
+    """One Hilbert key per group, from the centroid of the group's positioned
+    entities. A group with no position keys at the level's minimum corner."""
+    centroids = []
+    for group in groups:
+        points = [xy for xy in (_world_xy(e) for e in group) if xy is not None]
+        if points:
+            centroids.append((sum(p[0] for p in points) / len(points),
+                              sum(p[1] for p in points) / len(points)))
+        else:
+            centroids.append(None)
+    known = [c for c in centroids if c is not None]
+    if not known:
+        return [0] * len(groups)
+    min_x = min(c[0] for c in known)
+    min_y = min(c[1] for c in known)
+    extent = max(max(c[0] for c in known) - min_x,
+                 max(c[1] for c in known) - min_y, 1e-6)
+    order = 16
+    cells = (1 << order) - 1
+    keys = []
+    for c in centroids:
+        if c is None:
+            keys.append(0)
+            continue
+        cx = int((c[0] - min_x) / extent * cells)
+        cy = int((c[1] - min_y) / extent * cells)
+        keys.append(_hilbert_index(cx, cy, order))
+    return keys
+
+
 def recommended_chunks(entity_count, ceiling=None):
     """How many chunks this manifest needs; 1 when it fits."""
     ceiling = chunk_ceiling() if ceiling is None else ceiling
@@ -65,7 +152,8 @@ def chunk_guard_message(entity_count, chunks, ceiling):
         "subtrees so no entity is separated from its parent:\n%s\n"
         "Set UEO3DE_CHUNK=1/1 to import it as one prefab anyway, or raise "
         "UEO3DE_CHUNK_CEILING if a larger import has been measured to work "
-        "on this machine."
+        "on this machine. UEO3DE_CHUNK_ORDER=spatial makes each chunk a "
+        "compact patch of the map instead of every n-th actor."
         % (entity_count, ceiling, chunks,
            "\n".join("    set UEO3DE_CHUNK=%d/%d   (then run the import)"
                      % (index, chunks) for index in range(1, chunks + 1))))
@@ -203,7 +291,104 @@ def chunked_prefab_path(prefab_path, index, total):
     return stem + suffix + extension
 
 
-def chunk_of(document, index, count):
+def _ranked_spatially(groups):
+    """The groups in Hilbert order; ties by id so the same manifest always
+    walks the same way."""
+    keys = _spatial_keys(groups)
+    return [groups[i] for i in sorted(
+        range(len(groups)),
+        key=lambda i: (keys[i], groups[i][0]["id"],
+                       groups[i][1]["id"] if len(groups[i]) > 1 else ""))]
+
+
+def _fill_runs(ranked, cap):
+    """Cut a ranked walk into runs of at most `cap` entities each; a group
+    larger than `cap` gets a run of its own (the ceiling split above keeps
+    every group at or under the ceiling, so that only happens below it)."""
+    runs = [[]]
+    sizes = [0]
+    for group in ranked:
+        if sizes[-1] and sizes[-1] + len(group) > cap:
+            runs.append([])
+            sizes.append(0)
+        runs[-1].append(group)
+        sizes[-1] += len(group)
+    return runs
+
+
+def _spatial_runs(ranked, count, ceiling):
+    """`count` contiguous runs, as even as the walk allows and never over the
+    ceiling; None when even the ceiling needs more than `count` runs."""
+    total = sum(len(g) for g in ranked)
+    if not total:
+        return [[] for _ in range(count)]
+    low = (total + count - 1) // count          # the even share
+    high = ceiling
+    if len(_fill_runs(ranked, high)) > count:
+        return None
+    # the smallest cap in [share, ceiling] that fits in `count` runs: the
+    # tightest packing keeps the chunks closest to even
+    while low < high:
+        mid = (low + high) // 2
+        if len(_fill_runs(ranked, mid)) <= count:
+            high = mid
+        else:
+            low = mid + 1
+    runs = _fill_runs(ranked, high)
+    return runs + [[] for _ in range(count - len(runs))]
+
+
+def spatial_chunks(document, ceiling=None):
+    """How many chunks the spatial order needs for this manifest: the size
+    order's count is a floor, a contiguous walk may need one or two more."""
+    ceiling = chunk_ceiling() if ceiling is None else ceiling
+    groups = _split_groups(document, ceiling, spatial=True)
+    return max(1, len(_fill_runs(_ranked_spatially(groups), ceiling)))
+
+
+def _split_groups(document, ceiling, spatial=False):
+    """Root subtrees, oversized ones split by direct children (see chunk_of).
+
+    Under the spatial order the oversized root's children are walked along
+    the curve before they are cut into pieces, so each piece is a compact
+    patch too: NYC's InstancedFoliageActor pieces spanned 816 x 274 m (52% of
+    the map) when cut in export order, against 25% for the rest.
+    """
+    entities = document["entities"]
+    children = {}
+    for entity in entities:
+        children.setdefault(entity["parent_id"], []).append(entity)
+
+    def subtree(root):
+        out = [root]
+        stack = [root["id"]]
+        while stack:
+            for child in children.get(stack.pop(), ()):
+                out.append(child)
+                stack.append(child["id"])
+        return out
+
+    groups = [subtree(root) for root in children.get(None, ())]
+    split = []
+    for group in groups:
+        if len(group) <= ceiling:
+            split.append(group)
+            continue
+        root = group[0]
+        piece = [root]
+        branches = [subtree(child) for child in children.get(root["id"], ())]
+        if spatial:
+            branches = _ranked_spatially(branches)
+        for branch in branches:
+            if len(piece) > 1 and len(piece) + len(branch) > ceiling:
+                split.append(piece)
+                piece = [root]
+            piece.extend(branch)
+        split.append(piece)
+    return split
+
+
+def chunk_of(document, index, count, order=None):
     """The `index`-th of `count` slices of a manifest, split by whole subtrees.
 
     A level can be too large to import as one prefab. Measured on a 44,504-entity
@@ -221,30 +406,25 @@ def chunk_of(document, index, count):
     Bins are filled largest-subtree-first onto the currently-emptiest bin, so
     chunks come out close to even (this level: 1051 roots, largest subtree 646
     entities, 674 of them singletons) without any bin exceeding what one import
-    can hold.
+    can hold. With `order="spatial"` (UEO3DE_CHUNK_ORDER) the subtrees are
+    instead walked along a Hilbert curve over the level and cut into `count`
+    contiguous runs, so each chunk is a compact patch of the map: on
+    NYC_Level_WC (51,776 entities, 13 chunks) the size order gave every chunk
+    the level's full extent, and finishing one street needed all thirteen.
 
     Guarantees, asserted by `Tests/perf/test_chunk.py`: every entity appears in
     exactly one chunk, no subtree is split across chunks, and the chunks
     reassemble to the original entity set.
     """
+    order = chunk_order() if order is None else order
+    if order not in CHUNK_ORDERS:
+        raise ValueError("chunk order must be one of %s, got %r"
+                         % ("|".join(CHUNK_ORDERS), order))
     entities = document["entities"]
-    children = {}
-    for entity in entities:
-        children.setdefault(entity["parent_id"], []).append(entity)
-
-    def subtree(root):
-        out = [root]
-        stack = [root["id"]]
-        while stack:
-            for child in children.get(stack.pop(), ()):
-                out.append(child)
-                stack.append(child["id"])
-        return out
 
     # Manifest order decides ties, so the same manifest always splits the same
     # way -- a chunk that moved between runs would make re-import meaningless.
-    groups = [subtree(root) for root in children.get(None, ())]
-
+    #
     # A subtree larger than what one import can hold cannot be binned whole.
     # Measured on NYC_Level_WC: one InstancedFoliageActor root with 13,964
     # flat children -- foliage instances expanded into entities -- landed
@@ -255,29 +435,36 @@ def chunk_of(document, index, count):
     # appears once per piece; re-import matches it by id in each chunk's
     # own ledger, and the copies are invisible placeholders at one place.
     ceiling = chunk_ceiling()
-    split = []
-    for group in groups:
-        if len(group) <= ceiling:
-            split.append(group)
-            continue
-        root = group[0]
-        piece = [root]
-        for child in children.get(root["id"], ()):
-            branch = subtree(child)
-            if len(piece) > 1 and len(piece) + len(branch) > ceiling:
-                split.append(piece)
-                piece = [root]
-            piece.extend(branch)
-        split.append(piece)
-    groups = split
-    groups.sort(key=lambda g: (-len(g), g[0]["id"], g[1]["id"] if len(g) > 1 else ""))
-
+    groups = _split_groups(document, ceiling, spatial=(order == "spatial"))
     bins = [[] for _ in range(count)]
-    sizes = [0] * count
-    for group in groups:
-        target = sizes.index(min(sizes))
-        bins[target].extend(group)
-        sizes[target] += len(group)
+    if order == "spatial":
+        # Walk the groups along a Hilbert curve over the level's XY extent and
+        # cut the walk into contiguous runs, so each chunk is a compact patch:
+        # a few blocks, not every n-th building. The first cut tried is the
+        # even share; a run that would overflow it starts the next bin. When
+        # the curve's fragmentation needs more than `count` bins at that
+        # share (a near-ceiling foliage piece next to a half-full bin -- NYC
+        # put 5,982 in one chunk on the first try), the cap widens up to the
+        # ceiling; past that the manifest genuinely needs more chunks, and
+        # the error names how many.
+        runs = _spatial_runs(_ranked_spatially(groups), count, ceiling)
+        if runs is None:
+            raise ValueError(
+                "UEO3DE_CHUNK_ORDER=spatial needs %d chunks for this manifest "
+                "at a ceiling of %d (%d asked): a contiguous walk packs less "
+                "tightly than the size order. Set UEO3DE_CHUNK=i/%d."
+                % (spatial_chunks(document, ceiling), ceiling, count,
+                   spatial_chunks(document, ceiling)))
+        for target, run in enumerate(runs):
+            for group in run:
+                bins[target].extend(group)
+    else:
+        groups.sort(key=lambda g: (-len(g), g[0]["id"], g[1]["id"] if len(g) > 1 else ""))
+        sizes = [0] * count
+        for group in groups:
+            target = sizes.index(min(sizes))
+            bins[target].extend(group)
+            sizes[target] += len(group)
 
     keep = {entity["id"] for entity in bins[index]}
     sliced = dict(document)
@@ -454,8 +641,8 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             # keeps the plain name; real slices each get their own file, or
             # the level ends up as whichever chunk imported last.
             prefab_path = chunked_prefab_path(prefab_path, index, total)
-        emit("UEO3DE_CHUNK=%s -- %d of this manifest's entities -> %s"
-             % (chunk, len(document["entities"]),
+        emit("UEO3DE_CHUNK=%s (%s order) -- %d of this manifest's entities -> %s"
+             % (chunk, chunk_order(), len(document["entities"]),
                 os.path.basename(prefab_path)))
     if max_entities is not None:
         # Diagnostic bisect knob (UEO3DE_MAX_ENTITIES): import only the first
@@ -479,6 +666,10 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         ceiling = chunk_ceiling()
         count = len(document["entities"])
         chunks = recommended_chunks(count, ceiling)
+        if chunks > 1 and chunk_order() == "spatial":
+            # a contiguous walk packs less tightly than largest-first: the
+            # command the guard prints must be one the spatial fill accepts
+            chunks = max(chunks, spatial_chunks(document, ceiling))
         if chunks > 1:
             raise ValueError(chunk_guard_message(count, chunks, ceiling))
 
