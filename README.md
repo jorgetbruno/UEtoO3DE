@@ -236,6 +236,7 @@ set UEO3DE_NANITE_FALLBACK=1     rem export UE's fallback mesh + LODs instead (i
 set UEO3DE_LOD_CHAIN=0           rem LOD 0 only
 rem -- staging time --
 set UEO3DE_COLLISION=ue          rem single (default) | vhacd | ue -- how multi-hull collision is cooked
+set UEO3DE_TEX_MAX=1080          rem cap cooked texture products' longest side (halvings; source files keep their pixels)
 set UEO3DE_DECOMPOSE=1           rem or a hull cap, e.g. 64 -- V-HACD at cook time, BOTH backends
 set UEO3DE_PHYSX_COOK=1          rem force cooking on when PhysX is activated transitively
 rem -- import time --
@@ -243,6 +244,7 @@ set UEO3DE_SCRATCH_LEVEL=UEO3DE_Scratch   rem the level editor checks open on a 
 set UEO3DE_CHUNK=3/12            rem import one slice of a level too big for a single prefab
 set UEO3DE_CHUNK_CEILING=6000    rem raise the refuse-to-import threshold (default 4000, measured)
 set UEO3DE_CHUNK_ORDER=spatial   rem size (default) | spatial -- chunks as compact patches of the map
+set UEO3DE_SKIP_CAMERAS=1        rem import camera entities without authoring camera components
 ```
 
 **LODs.** An FBX export carries a LOD chain (`FbxLODGroup` → one `.azmodel`

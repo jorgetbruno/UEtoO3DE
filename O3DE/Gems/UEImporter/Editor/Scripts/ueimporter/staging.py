@@ -316,6 +316,68 @@ def skeletal_product_path_for(relative_path, product_prefix, kind):
     return ("%s/%s.%s" % (product_prefix, stem, suffix)).lower()
 
 
+# ObjectStream XML the image builder reads from `<image>.assetinfo`; the one
+# field that matters is SizeReduceLevel: how many times the cooked product is
+# halved before mips are built. Everything else keeps the preset the builder
+# would have picked anyway (an omitted ObjectStream field keeps its default).
+_TEXTURE_SETTINGS_SIDECAR = """<ObjectStream version="3">
+	<Class name="TextureSettings" version="2" type="{980132FF-C450-425D-8AE0-BD96A8486177}">
+		<Class name="unsigned int" field="SizeReduceLevel" value="%d" type="{43DA906B-7DEF-4CA8-9790-854106D3F983}"/>
+		<Class name="bool" field="EngineReduce" value="true" type="{A0CA880C-AFE4-43CB-926C-59AC48496112}"/>
+		<Class name="bool" field="EnableMipmap" value="true" type="{A0CA880C-AFE4-43CB-926C-59AC48496112}"/>
+	</Class>
+</ObjectStream>
+"""
+
+
+def texture_max(environ=None):
+    """UEO3DE_TEX_MAX: cap the cooked texture products' longest side (pixels).
+
+    Read at STAGING, like the collision mode. The cap is applied by the image
+    builder's SizeReduceLevel (repeated halving), so the staged source file
+    keeps its pixels and only the products shrink -- a 4096 source at
+    UEO3DE_TEX_MAX=1080 cooks at 1024, a 1920 at 960. Unset means no cap.
+    """
+    environ = os.environ if environ is None else environ
+    raw = str(environ.get("UEO3DE_TEX_MAX", "")).strip()
+    if not raw:
+        return None
+    value = int(raw)             # a garbage cap must raise, never fall back
+    if value < 1:
+        raise ValueError("UEO3DE_TEX_MAX must be >= 1, got %r" % raw)
+    return value
+
+
+def size_reduce_level(width, height, cap):
+    """How many halvings bring the longest side to `cap` or under."""
+    longest = max(int(width), int(height))
+    level = 0
+    while longest > cap:
+        longest >>= 1
+        level += 1
+    return level
+
+
+def image_dimensions(path):
+    """(width, height) of a PNG or TGA file, from the header alone; None for
+    anything unreadable -- the caller warns and stages the file uncapped
+    rather than failing a whole stage over one odd texture."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(26)
+    except OSError:
+        return None
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR":
+        return (int.from_bytes(head[16:20], "big"),
+                int.from_bytes(head[20:24], "big"))
+    if path.lower().endswith(".tga") and len(head) >= 18:
+        width = int.from_bytes(head[12:14], "little")
+        height = int.from_bytes(head[14:16], "little")
+        if width and height:
+            return (width, height)
+    return None
+
+
 def stage(document, source_root, project_assets_root, log=None):
     """Stage everything a manifest references into the project.
 
@@ -342,6 +404,8 @@ def stage(document, source_root, project_assets_root, log=None):
     # the whole physics pipeline down without one error message anywhere.
     verify_builders_present(project_assets_root, cook_backends)
     records = []
+    tex_cap = texture_max()
+    textures_capped = 0
 
     for asset in document["assets"]:
         if asset["kind"] == "texture":
@@ -353,6 +417,24 @@ def stage(document, source_root, project_assets_root, log=None):
             staged = os.path.join(project_assets_root, relative_path).replace("\\", "/")
             os.makedirs(os.path.dirname(staged), exist_ok=True)
             shutil.copyfile(source, staged)
+            # UEO3DE_TEX_MAX: cap the cooked product via a SizeReduceLevel
+            # sidecar. Written or REMOVED on every stage, so turning the cap
+            # off (or changing it) on a restage never leaves a stale one.
+            sidecar = staged + ".assetinfo"
+            level = 0
+            if tex_cap:
+                dims = image_dimensions(staged)
+                if dims is None:
+                    emit("  %s: unreadable image header; staged uncapped"
+                         % relative_path)
+                else:
+                    level = size_reduce_level(dims[0], dims[1], tex_cap)
+            if level:
+                with open(sidecar, "w") as handle:
+                    handle.write(_TEXTURE_SETTINGS_SIDECAR % level)
+                textures_capped += 1
+            elif os.path.exists(sidecar):
+                os.remove(sidecar)
             records.append({"kind": "texture", "guid": asset["guid"],
                             "relative_path": relative_path, "staged": staged,
                             "wait": False})

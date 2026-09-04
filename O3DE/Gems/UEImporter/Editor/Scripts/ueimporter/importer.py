@@ -1013,6 +1013,10 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     emit("authoring decals + cameras")
     decals = 0
     cameras = 0
+    # UEO3DE_SKIP_CAMERAS=1: the entities still import (a CineCamera can be
+    # some rig's parent) but no camera component is authored on them.
+    skip_cameras = os.environ.get("UEO3DE_SKIP_CAMERAS", "").strip() == "1"
+    cameras_skipped = 0
     for item in document["entities"]:
         entity_id = created.get(item["id"])
         if entity_id is None:
@@ -1036,6 +1040,10 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
             emit("  %-22s Decal" % item["name"])
         camera = item.get("camera")
         if camera is not None:
+            if skip_cameras:
+                cameras_skipped += 1
+                emit("  %-22s Camera skipped (UEO3DE_SKIP_CAMERAS)" % item["name"])
+                continue
             plan = camera_build.plan_camera(camera, item["name"])
             camera_build.author_camera(entity_id, plan, item["name"],
                                        prefab_build.resolve_component_type)
@@ -1044,6 +1052,7 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
                  % (item["name"], plan["properties"][0][1]))
     report.count("decals_created", decals)
     report.count("cameras_created", cameras)
+    report.count("cameras_skipped", cameras_skipped)
     mark("decals + cameras")
 
     # --- lights (M5) ---
