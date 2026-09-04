@@ -253,6 +253,7 @@ Export time (UE session; `export_level.bat` passes the environment through):
 | `UEO3DE_NANITE_FALLBACK` | off | `1` exports UE's fallback mesh + render LODs instead of the source (materials measured wrong at LOD 0 on permuted-section meshes) |
 | `UEO3DE_LOD0_RATIO` | `0.25` | LOD 0's share of the Nanite source, in (0, 1]; `1.0` = full source |
 | `UEO3DE_LOD_RATIOS` | `0.10,0.04,0.015,0.006` | far-LOD shares of the source, LOD 1 outward; floored by the fallback count, capped at LOD 0 |
+| `UEO3DE_LOD_REDUCE` | `1.0` | share of each **authored** LOD to keep (non-Nanite meshes); scales the artist's ladder without changing its proportions |
 
 Staging time (`m2_stage.py` / the import dialog):
 

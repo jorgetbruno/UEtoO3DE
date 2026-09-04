@@ -555,15 +555,20 @@ def _baked_lod_chain(source_mesh, mirrored=False):
     the fidelity/perf item this exists for.
     """
     single = _baked_dynamic_mesh(source_mesh, mirrored=mirrored)
+    nanite = _nanite_enabled(source_mesh) and not _nanite_fallback_forced()
+    # A mesh with AUTHORED LODs is exported verbatim by default -- the ladder
+    # is the artist's intent, not a Nanite source to budget against -- so the
+    # Nanite ratios below do not touch it. UEO3DE_LOD_REDUCE scales the whole
+    # authored ladder at once, keeping its proportions.
+    reduce_ratio = 1.0 if nanite else _lod_reduce()
     if not lod_chain_enabled():
-        return [single]
+        return [_reduce_by_ratio(single, reduce_ratio)]
     try:
         lod_count = int(source_mesh.get_num_lods())
     except Exception:
         lod_count = 1
-    nanite = _nanite_enabled(source_mesh) and not _nanite_fallback_forced()
     if lod_count <= 1 and not nanite:
-        return [single]
+        return [_reduce_by_ratio(single, reduce_ratio)]
     # Atom's ModelAssetCreator::AddLodAsset crashed the AssetBuilder
     # (0xC0000005) on the only two NYC meshes carrying SIX LOD nodes -- five
     # UE render LODs plus the source -- while every five-LOD fleet cooks
@@ -601,10 +606,13 @@ def _baked_lod_chain(source_mesh, mirrored=False):
             reduced = _simplify_to_triangle_count(reduced, target)
             chain.append(reduced)
     else:
+        chain[0] = _reduce_by_ratio(single, reduce_ratio)
         for index in range(1, lod_count):
-            chain.append(_baked_dyn_for_lod(
-                source_mesh, mirrored,
-                unreal.GeometryScriptLODType.RENDER_DATA, index))
+            chain.append(_reduce_by_ratio(
+                _baked_dyn_for_lod(
+                    source_mesh, mirrored,
+                    unreal.GeometryScriptLODType.RENDER_DATA, index),
+                reduce_ratio))
     return chain
 
 
@@ -625,6 +633,60 @@ _LOD_RATIOS_CACHE = []
 
 
 _LOD0_RATIO_CACHE = []
+# What share of each AUTHORED LOD to keep; 1.0 = the artist's mesh verbatim,
+# which is what every export did before the knob existed.
+_LOD_REDUCE_DEFAULT = 1.0
+_LOD_REDUCE_CACHE = []
+
+
+def _lod_reduce():
+    """UEO3DE_LOD_REDUCE -> share of each AUTHORED LOD to keep, default 1.0.
+
+    The Nanite budgets (UEO3DE_LOD0_RATIO, UEO3DE_LOD_RATIOS) exist because a
+    Nanite source carries no chain anyone authored: something has to decide
+    the density. A mesh that DOES carry artist LODs is a different case --
+    NYC_Level_WC's umbrella ships 4569/3424/2298/1160/591 vertices, a ladder
+    someone chose -- so the ratios deliberately do not reach it, and asking
+    for "lower polycount" there means scaling the ladder rather than
+    replacing it. 0.5 halves every step and keeps the proportions between
+    them. A fraction in (0, 1]; anything else raises, per house rule: a typo
+    must fail the export, not silently reshape every mesh in the level.
+    """
+    if _LOD_REDUCE_CACHE:
+        return _LOD_REDUCE_CACHE[0]
+    value = os.environ.get("UEO3DE_LOD_REDUCE", "").strip()
+    if not value:
+        ratio = _LOD_REDUCE_DEFAULT
+    else:
+        try:
+            ratio = float(value)
+        except ValueError:
+            raise MeshExportError(
+                "UEO3DE_LOD_REDUCE=%r is not a number" % value)
+        if not (0.0 < ratio <= 1.0):
+            raise MeshExportError(
+                "UEO3DE_LOD_REDUCE=%r must be a fraction in (0, 1]" % value)
+    _LOD_REDUCE_CACHE.append(ratio)
+    return ratio
+
+
+def _reduce_target(triangles, ratio):
+    """Triangles to keep at `ratio`: never zero, never more than there are."""
+    triangles = int(triangles)
+    if ratio >= 1.0 or triangles <= 0:
+        return triangles
+    return max(1, min(triangles, int(triangles * ratio)))
+
+
+def _reduce_by_ratio(dyn, ratio):
+    """`dyn` simplified to `ratio` of its triangles; the mesh itself at 1.0."""
+    if ratio >= 1.0:
+        return dyn
+    triangles = int(dyn.get_triangle_count())
+    target = _reduce_target(triangles, ratio)
+    if target >= triangles:
+        return dyn
+    return _simplify_to_triangle_count(dyn, target)
 
 
 def _lod0_ratio():

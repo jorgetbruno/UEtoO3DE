@@ -232,6 +232,7 @@ rem -- export time (UE) --
 set UEO3DE_MESH_FORMAT=glb       rem export STATIC meshes as glTF binary instead of FBX (no LOD chain)
 set UEO3DE_LOD0_RATIO=1.0        rem LOD 0's share of the Nanite source (default 0.25; 1.0 = full detail)
 set UEO3DE_LOD_RATIOS=0.1,0.04,0.015,0.006  rem far-LOD shares of the source (the default ladder)
+set UEO3DE_LOD_REDUCE=0.5        rem scale a mesh's AUTHORED LOD ladder (non-Nanite); 1.0 = verbatim (default)
 set UEO3DE_NANITE_FALLBACK=1     rem export UE's fallback mesh + LODs instead (its LOD 0 materials are WRONG on some meshes)
 set UEO3DE_LOD_CHAIN=0           rem LOD 0 only
 rem -- staging time --
