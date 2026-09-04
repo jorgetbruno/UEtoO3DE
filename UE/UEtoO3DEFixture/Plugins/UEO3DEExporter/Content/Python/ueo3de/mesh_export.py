@@ -670,6 +670,20 @@ def _lod_reduce():
     return ratio
 
 
+def _expectation_from_chain(lod_count, nanite_source, is_fbx, reduce_ratio):
+    """Must the bounds expectation come from the chain's own boxes?
+
+    True whenever the written file is something other than "the asset":
+    several LODs (the bake reads LOD 0 only), a Nanite source read (whose
+    geometry need not fill the asset's declared bounds), or an authored
+    ladder scaled by UEO3DE_LOD_REDUCE (the reducer moves vertices off the
+    source silhouette). The glTF container writes an unreduced flattened
+    mesh, so it keeps the asset-bounds expectation.
+    """
+    return bool(lod_count > 1 or nanite_source
+                or (is_fbx and reduce_ratio < 1.0))
+
+
 def _reduce_target(triangles, ratio):
     """Triangles to keep at `ratio`: never zero, never more than there are."""
     triangles = int(triangles)
@@ -1523,8 +1537,19 @@ def export_meshes(assets, output_root, log=None):
         # the asset-bounds expectation failed the whole export on a mesh the
         # bake had exported perfectly. RetroCars never hit this because every
         # mesh there has 4 LODs and already took the dyn-derived branch.
-        if lod_count > 1 or (_nanite_enabled(source)
-                             and not _nanite_fallback_forced()):
+        # A REDUCED authored ladder is the third such case, and the one
+        # that failed a whole NYC_Level_WC export: at UEO3DE_LOD_REDUCE=0.5
+        # a single-LOD non-Nanite mesh still writes a SIMPLIFIED LOD 0, and
+        # the quadric reducer moves vertices off the source silhouette --
+        # EditorSkySphere's file reaches Z=+-4124.6 against the asset's
+        # +-4096 (it bulges outward), while a decimated SM_Wheels_3 shrinks
+        # 14%. Measured across all 2,272 meshes: median drift 0, p99 3.7%,
+        # worst 14.4%. No tolerance admits 14% and still catches a mirror,
+        # so the expectation comes from the chain's own boxes instead.
+        if _expectation_from_chain(
+                lod_count,
+                _nanite_enabled(source) and not _nanite_fallback_forced(),
+                is_fbx, _lod_reduce()):
             # The expectation must describe the WRITTEN FILE, which is the
             # union of every exported LOD. With a chain that is not LOD0's
             # box: quadric reduction moves vertices, and the far LODs bulge a

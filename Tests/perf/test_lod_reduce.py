@@ -119,6 +119,24 @@ check(mesh_export._reduce_by_ratio(tiny, 0.5) is tiny,
       "a one-triangle mesh must pass through rather than be 'reduced' to itself")
 check(simplified == [], "a target that saves nothing must not call the reducer")
 
+# --- the bounds expectation must describe the REDUCED file --------------------
+# The export verifier compares the written FBX against a recorded expectation.
+# For a single-LOD non-Nanite mesh that expectation is the source asset's
+# bounds -- which stops being true the moment the ladder is scaled: NYC's
+# EditorSkySphere bulges to Z=+-4124.6 against the asset's +-4096 and failed
+# a completed three-hour export. Reduced files must take the chain-derived
+# expectation, the same one multi-LOD and Nanite meshes already use.
+check(mesh_export._expectation_from_chain(1, False, True, 0.5) is True,
+      "a REDUCED single-LOD FBX must take the chain-derived expectation")
+check(mesh_export._expectation_from_chain(1, False, True, 1.0) is False,
+      "an unreduced single-LOD FBX must keep the asset-bounds expectation")
+check(mesh_export._expectation_from_chain(4, False, True, 1.0) is True,
+      "a multi-LOD mesh takes the chain-derived expectation, as before")
+check(mesh_export._expectation_from_chain(1, True, True, 1.0) is True,
+      "a Nanite source read takes the chain-derived expectation, as before")
+check(mesh_export._expectation_from_chain(1, False, False, 0.5) is False,
+      "a glTF writes an unreduced flattened mesh and keeps asset bounds")
+
 print("")
 print("RESULT: " + ("PASS" if not failures else "FAIL (%d)" % len(failures)))
 sys.exit(1 if failures else 0)
