@@ -407,6 +407,157 @@ def _color_of(node, instance):
     return None
 
 
+# Value math a texture-less channel can be evaluated through, exactly, when
+# every leaf is a constant or a parameter. Fresnel, vertex colour, world
+# position and the like are NOT constants and stop the fold.
+_FOLD_DEPTH_LIMIT = 12
+_DESATURATION_LUMINANCE = (0.3, 0.59, 0.11)
+
+
+def _pins(master, node):
+    """{pin name: input expression or None}, or None when MEL's names and
+    inputs do not line up."""
+    mel = unreal.MaterialEditingLibrary
+    try:
+        names = [str(n) for n in (mel.get_material_expression_input_names(node) or [])]
+        inputs = list(mel.get_inputs_for_material_expression(master, node) or [])
+    except Exception:
+        return None
+    if len(names) != len(inputs):
+        return None
+    return dict(zip(names, inputs))
+
+
+def _as_vector(value):
+    return list(value) if isinstance(value, list) else [value, value, value]
+
+
+def _combine(a, b, op):
+    if isinstance(a, list) or isinstance(b, list):
+        return [op(x, y) for x, y in zip(_as_vector(a), _as_vector(b))]
+    return op(a, b)
+
+
+def _fold_constant(master, node, instance, depth=0):
+    """A channel's value when its graph is constant math: float, [r, g, b], or None.
+
+    Measured on NYC1950: `MI_NYCB7_Metal2` (249 building parts) drives base
+    colour through Desaturation(`Base Color`, `Saturation Multiplier`), and
+    its water through Power(Lerp(WaterColor1, WaterColor2, Fresnel), exp) --
+    no texture anywhere, so the texture-following converter dropped both
+    materials and the entities rendered white. Evaluated, they are colours.
+
+    A blend whose alpha does not fold (the water's Fresnel is view-dependent)
+    takes its surface input A, the same rule the texture search applies.
+    """
+    if node is None or depth > _FOLD_DEPTH_LIMIT:
+        return None
+    node, _hint = _follow(master, node, instance)
+    if node is None:
+        return None
+    color = _color_of(node, instance)
+    if color is not None:
+        return color
+    scalar = _scalar_of(node, instance)
+    if scalar is not None:
+        return scalar
+    kind = _expression_kind(node)
+    pins = _pins(master, node)
+    if pins is None:
+        return None
+
+    def operand(pin, const_prop, default=None):
+        if pins.get(pin) is not None:
+            return _fold_constant(master, pins[pin], instance, depth + 1)
+        if const_prop is None:
+            return default
+        try:
+            return float(node.get_editor_property(const_prop))
+        except Exception:
+            return default
+
+    if kind in ("MaterialExpressionMultiply", "MaterialExpressionAdd",
+                "MaterialExpressionSubtract", "MaterialExpressionDivide"):
+        a = operand("A", "const_a")
+        b = operand("B", "const_b")
+        if a is None or b is None:
+            return None
+        if kind == "MaterialExpressionMultiply":
+            return _combine(a, b, lambda x, y: x * y)
+        if kind == "MaterialExpressionAdd":
+            return _combine(a, b, lambda x, y: x + y)
+        if kind == "MaterialExpressionSubtract":
+            return _combine(a, b, lambda x, y: x - y)
+        return _combine(a, b, lambda x, y: x / y if y else 0.0)
+
+    if kind == "MaterialExpressionLinearInterpolate":
+        a = operand("A", "const_a")
+        b = operand("B", "const_b")
+        alpha = operand("Alpha", "const_alpha")
+        if alpha is None:
+            return a                         # undecided blend: its surface
+        if a is None or b is None:
+            return None
+        delta = _combine(b, a, lambda x, y: x - y)             # a + (b - a) * alpha
+        return _combine(a, _combine(delta, alpha, lambda d, s: d * s),
+                        lambda x, y: x + y)
+
+    if kind == "MaterialExpressionDesaturation":
+        source = next((pins[name] for name in pins if name not in ("Fraction",)), None)
+        value = _fold_constant(master, source, instance, depth + 1)
+        fraction = operand("Fraction", None, 1.0)
+        if value is None or fraction is None:
+            return None
+        if isinstance(fraction, list):
+            fraction = fraction[0]
+        rgb = _as_vector(value)
+        grey = sum(c * w for c, w in zip(rgb, _DESATURATION_LUMINANCE))
+        return [c + (grey - c) * fraction for c in rgb]
+
+    if kind == "MaterialExpressionPower":
+        base = operand("Base", None)
+        exponent = operand("Exponent", "const_exponent")
+        if base is None or exponent is None:
+            return None
+        if isinstance(exponent, list):
+            exponent = exponent[0]
+        return _combine(base, exponent, lambda x, e: max(x, 0.0) ** e)
+
+    if kind in ("MaterialExpressionOneMinus", "MaterialExpressionSaturate"):
+        value = _fold_constant(master, next(iter(pins.values()), None), instance, depth + 1)
+        if value is None:
+            return None
+        if kind == "MaterialExpressionOneMinus":
+            return _combine(value, 0.0, lambda x, _y: 1.0 - x)
+        return _combine(value, 0.0, lambda x, _y: min(max(x, 0.0), 1.0))
+
+    if kind == "MaterialExpressionClamp":
+        source = next((pins[name] for name in pins if name not in ("Min", "Max")), None)
+        value = _fold_constant(master, source, instance, depth + 1)
+        low = operand("Min", "min_default", 0.0)
+        high = operand("Max", "max_default", 1.0)
+        if value is None or low is None or high is None:
+            return None
+        return _combine(value, 0.0, lambda x, _y: min(max(x, low), high))
+
+    return None
+
+
+def _folded_spec(master, node, instance, role_suffix, warnings, subject, kind):
+    """A texture-less channel as a constant spec, or None."""
+    value = _fold_constant(master, node, instance)
+    if value is None:
+        return None
+    warnings.add("MAT_FUNCTION_PASSTHROUGH", subject,
+                 "%s: %s has no texture; its constant math was evaluated" % (role_suffix, kind))
+    if role_suffix == "basecolor":
+        return {"source": "color",
+                "value": [min(max(c, 0.0), 1.0) for c in _as_vector(value)]}
+    if isinstance(value, list):
+        value = sum(value) / float(len(value))
+    return {"source": "scalar", "value": value}
+
+
 def _texture_of(node, instance):
     kind = _expression_kind(node)
     if kind in ("MaterialExpressionTextureSample", "MaterialExpressionTextureObject"):
@@ -765,6 +916,9 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
                 entry = bank.request(texture, role_suffix, channel)
                 return {"source": "texture", "texture_guid": entry["guid"],
                         "channel": channel, "factor": None}
+        spec = _folded_spec(master, node, instance, role_suffix, warnings, subject, kind)
+        if spec is not None:
+            return spec
         warnings.add("MAT_EXPR_UNSUPPORTED", subject,
                      "%s: Multiply without a recognizable texture*constant shape"
                      % role_suffix)
@@ -812,6 +966,10 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
                              "%s: blend approximated by its surface input (A)"
                              % role_suffix)
                 return spec
+
+    spec = _folded_spec(master, node, instance, role_suffix, warnings, subject, kind)
+    if spec is not None:
+        return spec
 
     warnings.add("MAT_EXPR_UNSUPPORTED", subject,
                  "%s driven by %s" % (role_suffix, kind))

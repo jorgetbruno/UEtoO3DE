@@ -51,11 +51,17 @@ class Node(object):
         return self.props[name]
 
 
+class LinearColor(object):
+    def __init__(self, r, g, b):
+        self.r, self.g, self.b = r, g, b
+
+
 class MaterialInstanceConstant(object):
-    def __init__(self, switches=None, scalars=None, textures=None):
+    def __init__(self, switches=None, scalars=None, textures=None, vectors=None):
         self.switches = switches or {}
         self.scalars = scalars or {}
         self.textures = textures or {}
+        self.vectors = vectors or {}
 
 
 class MaterialInstanceDynamic(object):
@@ -82,6 +88,10 @@ class MEL(object):
     @staticmethod
     def get_material_instance_texture_parameter_value(instance, name):
         return instance.textures.get(name)
+
+    @staticmethod
+    def get_material_instance_vector_parameter_value(instance, name):
+        return instance.vectors[name]
 
 
 stub = types.ModuleType("unreal")
@@ -223,6 +233,57 @@ plain = Node("MaterialExpressionMultiply",
               ("B", tex("Other", "T_Shallow"))])
 check(picked(plain, dirt) == "T_Shallow",
       "a graph with no blends and no role names keeps breadth-first order")
+
+# --- 6. a channel with no texture is constant math, and is evaluated -----------
+# NYC1950's MI_NYCB7_Metal2 (249 building parts) and its water had NO texture
+# on base colour, so the texture-following converter dropped both materials
+# and the entities rendered white. Evaluated, they are colours.
+def vector(param):
+    return Node("MaterialExpressionVectorParameter", parameter_name=param,
+                default_value=LinearColor(0.0, 0.0, 0.0))
+
+
+def close(a, b, eps=1e-6):
+    a = a if isinstance(a, list) else [a]
+    b = b if isinstance(b, list) else [b]
+    return len(a) == len(b) and all(abs(x - y) <= eps for x, y in zip(a, b))
+
+
+metal = MaterialInstanceConstant(vectors={"Base Color": LinearColor(0.2, 0.1, 0.0)},
+                                 scalars={"Saturation Multiplier": 0.5})
+desaturated = Node("MaterialExpressionDesaturation",
+                   [("None", vector("Base Color")), ("Fraction", scalar("Saturation Multiplier"))])
+grey = 0.2 * 0.3 + 0.1 * 0.59          # UE's luminance factors
+expected = [c + (grey - c) * 0.5 for c in (0.2, 0.1, 0.0)]
+folded = me._fold_constant(None, desaturated, metal)
+check(close(folded, expected),
+      "Desaturation(Base Color, Saturation Multiplier) must fold to the desaturated "
+      "colour %r, got %r" % (expected, folded))
+
+water = MaterialInstanceConstant(vectors={"WaterColor1": LinearColor(0.5, 0.25, 1.0),
+                                          "WaterColor2": LinearColor(0.0, 0.0, 0.0)})
+fresnel = Node("MaterialExpressionFresnel", [("ExponentIn", None)])
+water_graph = Node("MaterialExpressionPower",
+                   [("Base", lerp(a=vector("WaterColor1"), b=vector("WaterColor2"), alpha=fresnel)),
+                    ("Exponent", None)], const_exponent=2.0)
+check(close(me._fold_constant(None, water_graph, water), [0.25, 0.0625, 1.0]),
+      "Power(Lerp(WaterColor1, WaterColor2, Fresnel), 2): a view-dependent alpha takes "
+      "the surface colour, then the power applies; got %r"
+      % (me._fold_constant(None, water_graph, water),))
+
+tinted = Node("MaterialExpressionMultiply", [("A", vector("WaterColor1")), ("B", constant(0.5))])
+check(close(me._fold_constant(None, tinted, water), [0.25, 0.125, 0.5]),
+      "colour x constant must fold to the product")
+exact = lerp(a=constant(0.2), b=constant(0.6), alpha=constant(0.25))
+check(close(me._fold_constant(None, exact, water), 0.3),
+      "a lerp with a constant alpha is evaluated exactly, not taken as its surface")
+
+check(me._fold_constant(None, Node("MaterialExpressionMultiply",
+                                   [("A", tex("BaseColor Texture", "T_B")), ("B", constant(2.0))]),
+                        water) is None,
+      "a graph with a texture is not constant math: folding must refuse it")
+check(me._fold_constant(None, fresnel, water) is None,
+      "a view-dependent node on its own is not a constant")
 
 print("")
 print("RESULT: " + ("PASS" if not failures else "FAIL (%d)" % len(failures)))
