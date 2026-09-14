@@ -75,6 +75,11 @@ CODES = {
     "MAT_BLEND_UNSUPPORTED": (
         WARN, "UE blend mode outside Opaque/Masked/Translucent; imported as "
               "translucent."),
+    "MAT_LANDSCAPE_LAYER": (
+        WARN, "A Landscape material blends painted layers, which no single "
+              "material can express; it was exported as one of its layers (the "
+              "first with textures, or UEO3DE_LANDSCAPE_LAYER). The detail says "
+              "which, and which others exist."),
     "MAT_PARAMS_BY_NAME": (
         WARN, "The master's graph dead-ends in a material function whose "
               "internals Python cannot walk; the material was classified "

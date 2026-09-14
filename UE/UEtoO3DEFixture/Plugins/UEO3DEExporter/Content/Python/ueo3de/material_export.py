@@ -1237,6 +1237,95 @@ def _classify_by_parameter_names(master, instance, bank, warnings, subject,
     return properties
 
 
+def _landscape_layer_order(master):
+    """Layer names of the LandscapeLayerBlend under base colour, in blend order."""
+    mel = unreal.MaterialEditingLibrary
+    try:
+        start = mel.get_material_property_input_node(master, unreal.MaterialProperty.MP_BASE_COLOR)
+    except Exception:
+        return None
+    queue, seen = [(start, 0)], set()
+    while queue:
+        node, depth = queue.pop(0)
+        if node is None or depth > 6 or node.get_name() in seen:
+            continue
+        seen.add(node.get_name())
+        if _expression_kind(node) == "MaterialExpressionLandscapeLayerBlend":
+            try:
+                return [str(layer.get_editor_property("layer_name"))
+                        for layer in node.get_editor_property("layers")]
+            except Exception:
+                names = [str(n) for n in (mel.get_material_expression_input_names(node) or [])]
+                return [n[len("Layer "):] for n in names if n.startswith("Layer ")]
+        try:
+            queue.extend((child, depth + 1) for child in
+                         (mel.get_inputs_for_material_expression(master, node) or []))
+        except Exception:
+            continue
+    return None
+
+
+def _classify_landscape_layer(master, instance, bank, warnings, subject):
+    """A Landscape layer blend exported as ONE of its layers (see param_roles)."""
+    layers = _landscape_layer_order(master)
+    if not layers:
+        return {}
+    mel = unreal.MaterialEditingLibrary
+    try:
+        names = [str(n) for n in (mel.get_texture_parameter_names(master) or [])]
+    except Exception:
+        return {}
+    requested = os.environ.get("UEO3DE_LANDSCAPE_LAYER", "").strip() or None
+    try:
+        layer, roles = param_roles.pick_landscape_layer(layers, names, requested)
+    except ValueError as error:
+        raise MaterialExportError(str(error))
+    if layer is None:
+        return {}
+    properties = {}
+
+    def request(parameter, role, channel, key, factor=None):
+        texture = _resolve_texture_parameter(master, instance, parameter)
+        if texture is None:
+            return
+        entry = bank.request(texture, role, channel)
+        properties[key] = {"source": "texture", "texture_guid": entry["guid"],
+                           "channel": channel, "factor": factor}
+
+    tint = None
+    try:
+        for vector in (mel.get_vector_parameter_names(master) or []):
+            words = param_roles._words(vector)
+            if words[:len(param_roles._words(layer))] == param_roles._words(layer) \
+                    and "tint" in words and instance is not None:
+                tint = _linear_color_to_rgb(_instance_vector(instance, vector))
+                break
+    except Exception:
+        tint = None
+    request(roles["basecolor"], "basecolor", None, "base_color", tint)
+    if "normal" in roles:
+        request(roles["normal"], "normal", None, "normal")
+    if "packed" in roles:
+        order, _token = param_roles.packed_channel_order(roles["packed"])
+        keys = {"ao": "occlusion", "roughness": "roughness", "metallic": "metallic"}
+        for channel in ("R", "G", "B"):
+            if order[channel] in keys:
+                request(roles["packed"], order[channel], channel, keys[order[channel]])
+    else:
+        if "roughness" in roles:
+            request(roles["roughness"], "roughness", None, "roughness")
+        if "ao" in roles:
+            request(roles["ao"], "ao", None, "occlusion")
+    if properties:
+        others = [l for l in layers if l != layer]
+        warnings.add("MAT_LANDSCAPE_LAYER", subject,
+                     "a painted layer blend cannot be one material: exported as its %r "
+                     "layer (%s); UEO3DE_LANDSCAPE_LAYER picks one of %s instead"
+                     % (layer, ", ".join("%s=%s" % kv for kv in sorted(roles.items())),
+                        ", ".join(others)))
+    return properties
+
+
 def build_material_data(material, bank, warnings):
     """Classify one material (or instance). Returns a manifest dict or None.
 
@@ -1281,6 +1370,14 @@ def build_material_data(material, bank, warnings):
     # the wrong data in every slot -- the exact RetroCars failure, reachable
     # by the other road. No-op-safe: single-role and already-channelled specs
     # pass through untouched.
+    if "base_color" not in properties:
+        # A Landscape's layer blend: every channel dead-ends in material
+        # functions whose bodies Python cannot walk, but the layers' textures
+        # are named parameters. One layer stands in for the ground.
+        landscape = _classify_landscape_layer(master, instance, bank, warnings, subject)
+        if landscape:
+            properties = landscape
+
     split_shared_packed_texture(properties, bank, warnings, subject)
 
     if not properties:

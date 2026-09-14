@@ -66,6 +66,12 @@ PACKED_CHANNEL_ORDER = {
     "arm": {"R": "ao", "G": "roughness", "B": "metallic"},
     "rma": {"R": "roughness", "G": "metallic", "B": "ao"},
     "mra": {"R": "metallic", "G": "roughness", "B": "ao"},
+    # Height, Roughness, AO. Measured on NYC1950's landscape layers
+    # (T_DarkSoil/T_Grass2/T_GravelPath_HRAO): R is a constant 0.5 on the flat
+    # soil and grass and varies only on gravel (height), G is 0.38 on wet soil
+    # and 0.74 on grass (roughness), B averages 0.83-0.91 with dark crevices
+    # and a 1.0 maximum (AO). Height has no StandardPBR slot and is skipped.
+    "hrao": {"R": "height", "G": "roughness", "B": "ao"},
 }
 # What a name with no recognisable token falls back to. ORM is the most common
 # convention and the previous behaviour, so this is the conservative default --
@@ -118,6 +124,73 @@ def _qualifies(name, tokens):
         return True
     words = _words(name)
     return any(token in words for token in tokens["word"])
+
+
+# Suffix words a landscape layer's texture parameters use, after the layer name
+# ("Dirt_BC", "Grass_N", "Stone_HRAO"). Packed tokens come from
+# PACKED_CHANNEL_ORDER.
+LAYER_ROLE_WORDS = {
+    "basecolor": ("bc", "basecolor", "albedo", "diffuse", "d"),
+    "normal": ("n", "normal", "nrm"),
+    "roughness": ("r", "rough", "roughness"),
+    "ao": ("ao", "occlusion"),
+}
+
+
+def pick_layer_roles(names, layer):
+    """{role: parameter name} for one landscape layer's textures.
+
+    A parameter belongs to `layer` when its first word IS the layer's name, so
+    "Dirt_BC" is the Dirt layer's base colour and "Dirt_Mask" is nothing. This
+    is the opposite of pick_parameter_roles, which refuses "dirt" outright as a
+    secondary layer: on a Landscape the layers ARE the surfaces.
+    """
+    wanted = _words(layer)
+    chosen = {}
+    for name in names:
+        words = _words(name)
+        if len(words) <= len(wanted) or words[:len(wanted)] != wanted:
+            continue
+        rest = words[len(wanted):]
+        joined = "".join(rest)
+        role = None
+        if any(token in rest for token in PACKED_CHANNEL_ORDER) or joined in PACKED_CHANNEL_ORDER:
+            role = "packed"
+        else:
+            for candidate, tokens in LAYER_ROLE_WORDS.items():
+                if joined in tokens or (len(rest) == 1 and rest[0] in tokens):
+                    role = candidate
+                    break
+        if role is not None and role not in chosen:
+            chosen[role] = name
+    return chosen
+
+
+def pick_landscape_layer(layer_order, names, requested=None):
+    """(layer, roles) for the layer a Landscape material is exported as.
+
+    A painted layer blend cannot be one StandardPBR material, so one layer
+    stands in for the ground. `requested` (UEO3DE_LANDSCAPE_LAYER) picks it;
+    otherwise the FIRST layer in the blend that has a base colour texture of
+    its own. An auto layer (NYC1950's "Auto", blended from others by slope)
+    has none and is passed over. Raises ValueError for a requested layer that
+    does not exist or has no textures -- a typo must not silently fall back.
+    """
+    usable = []
+    for layer in layer_order:
+        roles = pick_layer_roles(names, layer)
+        if "basecolor" in roles:
+            usable.append((layer, roles))
+    if requested:
+        for layer, roles in usable:
+            if layer.lower() == str(requested).strip().lower():
+                return layer, roles
+        raise ValueError(
+            "UEO3DE_LANDSCAPE_LAYER=%r is not a layer with textures; choose one of %s"
+            % (requested, ", ".join(layer for layer, _roles in usable) or "none"))
+    if not usable:
+        return None, {}
+    return usable[0]
 
 
 def pick_parameter_roles(names):

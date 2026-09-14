@@ -176,6 +176,7 @@ on codes, never on English strings.
 | `XFORM_NEGATIVE_SCALE` | warn | Mirror inside an attach hierarchy; absolute value exported (flat actors take the variant path). |
 | `XFORM_MIRRORED_MESH_VARIANT` | info | Odd negative axes folded; entity references the `#mx` mirror variant. |
 | `ACTOR_COMPONENTS_EXTRACTED` | info | Blueprint actor's StaticMeshComponents exported as child entities. |
+| `MAT_LANDSCAPE_LAYER` | warn | A Landscape's painted layer blend was exported as ONE of its layers (the first with textures, or `UEO3DE_LANDSCAPE_LAYER`); names the layer and the alternatives. |
 | `MAT_PARAMS_BY_NAME` | warn | Material classified from texture parameter NAMES (unwalkable function internals); heuristic. |
 | `ACTOR_CLASS_UNMAPPED` | warn | No v1 mapping; placeholder entity with a valid transform. |
 | `ACTOR_DEFERRED` | info | Recognized class owned by a later milestone. |
