@@ -17,6 +17,14 @@ Opacity/OpacityMask):
     Constant3Vector/Constant4Vector/VectorParam -> colour value
     Multiply(texture, constant-like)            -> texture + tint factor
 
+Blends are decided before they are searched (M12): a LinearInterpolate whose
+alpha folds to 0 or 1 follows one side only, an undecided one is searched
+surface (A) first and never through its alpha, and a texture the master names
+for another channel is a colour source of last resort. Layered marketplace
+masters switch their second layer off on the alpha; without this, the disabled
+layer's placeholders were the "nearest texture" (NYC1950: every road, pavement
+and brick surface imported `T_White`).
+
 Anything else -> `MAT_EXPR_UNSUPPORTED` for that property. A material whose
 BASE COLOUR cannot be mapped gets no material data at all (`material_data:
 None`) and its entities keep the backend's default material -- visibly grey
@@ -41,6 +49,7 @@ Normal maps: UE authors DirectX-style (green down); the manifest records
 """
 
 import os
+import re
 
 import unreal
 
@@ -144,12 +153,20 @@ def _follow(master, node, instance):
             if value is None or not inputs:
                 return node, channel_hint  # cannot decide; classify as-is (fails loudly)
             wanted = "True" if value else "False"
-            chosen = None
-            for name, expression in zip(names, inputs):
-                if name == wanted:
-                    chosen = expression
-                    break
-            node = chosen if chosen is not None else (inputs[0] if value else inputs[-1])
+            if len(names) == len(inputs) and wanted in names:
+                # The decided pin, connected or not. An UNCONNECTED decided
+                # pin is no substance; falling back by position used to hand
+                # back the OTHER branch -- the one the switch turned off.
+                node = inputs[names.index(wanted)]
+                continue
+            node = inputs[0] if value else inputs[-1]
+            continue
+
+        if kind == "MaterialExpressionLinearInterpolate":
+            side = _decided_lerp_side(master, node, instance)
+            if side is None:
+                return node, channel_hint  # blend really blends; searched base-first
+            node = side
             continue
 
         if kind == "MaterialExpressionComponentMask":
@@ -164,37 +181,161 @@ def _follow(master, node, instance):
     return node, channel_hint
 
 
-def _find_texture(master, node, instance, max_nodes=64, max_depth=8):
-    """Nearest texture expression beneath `node`, input-order DFS, bounded.
+def _lerp_pins(master, node):
+    """{pin name: input expression or None} for a LinearInterpolate, or None
+    when MEL's names and inputs do not line up (then nothing is decided)."""
+    mel = unreal.MaterialEditingLibrary
+    try:
+        names = [str(n) for n in (mel.get_material_expression_input_names(node) or [])]
+        inputs = list(mel.get_inputs_for_material_expression(master, node) or [])
+    except Exception:
+        return None
+    if not names or len(names) != len(inputs):
+        return None
+    return dict(zip(names, inputs))
+
+
+def _lerp_alpha(master, node, instance):
+    """The Alpha a LinearInterpolate compiles to, when it is one scalar."""
+    pins = _lerp_pins(master, node)
+    if pins is None or "Alpha" not in pins:
+        return None
+    alpha = pins["Alpha"]
+    if alpha is None:
+        try:
+            return float(node.get_editor_property("const_alpha"))
+        except Exception:
+            return None
+    alpha, _hint = _follow(master, alpha, instance)
+    if alpha is None:
+        return None
+    return _scalar_of(alpha, instance)
+
+
+def _decided_lerp_side(master, node, instance):
+    """A or B of a LinearInterpolate whose Alpha folds to 0 or 1, else None.
+
+    Layered masters blend a second material over the surface and turn it off
+    with a switch on the ALPHA, not on the textures -- measured on NYC1950's
+    MM_PaveMat01: Lerp(A=surface, B=`MB_Base Color` bound to T_White,
+    Alpha=`Blend Material ON`), off in every instance. The textures of the
+    disabled layer stay reachable, so every road, pavement and brick surface
+    in the city imported that layer's white placeholder.
+    """
+    alpha = _lerp_alpha(master, node, instance)
+    if alpha is None or 0.0 < alpha < 1.0:
+        return None
+    pins = _lerp_pins(master, node)
+    side = pins.get("A" if alpha <= 0.0 else "B") if pins else None
+    return side  # None when that side is a constant: see _decided_lerp_constant
+
+
+def _decided_lerp_constant(master, node, instance):
+    """The ConstA/ConstB a decided LinearInterpolate compiles to when its
+    chosen pin is unconnected, else None."""
+    alpha = _lerp_alpha(master, node, instance)
+    if alpha is None or 0.0 < alpha < 1.0:
+        return None
+    pins = _lerp_pins(master, node)
+    if not pins:
+        return None
+    pin = "A" if alpha <= 0.0 else "B"
+    if pins.get(pin) is not None:
+        return None
+    try:
+        return float(node.get_editor_property("const_a" if pin == "A" else "const_b"))
+    except Exception:
+        return None
+
+
+# Tokens that mark a texture parameter as ANOTHER channel's map. A colour
+# search that reaches one keeps looking: NYC1950's asphalt multiplies its
+# surface by an AO term, and `AO_Map` (T_White_linear) sits shallower than
+# the surface texture, so the road took the AO map as its colour.
+_FOREIGN_ROLE_TOKENS = {
+    "basecolor": ("ao", "occlusion", "rough", "roughness", "roughnes", "metal",
+                  "metallic", "normal", "height", "mask", "opacity"),
+    "normal": ("ao", "occlusion", "rough", "roughness", "metal", "metallic",
+               "basecolor", "albedo", "diffuse", "mask", "opacity"),
+}
+
+
+def _foreign_role(node, role_suffix):
+    """True when the master names this texture parameter for another role."""
+    tokens = _FOREIGN_ROLE_TOKENS.get(role_suffix)
+    if not tokens:
+        return False
+    try:
+        name = str(node.get_editor_property("parameter_name") or "")
+    except Exception:
+        return False
+    words = [w for w in re.split(r"[^a-z0-9]+", name.lower().replace("_", " ")) if w]
+    return any(word in tokens for word in words)
+
+
+def _search_children(master, node, instance=None):
+    """Inputs of `node` to search for a texture, with the rank each carries.
+
+    A blend that does not fold is searched surface-first: every node under a
+    Lerp's A is tried before anything under its B (the overlay), and its Alpha
+    -- a mask by construction -- is not a colour source at all. Everything
+    else keeps input order at rank 0, which is exactly the old search.
+    """
+    mel = unreal.MaterialEditingLibrary
+    if _expression_kind(node) == "MaterialExpressionLinearInterpolate":
+        pins = _lerp_pins(master, node)
+        if pins is not None:
+            alpha = _lerp_alpha(master, node, instance)
+            if alpha is not None and alpha <= 0.0:
+                return [(pins.get("A"), 0)]
+            if alpha is not None and alpha >= 1.0:
+                return [(pins.get("B"), 0)]
+            return [(pins.get("A"), 0), (pins.get("B"), 1)]
+    try:
+        inputs = list(mel.get_inputs_for_material_expression(master, node) or [])
+    except Exception:
+        return []
+    return [(part, 0) for part in inputs]
+
+
+def _find_texture(master, node, instance, max_nodes=64, max_depth=8,
+                  role_suffix=None):
+    """Nearest texture expression beneath `node`, breadth-first, bounded.
 
     Master materials bury the channel's texture under arbitrary value math
     (Desaturation, nested Multiplies, contrast helpers -- measured shape in
     probe_m4_tree). Enumerating those node kinds is a losing game; what the
     channel IS is its texture, and the math is an approximation the report
-    makes visible. Returns (texture_node, channel_hint) or (None, None).
+    makes visible. Blends are searched surface-first (`_search_children`),
+    and a texture the master names for another channel (`_foreign_role`)
+    is only taken when nothing else turns up. Returns (texture_node,
+    channel_hint) or (None, None).
     """
-    mel = unreal.MaterialEditingLibrary
-    stack = [(node, 0, None)]
+    stack = [(0, 0, 0, node, None)]      # (overlay rank, depth, order, node, hint)
     visited = 0
+    order = 0
+    fallback = None
     while stack and visited < max_nodes:
-        current, depth, hint = stack.pop(0)
+        stack.sort(key=lambda item: item[:3])
+        rank, depth, _order, current, hint = stack.pop(0)
         current, follow_hint = _follow(master, current, instance)
         if current is None:
             continue
         visited += 1
         hint = follow_hint or hint
         if _expression_kind(current) in _TEXTURE_KINDS:
-            return current, hint
+            if not _foreign_role(current, role_suffix):
+                return current, hint
+            if fallback is None:
+                fallback = (current, hint)
+            continue
         if depth >= max_depth:
             continue
-        try:
-            inputs = list(mel.get_inputs_for_material_expression(master, current) or [])
-        except Exception:
-            continue
-        for part in inputs:
+        for part, overlay in _search_children(master, current, instance):
             if part is not None:
-                stack.append((part, depth + 1, hint))
-    return None, None
+                order += 1
+                stack.append((rank + overlay, depth + 1, order, part, hint))
+    return fallback if fallback is not None else (None, None)
 
 
 def _base_material_and_instance(material):
@@ -491,6 +632,11 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
         return {"source": "texture", "texture_guid": entry["guid"],
                 "channel": channel, "factor": None}
 
+    if kind == "MaterialExpressionLinearInterpolate":
+        constant = _decided_lerp_constant(master, node, instance)
+        if constant is not None:
+            return {"source": "scalar", "value": constant}
+
     scalar = _scalar_of(node, instance)
     if scalar is not None:
         return {"source": "scalar", "value": scalar}
@@ -554,7 +700,8 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
                          "%s: %s approximated by its %r input (non-texture)"
                          % (role_suffix, function_name, name))
             return spec
-        texture_node, hint = _find_texture(master, node, instance)
+        texture_node, hint = _find_texture(master, node, instance,
+                                           role_suffix=role_suffix)
         if texture_node is not None:
             texture = _texture_of(texture_node, instance)
             if texture is not None:
@@ -604,7 +751,8 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
                         factor = _color_of(factor_node, instance)
                 return {"source": "texture", "texture_guid": entry["guid"],
                         "channel": None, "factor": factor}
-        texture_node, hint = _find_texture(master, node, instance)
+        texture_node, hint = _find_texture(master, node, instance,
+                                           role_suffix=role_suffix)
         if texture_node is not None:
             texture = _texture_of(texture_node, instance)
             if texture is not None:
@@ -625,7 +773,8 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
     # Last resort before dropping the channel: the nearest texture in the
     # subtree, with the surrounding math dropped and reported. A channel with
     # no texture anywhere beneath it stays unmapped.
-    texture_node, hint = _find_texture(master, node, instance)
+    texture_node, hint = _find_texture(master, node, instance,
+                                           role_suffix=role_suffix)
     if texture_node is not None:
         texture = _texture_of(texture_node, instance)
         if texture is not None:
@@ -638,6 +787,31 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
             entry = bank.request(texture, role_suffix, channel)
             return {"source": "texture", "texture_guid": entry["guid"],
                     "channel": channel, "factor": None}
+
+    if kind == "MaterialExpressionLinearInterpolate" and depth < 8:
+        # A blend with no texture on either side, whose alpha does not fold:
+        # its surface (A) is the channel. The old search took the ALPHA's
+        # mask as the colour -- NYC1950's car glass shipped its dirt mask as
+        # base colour and opacity -- and refusing the mask without this left
+        # the glass with no material at all.
+        pins = _lerp_pins(master, node)
+        if pins is not None:
+            surface = pins.get("A")
+            spec = None
+            if surface is None:
+                try:
+                    spec = {"source": "scalar",
+                            "value": float(node.get_editor_property("const_a"))}
+                except Exception:
+                    spec = None
+            else:
+                spec = classify_expression(master, instance, surface, "", bank,
+                                           role_suffix, warnings, subject, depth + 1)
+            if spec is not None:
+                warnings.add("MAT_FUNCTION_PASSTHROUGH", subject,
+                             "%s: blend approximated by its surface input (A)"
+                             % role_suffix)
+                return spec
 
     warnings.add("MAT_EXPR_UNSUPPORTED", subject,
                  "%s driven by %s" % (role_suffix, kind))
