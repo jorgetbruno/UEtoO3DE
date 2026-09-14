@@ -60,8 +60,22 @@ suspect, was measured at 29 ms and left alone.
 | bounds check | plain Python, all cores | 6.4 s |
 
 The lead is now the long pole: its texture export and spline bakes run serially while the
-workers finish around minute 10 and sit idle. The next step is to hand splines to
-level-loading workers, which peak at 6.1 GB each.
+workers finish around minute 10 and sit idle.
+
+**Spline workers** (`UEO3DE_SPLINE_WORKERS`) open the level headless (18 s) and take the
+spline bakes while the lead exports textures:
+
+| setup (NYC, LOD 0 at half density) | wall | peak RAM | long pole |
+|---|---|---|---|
+| 3 mesh workers, splines on the lead | 18.3 min | not sampled | lead's 1,803 splines |
+| 3 mesh workers + 1 spline worker | 15.1 min | 20.5 GB, 5 editors | spline worker, t+13.6 min |
+| 3 mesh workers + 2 spline workers | **14.1 min** | 22.3 GB, 6 editors | standalone mesh workers, t+13.3 min |
+
+All 2,272 meshes of the spline-worker export compared node for node against the lead-baked
+export: identical. The returns are flattening because of CPU contention, not the division of
+work. With six editors on 12 cores the standalone mesh workers slowed from 517–601 s to
+701–756 s for the same 156 meshes each, and the lead's texture export from 7.7 to 9.2 min. On
+this machine, **3 mesh + 2 spline workers** is the measured sweet spot.
 
 Worker editors (`UEO3DE_MESH_WORKERS`) take the meshes that load as standalone assets
 on an empty map (~3–4 GB each). The lead keeps the level-bound bakes (splines, terrain)
