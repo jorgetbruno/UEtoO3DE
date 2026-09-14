@@ -8,9 +8,17 @@ running world, 0 Asset Processor errors. Two UE post-process volumes had put
 `auto_exposure_bias` 12.0 and 9.5 into Atom's `Manual Compensation` -- EV
 stops -- and nothing anywhere could see the result.
 
-This loads the SAVED prefab, points a camera at its contents, captures a
-frame through `azlmbr.atom.FrameCaptureRequestBus`, and asks
-`Tests/lib/frame_stats.py` whether there is a picture in it.
+This loads the SAVED prefab, AIMS the camera at its contents
+(Tests/lib/render_framing.py), captures a frame through
+`azlmbr.atom.FrameCaptureRequestBus`, and asks `Tests/lib/frame_stats.py`
+whether there is a picture in it. Then it deletes the instance and captures
+THE SAME POSE again: a level whose capture matches its own empty framing
+contributes nothing to what the camera sees, and fails.
+
+That second half exists because "points a camera at its contents" used to be
+this docstring's claim and not the code's. The camera stayed wherever the
+viewport was; on NYC1950 in Phoenix the level capture was byte-identical to the
+control and the check passed anyway.
 
 A CONTROL RUNS FIRST, and it is not optional: an all-white capture and a
 capture that never happened look identical from here. The control renders the
@@ -18,7 +26,9 @@ default level with no prefab loaded and must come back USABLE; if it does not,
 this run reports that it could not measure anything rather than blaming the
 level.
 
-Env: UEO3DE_PREFAB   prefab to load (default: the M2 fixture import)
+Env: UEO3DE_PREFAB       prefab to load (default: the M2 fixture import)
+     UEO3DE_RENDER_AIM   none = leave the camera where it is (the old check;
+                         kept to prove the same-pose verdict catches it)
 Run: Tests/o3de/run_o3de_python.bat Tests/m6/m6_level_renders.py <result> <project>
 """
 
@@ -34,6 +44,8 @@ for _path in (os.path.join(REPO_ROOT, "Tests", "lib"),
         sys.path.insert(0, _path)
 
 import frame_stats  # noqa: E402
+import png_diff  # noqa: E402
+import render_framing  # noqa: E402
 
 RESULT_PATH = (sys.argv[1] if len(sys.argv) > 1 and sys.argv[1].strip()
                and not sys.argv[1].startswith('-')
@@ -147,9 +159,38 @@ def main():
         fail("InstantiatePrefab failed for " + prefab_path)
         return
 
+    container = outcome.GetValue()
+    # A freshly instantiated prefab is SELECTED, and the editor outlines it in
+    # orange. That outline would count as "the level contributes pixels" even
+    # for entities that render nothing, so the selection is cleared first.
+    import azlmbr.editor as editor
+    editor.ToolsApplicationRequestBus(bus.Broadcast, 'SetSelectedEntities', [])
+
     # Give models, materials and the sky time to stream in. A frame captured
     # mid-load is legitimately dark and would be a false alarm.
     general.idle_wait_frames(CAPTURE_FRAMES)
+
+    import azlmbr.components as components
+    if os.environ.get("UEO3DE_RENDER_AIM", "").strip().lower() != "none":
+        descendants = components.TransformBus(bus.Event, 'GetAllDescendants', container) or []
+        points = []
+        for entity_id in descendants:
+            position = components.TransformBus(bus.Event, 'GetWorldTranslation', entity_id)
+            if position is not None:
+                points.append((position.x, position.y, position.z))
+        if not points:
+            fail("the instantiated prefab has no positioned entities to aim at")
+            return
+        pose = render_framing.framing(points)
+        log("  aiming at %d entities: target (%.0f, %.0f, %.0f), extent %.0f m, camera "
+            "(%.0f, %.0f, %.0f) pitch %.1f"
+            % ((len(points),) + tuple(pose["target"]) + (pose["size"],)
+               + tuple(pose["position"]) + (pose["pitch"],)))
+        general.set_current_view_position(*pose["position"])
+        general.set_current_view_rotation(pose["pitch"], 0.0, 0.0)
+        general.idle_wait_frames(180)
+    else:
+        log("  UEO3DE_RENDER_AIM=none: camera left where it was (the old check)")
 
     level_path = capture("level")
     if level_path is None:
@@ -161,7 +202,32 @@ def main():
         fail("the imported level does not render a usable picture: %s\n"
              "  capture: %s" % (reason, level_path))
     else:
-        log("  the imported level renders a picture")
+        log("  the capture is a usable picture")
+
+    # --- the same pose, without the level -------------------------------------
+    # The verdict that can actually fail: remove the instance, capture again
+    # from the identical camera, and require the two pictures to differ.
+    deleted = False
+    try:
+        result = prefab.PrefabPublicRequestBus(
+            bus.Broadcast, 'DeleteEntitiesAndAllDescendantsInInstance', [container])
+        deleted = result is None or not hasattr(result, "IsSuccess") or result.IsSuccess()
+    except Exception as error:  # noqa: BLE001
+        log("  prefab delete unavailable (%r); using the editor delete" % (error,))
+    if not deleted:
+        editor.ToolsApplicationRequestBus(bus.Broadcast, 'DeleteEntitiesAndAllDescendants', [container])
+    general.idle_wait_frames(120)
+    empty_path = capture("framed_empty")
+    if empty_path is None:
+        return
+    difference = png_diff.delta(level_path, empty_path)
+    log("  same pose without the level: %.2f%% of pixels changed (mean |diff| %.2f)"
+        % (difference["changed"] * 100.0, difference["mean"]))
+    reason = render_framing.verdict_changed(difference["changed"])
+    if reason is not None:
+        fail("%s\n  captures: %s vs %s" % (reason, level_path, empty_path))
+    else:
+        log("  the imported level renders, and it is what the camera sees")
 
 
 try:
