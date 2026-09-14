@@ -35,3 +35,4 @@ Exports/*
 !Exports/LaneB/
 
 ue-to-o3de-milestone-plan-v2.md
+.vscode/settings.json
