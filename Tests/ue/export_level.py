@@ -16,6 +16,7 @@ gives a script no clean way to take arguments:
     UEO3DE_OUT           output directory (default: Exports/<level name>)
     UEO3DE_MESH_WORKERS  worker editors for standalone meshes (default 1)
     UEO3DE_WORKER_GUI    1 = windowed workers (default: headless, -nullrhi)
+    UEO3DE_REUSE_MESHES  1 = keep the previous export's static mesh FBX files
 
 `run_ue_python.bat` sets these; see `export_level.bat` for the wrapper.
 
@@ -175,8 +176,9 @@ try:
     log("  wrote " + MANIFEST_PATH)
     # Workers need nothing but the manifest on disk, so they start now and
     # bake through this editor's texture export instead of after it.
+    reuse = export_slices.reuse_requested()
     workers = export_slices.mesh_worker_count()
-    if workers > 1:
+    if workers > 1 and not reuse:
         launched = launch_workers(workers)
     log("  entities: %d  assets: %d  warnings: %d (%d warn, %d error)"
         % (len(document["entities"]), len(document["assets"]), len(warnings),
@@ -204,14 +206,20 @@ try:
     texture_files = asset_table.texture_bank.export_all(ASSETS_ROOT, OUTPUT_DIR + "/RawTextures")
     log("  %d texture files" % len(texture_files))
 
-    stage("static mesh FBX export")
-    lead = mesh_export.export_meshes(
-        export_slices.lead_meshes(document["assets"], workers), ASSETS_ROOT)
-    if launched:
-        log("  lead: %d level-bound meshes done (t+%.0fs); waiting for workers"
-            % (len(lead), time.time() - EXPORT_STARTED))
-    worker_sets = wait_for_workers(launched)
-    exported = export_slices.merge_records(document["assets"], [("lead", lead)] + worker_sets)
+    if reuse:
+        stage("static mesh FBX export: REUSED (UEO3DE_REUSE_MESHES=1)")
+        with open(RECORDS_PATH, "r") as handle:
+            exported = export_slices.reuse_mesh_records(
+                document["assets"], json.load(handle), ASSETS_ROOT)
+    else:
+        stage("static mesh FBX export")
+        lead = mesh_export.export_meshes(
+            export_slices.lead_meshes(document["assets"], workers), ASSETS_ROOT)
+        if launched:
+            log("  lead: %d level-bound meshes done (t+%.0fs); waiting for workers"
+                % (len(lead), time.time() - EXPORT_STARTED))
+        worker_sets = wait_for_workers(launched)
+        exported = export_slices.merge_records(document["assets"], [("lead", lead)] + worker_sets)
     mesh_assets = [a for a in document["assets"] if a["kind"] == "static_mesh"]
     total_bytes = sum(record["bytes"] for record in exported)
     log("  %d FBX files for %d unique mesh GUIDs (%.1f MB)"

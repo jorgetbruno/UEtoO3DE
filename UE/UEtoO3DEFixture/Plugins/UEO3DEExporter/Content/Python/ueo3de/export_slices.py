@@ -100,3 +100,37 @@ def merge_records(assets, record_sets):
             "manifest does not list"
             % (len(missing), sorted(by_guid.get(g) for g in missing)[:5], len(unexpected)))
     return merged
+
+
+def reuse_requested(environ=None):
+    """UEO3DE_REUSE_MESHES=1 -> keep the previous export's static mesh FBX files.
+
+    For re-exporting what is NOT geometry -- materials, textures, the manifest
+    -- without re-baking every mesh: NYC1950's 2,272 meshes are most of an
+    export, and a material fix touched none of them. Anything but "", "0" or
+    "1" raises.
+    """
+    environ = os.environ if environ is None else environ
+    raw = str(environ.get("UEO3DE_REUSE_MESHES", "")).strip()
+    if raw not in ("", "0", "1"):
+        raise SliceError("UEO3DE_REUSE_MESHES=%r must be 0 or 1" % raw)
+    return raw == "1"
+
+
+def reuse_mesh_records(assets, previous_records, assets_root):
+    """The previous export's mesh records, proven to still cover this manifest.
+
+    Every static mesh the NEW manifest lists must have a record and its file
+    on disk; a mesh added to the level since the last export, or a file
+    deleted since, raises rather than exporting a level with a hole in it.
+    """
+    wanted = {a["guid"] for a in static_meshes(assets)}
+    kept = [r for r in previous_records if r.get("guid") in wanted]
+    merged = merge_records(assets, [("previous export", kept)])
+    missing = [r.get("relative_path") for r in merged
+               if not os.path.exists(os.path.join(assets_root, r.get("relative_path", "")))]
+    if missing:
+        raise SliceError("%d reused meshes are no longer on disk (e.g. %s); "
+                         "re-export the meshes" % (len(missing), missing[:5]))
+    return merged
+

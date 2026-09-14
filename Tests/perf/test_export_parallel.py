@@ -154,6 +154,35 @@ def run():
     except es.SliceError as error:
         check("both" in str(error), "the merge must name both owners: %s" % error)
 
+    # --- 3b. reusing a previous export's meshes still proves coverage -----------
+    check(es.reuse_requested({}) is False, "reuse must be off by default")
+    check(es.reuse_requested({"UEO3DE_REUSE_MESHES": "1"}) is True, "1 must turn reuse on")
+    try:
+        es.reuse_requested({"UEO3DE_REUSE_MESHES": "yes please"})
+        check(False, "a garbage UEO3DE_REUSE_MESHES must raise")
+    except es.SliceError:
+        pass
+    root = tempfile.mkdtemp(prefix="ueo3de_reuse_")
+    all_records = records([a for a in assets if a["kind"] == "static_mesh"])
+    for record in all_records:
+        path = os.path.join(root, record["relative_path"])
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "wb").close()
+    stale = all_records + [{"guid": "gone", "relative_path": "m/removed_since.fbx"}]
+    check(len(es.reuse_mesh_records(assets, stale, root)) == 86,
+          "reuse keeps exactly this manifest's meshes and drops records the level no longer has")
+    try:
+        es.reuse_mesh_records(assets + [mesh(999)], all_records, root)
+        check(False, "a mesh added to the level since the last export must fail reuse")
+    except es.SliceError as error:
+        check("exported by nobody" in str(error), "the reuse failure must name the hole: %s" % error)
+    os.remove(os.path.join(root, all_records[0]["relative_path"]))
+    try:
+        es.reuse_mesh_records(assets, all_records, root)
+        check(False, "a reused mesh deleted from disk must fail reuse")
+    except es.SliceError as error:
+        check("no longer on disk" in str(error), "the reuse failure must name the file: %s" % error)
+
     # --- 4. the check keeps its teeth outside the editor -------------------------
     def fake_readers(bounds):
         return (lambda path: False, None, lambda path: bounds[os.path.basename(path)])

@@ -239,6 +239,7 @@ set UEO3DE_MESH_WORKERS=3        rem worker editors for standalone meshes (defau
 set UEO3DE_WORKER_GUI=1          rem windowed workers instead of headless -nullrhi (same output, more RAM)
 set UEO3DE_TEMP_FLUSH_EVERY=32   rem bakes per temp-asset cleanup (default 32; 1 = the old per-bake delete)
 set UEO3DE_DEFER_BUILD=0         rem one render rebuild per LOD write, as before (default: deferred)
+set UEO3DE_REUSE_MESHES=1        rem re-export manifest, materials and textures; keep the previous FBX files
 rem -- staging time --
 set UEO3DE_COLLISION=ue          rem single (default) | vhacd | ue -- how multi-hull collision is cooked
 set UEO3DE_TEX_MAX=1080          rem cap cooked texture products' longest side (halvings; source files keep their pixels)
@@ -251,6 +252,14 @@ set UEO3DE_CHUNK_CEILING=6000    rem raise the refuse-to-import threshold (defau
 set UEO3DE_CHUNK_ORDER=spatial   rem size (default) | spatial -- chunks as compact patches of the map
 set UEO3DE_SKIP_CAMERAS=1        rem import camera entities without authoring camera components
 ```
+
+**Re-exporting only materials.** `UEO3DE_REUSE_MESHES=1` re-scans the level and
+re-exports materials and textures, but keeps the previous export's FBX files.
+It refuses when the level has gained a mesh since, or a file has gone missing.
+Staging then writes only files whose bytes changed and leaves identical files
+untouched, timestamps included. The Asset Processor therefore recooks just the
+materials and textures that actually changed. Measured on NYC1950: restaging an
+unchanged export touched 0 of 3,541 source files.
 
 **LODs.** An FBX export carries a LOD chain (`FbxLODGroup` → one `.azmodel`
 with N `.azlod` products). For a Nanite mesh the chain is derived from the

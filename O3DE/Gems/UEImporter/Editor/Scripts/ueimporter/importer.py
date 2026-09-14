@@ -207,6 +207,31 @@ def _engine_template_level():
     return None
 
 
+def unconverted_materials(document):
+    """[(material name, ue_path, entity count)] for materials that did not convert.
+
+    A material with no `material_data` leaves every slot that uses it on the
+    backend's default material. The export reported why per property, as
+    MAT_EXPR_UNSUPPORTED, and on NYC1950 that was a tally of 223 warnings no one
+    could act on while 262 entities (the Landscape and 249 building trims among
+    them) rendered white. This counts entities per failed material so the import
+    report can name them, most-used first.
+    """
+    failed = {a["guid"]: a for a in document.get("assets", [])
+              if a.get("kind") == "material" and not a.get("material_data")}
+    if not failed:
+        return []
+    counts = {}
+    for item in document.get("entities", []):
+        guids = {slot.get("material_guid")
+                 for slot in ((item.get("mesh") or {}).get("material_slots") or [])}
+        for guid in guids & set(failed):
+            counts[guid] = counts.get(guid, 0) + 1
+    rows = [(failed[g].get("name") or failed[g].get("ue_path"), failed[g].get("ue_path"), n)
+            for g, n in counts.items()]
+    return sorted(rows, key=lambda row: (-row[2], row[0]))
+
+
 def ensure_scratch_level(project_root, level_name, template_path=None):
     """Seed `Levels/<name>/<name>.prefab` from the engine template if absent.
 
@@ -907,6 +932,11 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
     # rows and so runs in TWO passes with one shared wait between them.
     assets_by_guid = manifest_io.assets_by_guid(document)
     emit("assigning materials (%d converted)" % len(material_asset_ids))
+    for name, ue_path, entities in unconverted_materials(document):
+        report.warn("MAT_DEFAULT_MATERIAL", name,
+                    "%d entities render with the default material: %s did not "
+                    "convert (the export's MAT_EXPR_UNSUPPORTED says why)"
+                    % (entities, ue_path))
     prefab_build.reset_material_stats()
     assigned = 0
     slots_assigned = 0

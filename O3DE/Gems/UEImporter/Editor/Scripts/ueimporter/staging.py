@@ -20,6 +20,7 @@ import os
 import shutil
 
 from . import assetinfo
+from . import fileutil
 from . import gltf_source
 
 
@@ -406,6 +407,8 @@ def stage(document, source_root, project_assets_root, log=None):
     records = []
     tex_cap = texture_max()
     textures_capped = 0
+    files_written = 0
+    files_unchanged = 0
 
     for asset in document["assets"]:
         if asset["kind"] == "texture":
@@ -415,8 +418,10 @@ def stage(document, source_root, project_assets_root, log=None):
                 raise StagingError("exported texture missing for %s: %s"
                                    % (asset["ue_path"], source))
             staged = os.path.join(project_assets_root, relative_path).replace("\\", "/")
-            os.makedirs(os.path.dirname(staged), exist_ok=True)
-            shutil.copyfile(source, staged)
+            if fileutil.copy_if_changed(source, staged):
+                files_written += 1
+            else:
+                files_unchanged += 1
             # UEO3DE_TEX_MAX: cap the cooked product via a SizeReduceLevel
             # sidecar. Written or REMOVED on every stage, so turning the cap
             # off (or changing it) on a restage never leaves a stale one.
@@ -430,8 +435,7 @@ def stage(document, source_root, project_assets_root, log=None):
                 else:
                     level = size_reduce_level(dims[0], dims[1], tex_cap)
             if level:
-                with open(sidecar, "w") as handle:
-                    handle.write(_TEXTURE_SETTINGS_SIDECAR % level)
+                fileutil.write_if_changed(sidecar, _TEXTURE_SETTINGS_SIDECAR % level)
                 textures_capped += 1
             elif os.path.exists(sidecar):
                 os.remove(sidecar)
@@ -470,8 +474,10 @@ def stage(document, source_root, project_assets_root, log=None):
                     "exported skeletal FBX is missing for %s: %s"
                     % (asset["ue_path"], source_fbx))
             staged_fbx = os.path.join(project_assets_root, relative_path).replace("\\", "/")
-            os.makedirs(os.path.dirname(staged_fbx), exist_ok=True)
-            shutil.copyfile(source_fbx, staged_fbx)
+            if fileutil.copy_if_changed(source_fbx, staged_fbx):
+                files_written += 1
+            else:
+                files_unchanged += 1
             record = {
                 "kind": asset["kind"],
                 "guid": asset["guid"],
@@ -505,8 +511,10 @@ def stage(document, source_root, project_assets_root, log=None):
 
         physics = assetinfo.physics_for_asset(asset) if cook_backends else None
         staged_fbx = os.path.join(project_assets_root, relative_path).replace("\\", "/")
-        os.makedirs(os.path.dirname(staged_fbx), exist_ok=True)
-        shutil.copyfile(source_fbx, staged_fbx)
+        if fileutil.copy_if_changed(source_fbx, staged_fbx):
+            files_written += 1
+        else:
+            files_unchanged += 1
 
         # A glTF's mesh node arrives UNNAMED from UE, and SceneAPI selects by
         # node -- so the sidecar written below would address nothing and the
@@ -552,6 +560,8 @@ def stage(document, source_root, project_assets_root, log=None):
         records.append(record)
         emit("  %-42s -> %s" % (asset["ue_path"], record["product_path"]))
 
+    emit("  source files: %d copied, %d already identical (left untouched, so the "
+         "Asset Processor does not recook them)" % (files_written, files_unchanged))
     return records
 
 

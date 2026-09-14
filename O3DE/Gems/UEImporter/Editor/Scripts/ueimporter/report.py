@@ -52,6 +52,10 @@ CODES = {
         WARN, "A converted material had no matching slot label on the entity's "
               "model; that slot keeps the model's own default material. The "
               "label is the UE material asset name via the FBX."),
+    "MAT_DEFAULT_MATERIAL": (
+        WARN, "A material did not convert at export, so every entity using it "
+              "renders with the default material; the warning names the "
+              "material and how many entities it affects."),
     "MAT_SLOT_UNUSED": (
         INFO, "A slot's material matched nothing and every model slot is "
               "already assigned: the mesh asset lists a slot that no render "

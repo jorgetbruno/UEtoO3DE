@@ -227,6 +227,7 @@ separate because they are fixed in different places.
 | `LIGHT_SOURCE_RADIUS_DROPPED` | info | UE area-light source radius lost; imported as punctual. |
 | `LIGHT_TEMPERATURE_DROPPED` | info | UE colour temperature has no Atom equivalent. |
 | `LIGHT_TYPE_UNSUPPORTED` | warn | UE light class (rect/area) has no v1 mapping. |
+| `MAT_DEFAULT_MATERIAL` | warn | A material did not convert at export, so every entity using it renders with the default material; names the material and the entity count. |
 | `MAT_SLOT_UNUSED` | info | A slot matched nothing and every model slot is already assigned — the asset lists a slot no render triangle uses. Nothing was lost. |
 | `MAT_SLOT_BY_ELIMINATION` | info | A material matched no slot label (the asset's slot carries no default material, so the FBX has no name for it) but exactly one model slot was unclaimed. |
 | `MAT_SLOT_DEDUP_SUFFIX` | info | A model slot label is an FBX name-dedup variant (`MI_X_1`: two UE slots filled with the same material); it received the base label's material. |

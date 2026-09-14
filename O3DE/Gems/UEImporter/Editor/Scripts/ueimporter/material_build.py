@@ -30,6 +30,8 @@ import json
 import os
 import posixpath
 
+from . import fileutil
+
 MATERIAL_TYPE = "Materials/Types/StandardPBR.materialtype"
 MATERIAL_TYPE_VERSION = 5
 
@@ -144,10 +146,5 @@ def write(asset_entry, assets_by_guid, project_assets_root):
     document = build(asset_entry, assets_by_guid)
     path = os.path.join(project_assets_root,
                         asset_entry["o3de_relative_path"]).replace("\\", "/")
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(path, "w") as handle:
-        json.dump(document, handle, indent=2, sort_keys=True)
-        handle.write("\n")
+    fileutil.write_if_changed(path, json.dumps(document, indent=2, sort_keys=True) + "\n")
     return path

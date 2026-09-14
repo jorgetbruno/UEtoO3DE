@@ -30,6 +30,7 @@ import json
 import os
 import uuid
 
+from . import fileutil
 from . import gltf_source
 
 MESH_GROUP_TYPE = "{07B356B7-3635-40B5-878A-FAC4EFD5AD86} MeshGroup"
@@ -490,9 +491,5 @@ def write(fbx_path, fbx_node_name, physics=None, backends=("physx",),
                      lod_nodes=lod_nodes, hull_nodes=hull_nodes,
                      backends=backends, source_path=fbx_path)
     sidecar_path = fbx_path + ".assetinfo"
-    directory = os.path.dirname(sidecar_path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(sidecar_path, "w") as handle:
-        json.dump(document, handle, separators=(",", ":"))
+    fileutil.write_if_changed(sidecar_path, json.dumps(document, separators=(",", ":")))
     return sidecar_path
