@@ -560,6 +560,26 @@ def defer_build_enabled():
         % (value, ", ".join(_NANITE_ON + _NANITE_OFF[1:])))
 
 
+# What the LOD-chain bakes of this process actually were, for knob_effects.
+_BAKE_STATS = {"nanite": 0, "authored": 0, "single": 0}
+
+
+def bake_stats():
+    """A copy of this process's bake counts (see knob_effects.py)."""
+    return dict(_BAKE_STATS)
+
+
+def _count_bake(source_mesh):
+    if _nanite_enabled(source_mesh):
+        _BAKE_STATS["nanite"] += 1
+        return
+    try:
+        lods = int(source_mesh.get_num_lods())
+    except Exception:
+        lods = 1
+    _BAKE_STATS["authored" if lods > 1 else "single"] += 1
+
+
 def lod_chain_enabled():
     """UEO3DE_LOD_CHAIN -> export the authored LOD chain (default ON).
 
@@ -623,6 +643,7 @@ def _baked_lod_chain(source_mesh, mirrored=False):
     the fidelity/perf item this exists for.
     """
     single = _baked_dynamic_mesh(source_mesh, mirrored=mirrored)
+    _count_bake(source_mesh)
     nanite = _nanite_enabled(source_mesh) and not _nanite_fallback_forced()
     # A mesh with AUTHORED LODs is exported verbatim by default -- the ladder
     # is the artist's intent, not a Nanite source to budget against -- so the

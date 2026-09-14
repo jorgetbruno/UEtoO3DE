@@ -54,7 +54,7 @@ for _path in (PACKAGE_ROOT, LIB_ROOT):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from ueo3de import export_slices, mesh_export, ue_level  # noqa: E402
+from ueo3de import export_slices, knob_effects, mesh_export, ue_level  # noqa: E402
 from ueo3de.warnings import ERROR, WARN  # noqa: E402
 
 MAP_PATH = os.environ.get("UEO3DE_MAP", "").strip()
@@ -139,6 +139,8 @@ def wait_for_workers(launched):
                        ", level loaded in %.0fs" % loaded if loaded is not None else "",
                        time.time() - EXPORT_STARTED))
                 results.append((label, payload["records"]))
+                for key, value in (payload.get("bake_stats") or {}).items():
+                    WORKER_BAKE_STATS[key] = WORKER_BAKE_STATS.get(key, 0) + value
                 continue
             if proc.poll() is not None:
                 exited_at.setdefault(label, time.time())
@@ -159,6 +161,7 @@ def kill_workers(launched):
             proc.kill()
 
 
+WORKER_BAKE_STATS = {}
 BACKSLASH = chr(92)
 NEWLINE = chr(10)
 
@@ -248,6 +251,18 @@ try:
     if len(skeletal_exported) != len(skeletal_assets):
         raise RuntimeError("exported %d skeletal FBX files for %d assets"
                            % (len(skeletal_exported), len(skeletal_assets)))
+
+    # Knobs that had nothing to act on say so: a ratio that parses and then
+    # finds no Nanite mesh is indistinguishable from one that worked.
+    stats = mesh_export.bake_stats()
+    for key, value in WORKER_BAKE_STATS.items():
+        stats[key] = stats.get(key, 0) + value
+    stage("knobs")
+    log("  baked: %d Nanite, %d with authored LODs, %d single-LOD"
+        % (stats.get("nanite", 0), stats.get("authored", 0), stats.get("single", 0)))
+    for knob, message in knob_effects.no_effect_warnings(stats):
+        log("  KNOB_NO_EFFECT %s %s" % (knob, message))
+        unreal.log_warning("[EXPORT_LEVEL] KNOB_NO_EFFECT %s %s" % (knob, message))
 
     # The bounds check runs after this editor exits (Tests/ue/verify_export.py).
     checked = exported + [r for r in skeletal_exported if r["kind"] == "skeletal_mesh"]

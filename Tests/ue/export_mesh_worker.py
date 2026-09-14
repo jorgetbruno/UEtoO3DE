@@ -62,6 +62,7 @@ def main():
             mine = export_slices.worker_meshes(document["assets"], index, count)
         payload["assigned"] = len(mine)
         payload["records"] = mesh_export.export_meshes(mine, assets_root)
+        payload["bake_stats"] = mesh_export.bake_stats()
     except Exception:
         payload["error"] = traceback.format_exc()
     payload["seconds"] = round(time.time() - started, 1)
