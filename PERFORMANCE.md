@@ -20,6 +20,40 @@ finds what fixtures cannot.
 | Export warnings | 619 |
 | Content | third-party asset packs, a Landscape, foliage, 2161 root-level actors |
 
+## Export (UE side)
+
+Measured 2026-09-14 on NYC1950 (`NYC_Level_WC`: 35,988 actors, 2,272 meshes, 1,803 of
+them baked spline segments), Ryzen 9 5900X / 32 GB. The last full export before these
+changes took **about three hours**, of which roughly 2½ h was the mesh stage.
+
+**Where the time actually went.** Profiled phase by phase (wrapping the bake's calls):
+
+| per spline bake, NYC level open | seconds |
+|---|---|
+| `EditorAssetLibrary.delete_asset` (the temp mesh) | **1.56** |
+| temp asset create | 0.035 |
+| `_find_level_actor` (linear over 35,988 actors) | 0.018 |
+| FBX write | 0.015 |
+| copy from component | 0.004 |
+
+Deleting a UE asset runs reference checks and a garbage collection over every loaded
+object; with a city open that is 91% of a bake. The linear actor search, the obvious
+suspect, was measured at 29 ms and left alone.
+
+| change | measured on | before | after | output |
+|---|---|---|---|---|
+| batched temp cleanup (`UEO3DE_TEMP_FLUSH_EVERY`, 32) | 60 NYC splines | 98.5 s | **14.8 s** | 60/60 identical |
+| deferred LOD rebuilds + no undo transactions | 24 NYC meshes, chain on | 43.0 s | **33.3 s** | 24/24 identical |
+| `UEO3DE_LOD_CHAIN=0` (LOD 0 only) | same 24 | 43.0 s | 25.1 s | LOD 0 only |
+| headless worker (`-nullrhi`) | same 24, deferred | 33.3 s | 33.2 s | 24/24 identical, 3.8 vs 4.3 GB |
+
+Worker editors (`UEO3DE_MESH_WORKERS`) take the meshes that load as standalone assets
+on an empty map (~3–4 GB each). The lead keeps the level-bound bakes (splines, terrain)
+and starts the workers the moment the manifest is written. The intermediate bounds check
+left the editor and runs afterwards across all cores (`Tests/ue/verify_export.py`). A
+headless editor with the NYC level open peaks at 6.1 GB, and loading the level headless
+took 8.8–10 s.
+
 ## Import
 
 Measured on a **clean slate**: the test deletes any prefab and ledger left by a

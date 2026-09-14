@@ -57,7 +57,17 @@ if not exist "%RESULT%" (
   echo RESULT FILE MISSING: %RESULT% 1>&2
   endlocal & exit /b 2
 )
-findstr /C:"RESULT: PASS" "%RESULT%" >nul
+rem The editor stages end with EDITOR: PASS; a failed stage writes RESULT: FAIL.
+findstr /C:"EDITOR: PASS" "%RESULT%" >nul
+if errorlevel 1 (
+  echo see %RESULT% 1>&2
+  endlocal & exit /b 3
+)
+
+rem The bounds check runs HERE, after the editor has exited, across every core
+rem (Tests\lib\export_verify.py). It appends the final RESULT line.
+if "%UEO3DE_OUT%"=="" (set "OUT_DIR=%~dp0..\..\Exports\%LEVEL_NAME%") else (set "OUT_DIR=%UEO3DE_OUT%")
+python "%~dp0verify_export.py" "%OUT_DIR%\export_records.json" "%OUT_DIR%\Assets" "%RESULT%"
 if errorlevel 1 (
   echo see %RESULT% 1>&2
   endlocal & exit /b 3

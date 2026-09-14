@@ -235,6 +235,10 @@ set UEO3DE_LOD_RATIOS=0.1,0.04,0.015,0.006  rem far-LOD shares of the source (th
 set UEO3DE_LOD_REDUCE=0.5        rem scale a mesh's AUTHORED LOD ladder (non-Nanite); 1.0 = verbatim (default)
 set UEO3DE_NANITE_FALLBACK=1     rem export UE's fallback mesh + LODs instead (its LOD 0 materials are WRONG on some meshes)
 set UEO3DE_LOD_CHAIN=0           rem LOD 0 only
+set UEO3DE_MESH_WORKERS=3        rem worker editors for standalone meshes (default 1; each ~3-4 GB, headless)
+set UEO3DE_WORKER_GUI=1          rem windowed workers instead of headless -nullrhi (same output, more RAM)
+set UEO3DE_TEMP_FLUSH_EVERY=32   rem bakes per temp-asset cleanup (default 32; 1 = the old per-bake delete)
+set UEO3DE_DEFER_BUILD=0         rem one render rebuild per LOD write, as before (default: deferred)
 rem -- staging time --
 set UEO3DE_COLLISION=ue          rem single (default) | vhacd | ue -- how multi-hull collision is cooked
 set UEO3DE_TEX_MAX=1080          rem cap cooked texture products' longest side (halvings; source files keep their pixels)

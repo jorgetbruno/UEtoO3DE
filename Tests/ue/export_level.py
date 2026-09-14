@@ -12,19 +12,30 @@ and the project's own plugins are irrelevant.
 Configured through environment variables, because the pythonscript commandlet
 gives a script no clean way to take arguments:
 
-    UEO3DE_MAP     package path of the level, e.g. /Game/Maps/L_Overview
-    UEO3DE_OUT     output directory (default: Exports/<level name>)
+    UEO3DE_MAP           package path of the level, e.g. /Game/Maps/L_Overview
+    UEO3DE_OUT           output directory (default: Exports/<level name>)
+    UEO3DE_MESH_WORKERS  worker editors for standalone meshes (default 1)
+    UEO3DE_WORKER_GUI    1 = windowed workers (default: headless, -nullrhi)
 
 `run_ue_python.bat` sets these; see `export_level.bat` for the wrapper.
 
-Writes <out>/manifest.json and <out>/Assets/**.fbx, then re-reads every FBX and
-checks it is verbatim UE geometry (the bake and UE's export negation cancel at
-the file level; SceneAPI applies the net reflection and unit conversion in the
-product) -- see export_fixture.py and LANE_B.md.
+Writes <out>/manifest.json, <out>/Assets/**.fbx and <out>/export_records.json,
+then ends its result file with `EDITOR: PASS`. The bounds check that proves
+every FBX is verbatim UE geometry runs AFTER the editor exits, across every
+core (Tests/ue/verify_export.py, called by export_level.bat), and writes the
+final RESULT line -- see Tests/lib/export_verify.py and LANE_B.md.
+
+A wide export (UEO3DE_MESH_WORKERS > 1) keeps everything bound to the open
+level here -- manifest, textures, spline and terrain bakes, skeletal meshes --
+and hands the meshes that load as standalone assets to worker editors on an
+empty map, launched at the start of the mesh stage so both run at once.
 """
 
+import json
 import os
+import subprocess
 import sys
+import time
 import traceback
 
 import unreal
@@ -41,9 +52,7 @@ for _path in (PACKAGE_ROOT, LIB_ROOT):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-import fbx_reader  # noqa: E402
-import gltf_reader  # noqa: E402
-from ueo3de import mesh_export, ue_level  # noqa: E402
+from ueo3de import export_slices, mesh_export, ue_level  # noqa: E402
 from ueo3de.warnings import ERROR, WARN  # noqa: E402
 
 MAP_PATH = os.environ.get("UEO3DE_MAP", "").strip()
@@ -56,8 +65,13 @@ OUTPUT_DIR = os.environ.get("UEO3DE_OUT", "").strip() or (
 MANIFEST_PATH = OUTPUT_DIR + "/manifest.json"
 ASSETS_ROOT = OUTPUT_DIR + "/Assets"
 RESULT_PATH = REPO_ROOT + "/Tests/ue/results/export_" + LEVEL_NAME + "_result.txt"
-
-BOUNDS_TOLERANCE_CM = 1e-3
+RECORDS_PATH = OUTPUT_DIR + "/export_records.json"
+WORKER_DIR = OUTPUT_DIR + "/_workers"
+WORKER_SCRIPT = REPO_ROOT + "/Tests/ue/export_mesh_worker.py"
+# A worker that has exited without its done file gets this long (a slow disk
+# finishing the write) before it is declared dead. A worker still running is
+# never cut short by a clock -- only by exiting.
+WORKER_EXIT_GRACE_S = 60
 
 lines = []
 
@@ -67,67 +81,90 @@ def log(message):
     unreal.log("[EXPORT_LEVEL] " + str(message))
 
 
-def gltf_source_is_gltf(path):
-    """Is this mesh a glTF container? Asked of the PATH, never of a flag.
+def launch_workers(count):
+    """Start `count` worker editors on an empty map; returns [(index, proc, done)]."""
+    engine = unreal.Paths.convert_relative_path_to_full(unreal.Paths.engine_dir())
+    headless = os.environ.get("UEO3DE_WORKER_GUI", "").strip() != "1"
+    editor = os.path.join(engine, "Binaries", "Win64",
+                          "UnrealEditor-Cmd.exe" if headless else "UnrealEditor.exe")
+    project = unreal.Paths.convert_relative_path_to_full(
+        unreal.Paths.get_project_file_path()).replace(BACKSLASH, "/")
+    os.makedirs(WORKER_DIR, exist_ok=True)
+    launched = []
+    for index in range(count):
+        done = "%s/worker_%d_of_%d.json" % (WORKER_DIR, index, count)
+        if os.path.exists(done):
+            os.remove(done)
+        # Forward slashes throughout: a backslash path whose next character is
+        # a digit (a session folder named `0fe0...`) was read by the editor's
+        # command line as an escape, and the script it looked for did not exist.
+        script = ("%s %d %d %s %s %s" % (WORKER_SCRIPT, index, count, MANIFEST_PATH,
+                                         ASSETS_ROOT, done)).replace(BACKSLASH, "/")
+        args = [editor, project, "/Engine/Maps/Entry",
+                "-ExecutePythonScript=" + script,
+                "-EnablePlugins=GeometryScripting,PythonScriptPlugin",
+                "-unattended", "-nop4", "-nosplash", "-nosound"]
+        if headless:
+            args.append("-nullrhi")
+        launched.append((index, subprocess.Popen(args), done))
+        log("  worker %d/%d started (%s)"
+            % (index + 1, count, "headless" if headless else "windowed"))
+    return launched
 
-    A glb run is a MIXED-format export -- skeletal meshes and animations stay
-    FBX -- so "which reader" is a per-file question.
-    """
-    return gltf_reader.gltf_source.is_gltf_source(path)
+
+def wait_for_workers(launched):
+    """Block until every worker has written its done file; returns record sets."""
+    pending = {index: (proc, done) for index, proc, done in launched}
+    exited_at = {}
+    results = []
+    while pending:
+        for index in sorted(pending):
+            proc, done = pending[index]
+            if os.path.exists(done):
+                with open(done, "r") as handle:
+                    payload = json.load(handle)
+                del pending[index]
+                if payload.get("error"):
+                    raise RuntimeError("mesh worker %d failed:%s%s"
+                                       % (index + 1, NEWLINE, payload["error"]))
+                log("  worker %d: %d of %d meshes in %.0fs"
+                    % (index + 1, len(payload["records"]), payload.get("assigned", -1),
+                       payload.get("seconds", 0.0)))
+                results.append(("worker %d" % (index + 1), payload["records"]))
+                continue
+            if proc.poll() is not None:
+                exited_at.setdefault(index, time.time())
+                if time.time() - exited_at[index] > WORKER_EXIT_GRACE_S:
+                    raise RuntimeError(
+                        "mesh worker %d exited (code %s) without its done file %s; "
+                        "its Saved/Logs entry has the reason"
+                        % (index + 1, proc.returncode, done))
+        if pending:
+            time.sleep(5)
+    return results
 
 
-def verify_fbx_intermediate(record):
-    """The written mesh must match the RECORD's expected bounds.
+def kill_workers(launched):
+    """Never leave headless editors behind a failed lead."""
+    for _index, proc, _done in launched:
+        if proc.poll() is None:
+            proc.kill()
 
-    mesh_export mirrors the expectation for normal entries (the bake nets
-    diag(-1,1,1) at the FBX level, Lane B rev 4) and leaves #mx variants
-    verbatim.
 
-    Bake and UE-export negations cancel at the file level; SceneAPI applies
-    the net reflection and the cm->m conversion in the product (LANE_B.md).
-    """
-    expected_min = list(record["ue_bounds_min"])
-    expected_max = list(record["ue_bounds_max"])
-
-    path = os.path.join(ASSETS_ROOT, record["relative_path"]).replace("\\", "/")
-    tolerance = record.get("tolerance_cm", BOUNDS_TOLERANCE_CM)
-
-    # ONE recorded expectation, converted per container. The record holds the
-    # FBX-file expectation; a glTF is Y-up and in METRES, so both the numbers
-    # and the tolerance have to be converted or the check is meaningless --
-    # a 1e-3 cm tolerance against metre-scale values would pass anything.
-    if gltf_source_is_gltf(path):
-        label = "glTF"
-        expected_min, expected_max = gltf_reader.expected_from_fbx_bounds(
-            expected_min, expected_max)
-        tolerance = tolerance / 100.0
-        stats = gltf_reader.vertex_stats(path)
-    else:
-        label = "FBX"
-        stats = fbx_reader.vertex_stats(path)
-
-    deltas = [max(abs(stats["min"][i] - expected_min[i]),
-                  abs(stats["max"][i] - expected_max[i])) for i in range(3)]
-    # The bake goes through float32 geometry: at 392 m from the origin (the
-    # NYC city's tram cables) one ulp is ~0.004 cm, and a fixed 1e-3 cm
-    # tolerance failed a file whose bounds were off by 0.0014 cm. A mirror
-    # error moves bounds by the coordinate itself, so a tolerance that grows
-    # with magnitude (float32 epsilon x 64, ~4e-6 relative) cannot hide one.
-    magnitude = max(abs(v) for v in list(expected_min) + list(expected_max)) or 0.0
-    tolerance = max(tolerance, magnitude * 4e-6)
-    if max(deltas) > tolerance:
-        raise RuntimeError(
-            "%s: %s does not match its expected intermediate bounds.\n"
-            "  file bounds %s .. %s\n"
-            "  expected    %s .. %s\n"
-            "The bake stage and the writer's negation should cancel here; one "
-            "is missing or doubled, and the product will be mirrored."
-            % (record["relative_path"], label,
-               [round(v, 4) for v in stats["min"]], [round(v, 4) for v in stats["max"]],
-               [round(v, 4) for v in expected_min], [round(v, 4) for v in expected_max]))
+BACKSLASH = chr(92)
+NEWLINE = chr(10)
 
 
 status = "PASS"
+launched = []
+EXPORT_STARTED = time.time()
+
+
+def stage(name):
+    log("")
+    log("== %s ==  (t+%.0fs)" % (name, time.time() - EXPORT_STARTED))
+
+
 try:
     log("level:  " + MAP_PATH)
     log("output: " + OUTPUT_DIR)
@@ -136,6 +173,11 @@ try:
     log("== manifest ==")
     document, warnings, asset_table = ue_level.export_level(MAP_PATH, MANIFEST_PATH)
     log("  wrote " + MANIFEST_PATH)
+    # Workers need nothing but the manifest on disk, so they start now and
+    # bake through this editor's texture export instead of after it.
+    workers = export_slices.mesh_worker_count()
+    if workers > 1:
+        launched = launch_workers(workers)
     log("  entities: %d  assets: %d  warnings: %d (%d warn, %d error)"
         % (len(document["entities"]), len(document["assets"]), len(warnings),
            warnings.count_by_severity(WARN), warnings.count_by_severity(ERROR)))
@@ -158,14 +200,18 @@ try:
     for kind in sorted(kinds):
         log("    %-14s %d" % (kind, kinds[kind]))
 
-    log("")
-    log("== texture export ==")
+    stage("texture export")
     texture_files = asset_table.texture_bank.export_all(ASSETS_ROOT, OUTPUT_DIR + "/RawTextures")
     log("  %d texture files" % len(texture_files))
 
-    log("")
-    log("== static mesh FBX export ==")
-    exported = mesh_export.export_meshes(document["assets"], ASSETS_ROOT)
+    stage("static mesh FBX export")
+    lead = mesh_export.export_meshes(
+        export_slices.lead_meshes(document["assets"], workers), ASSETS_ROOT)
+    if launched:
+        log("  lead: %d level-bound meshes done (t+%.0fs); waiting for workers"
+            % (len(lead), time.time() - EXPORT_STARTED))
+    worker_sets = wait_for_workers(launched)
+    exported = export_slices.merge_records(document["assets"], [("lead", lead)] + worker_sets)
     mesh_assets = [a for a in document["assets"] if a["kind"] == "static_mesh"]
     total_bytes = sum(record["bytes"] for record in exported)
     log("  %d FBX files for %d unique mesh GUIDs (%.1f MB)"
@@ -174,8 +220,7 @@ try:
         raise RuntimeError("exported %d FBX files for %d mesh assets"
                            % (len(exported), len(mesh_assets)))
 
-    log("")
-    log("== skeletal mesh + animation FBX export (M8, native exporter) ==")
+    stage("skeletal mesh + animation FBX export (M8, native exporter)")
     skeletal_exported = mesh_export.export_skeletal(
         document["assets"], ASSETS_ROOT, log=log)
     skeletal_assets = [a for a in document["assets"]
@@ -186,26 +231,26 @@ try:
         raise RuntimeError("exported %d skeletal FBX files for %d assets"
                            % (len(skeletal_exported), len(skeletal_assets)))
 
-    log("")
-    log("== FBX intermediate check: bake and export negations cancel ==")
-    for record in exported:
-        verify_fbx_intermediate(record)
-    log("  ok: all %d FBX files match their expected intermediate bounds (mirror-X for normal entries, verbatim for #mx variants)" % len(exported))
-    for record in skeletal_exported:
-        if record["kind"] == "skeletal_mesh":
-            verify_fbx_intermediate(record)   # mirror-Y, no bake stage (M8)
+    # The bounds check runs after this editor exits (Tests/ue/verify_export.py).
+    checked = exported + [r for r in skeletal_exported if r["kind"] == "skeletal_mesh"]
+    with open(RECORDS_PATH, "w") as handle:
+        json.dump(checked, handle)
+    stage("editor stages done")
+    log("  %d records for the bounds check -> %s" % (len(checked), RECORDS_PATH))
 except Exception:
+    kill_workers(launched)
     log("EXPORT FAILED")
     log(traceback.format_exc())
     unreal.log_error("[EXPORT_LEVEL] " + traceback.format_exc())
     status = "FAIL"
 
-lines.append("RESULT: " + status)
+# PASS is not this script's to give: the bounds check still has to run.
+lines.append("EDITOR: PASS" if status == "PASS" else "RESULT: FAIL")
 os.makedirs(os.path.dirname(RESULT_PATH), exist_ok=True)
 with open(RESULT_PATH, "w") as handle:
     handle.write("\n".join(lines) + "\n")
 
-print("RESULT: " + status)
+print("EDITOR: PASS" if status == "PASS" else "RESULT: FAIL")
 
 # Under -ExecutePythonScript (a FULL editor session -- required since M7:
 # terrain sampling needs the physics scene and commandlets have none) the

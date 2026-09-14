@@ -70,7 +70,10 @@ import unreal
 
 from . import naming
 
-TEMP_PACKAGE_DIR = "/Game/__UEO3DEExportTemp"
+# Per-process when an export runs wide (UEO3DE_TEMP_SUFFIX): the directory
+# is deleted when an export finishes, which must never happen under another
+# editor's in-flight bake.
+TEMP_PACKAGE_DIR = "/Game/__UEO3DEExportTemp" + os.environ.get("UEO3DE_TEMP_SUFFIX", "")
 
 
 class MeshExportError(Exception):
@@ -409,6 +412,55 @@ def _field_material(static_material):
 
 _placeholder_cache = {}
 
+# Finished bakes whose temp assets have not been deleted yet (see _release_temp).
+_pending_temps = []
+_TEMP_FLUSH_EVERY_DEFAULT = 32
+
+
+def temp_flush_every(environ=None):
+    """UEO3DE_TEMP_FLUSH_EVERY -> finished bakes per temp-asset cleanup (default 32).
+
+    `1` deletes every bake's temp asset as soon as it is exported, which is
+    what the export always did -- and deleting one UE asset runs reference
+    checks and a garbage collection over every loaded object. Measured with
+    NYC_Level_WC open (35,988 actors): delete_asset took 1.56 s of a 1.72 s
+    spline bake, 91% of the time, so 1,803 spline bakes spent ~47 minutes
+    deleting 70-vertex meshes. Batching pays that collection once per batch.
+    Larger batches hold more temp meshes in memory between cleanups.
+    """
+    environ = os.environ if environ is None else environ
+    raw = str(environ.get("UEO3DE_TEMP_FLUSH_EVERY", "")).strip()
+    if not raw:
+        return _TEMP_FLUSH_EVERY_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        raise MeshExportError("UEO3DE_TEMP_FLUSH_EVERY=%r is not a whole number" % raw)
+    if value < 1:
+        raise MeshExportError("UEO3DE_TEMP_FLUSH_EVERY=%r must be >= 1" % raw)
+    return value
+
+
+def _release_temp(temp_path):
+    """A finished bake's temp asset: queued, and deleted with its batch."""
+    _pending_temps.append(temp_path)
+    if len(_pending_temps) >= temp_flush_every():
+        _flush_temps()
+
+
+def _flush_temps():
+    """Delete every pending temp asset in one directory delete.
+
+    Runs only BETWEEN bakes (from a bake's `finally`, or when an export
+    ends), never under one. The placeholder materials live in the same
+    directory, so their cache is reset with it: the next bake recreates them
+    rather than pointing at deleted objects.
+    """
+    if unreal.EditorAssetLibrary.does_directory_exist(TEMP_PACKAGE_DIR):
+        unreal.EditorAssetLibrary.delete_directory(TEMP_PACKAGE_DIR)
+    del _pending_temps[:]
+    _placeholder_cache.clear()
+
 
 def _placeholder_material(slot_index):
     """A transient material named for the slot; lives in the temp package."""
@@ -490,6 +542,22 @@ def _copy_source_hulls(baked, source_mesh, log=None):
             log("  %s: hull elements not exported (%s); the importer keeps "
                 "its whole-mesh hull" % (source_mesh.get_name(), exc))
         return 0
+
+
+def defer_build_enabled():
+    """UEO3DE_DEFER_BUILD -> defer the per-LOD rebuilds of a bake (default ON).
+
+    `0` restores one render-data rebuild per LOD write, kept only so the two
+    can be compared on real content. Unrecognised values raise.
+    """
+    value = os.environ.get("UEO3DE_DEFER_BUILD", "").strip().lower()
+    if value in _NANITE_ON or value == "":
+        return True
+    if value in _NANITE_OFF[1:]:
+        return False
+    raise MeshExportError(
+        "UEO3DE_DEFER_BUILD=%r is not one of %s"
+        % (value, ", ".join(_NANITE_ON + _NANITE_OFF[1:])))
 
 
 def lod_chain_enabled():
@@ -813,11 +881,21 @@ def _bake_temp_asset(dyn, asset_name):
     # then emits the LODGroup (measured: SUCCESS per write, the asset
     # reports the full count, and the file carries <name>_LOD<i> nodes).
     write_options = unreal.GeometryScriptCopyMeshToAssetOptions()
+    deferred = unreal.GeometryScriptCopyMeshToAssetOptions()
+    # An export never undoes a bake: without this every LOD write records an
+    # undo transaction holding a mesh copy, for the life of the session.
+    for opts in (write_options, deferred):
+        opts.set_editor_property("emit_transaction", False)
+    # Each write otherwise rebuilds the asset's render data for every LOD it
+    # holds so far; defer all but the last, which rebuilds once for the lot.
+    defer = defer_build_enabled()
+    deferred.set_editor_property("defer_mesh_post_edit_change", defer)
+    last = len(chain) - 1
     for index, lod_dyn in enumerate(chain[1:], start=1):
         write_lod = unreal.GeometryScriptMeshWriteLOD()
         write_lod.set_editor_property("lod_index", index)
         outcome = unreal.GeometryScript_AssetUtils.copy_mesh_to_static_mesh(
-            lod_dyn, baked, write_options, write_lod)
+            lod_dyn, baked, write_options if index == last else deferred, write_lod)
         pins = [x for x in (outcome if isinstance(outcome, tuple) else (outcome,))
                 if isinstance(x, unreal.GeometryScriptOutcomePins)]
         if pins and pins[0] != unreal.GeometryScriptOutcomePins.SUCCESS:
@@ -1315,7 +1393,7 @@ def _export_terrain(asset, actor_path, output_root, options, emit):
             baked.set_editor_property("static_materials", [entry])
         _export_fbx(baked, output_path, options)
     finally:
-        unreal.EditorAssetLibrary.delete_asset(temp_path)
+        _release_temp(temp_path)
 
     export_root = os.path.dirname(os.path.normpath(output_root))
     samples_path = os.path.join(export_root, "terrain_samples.json")
@@ -1413,7 +1491,7 @@ def _export_spline(asset, base_path, output_root, options, emit):
             baked.set_editor_property("static_materials", slots)
         _export_fbx(baked, output_path, options)
     finally:
-        unreal.EditorAssetLibrary.delete_asset(temp_path)
+        _release_temp(temp_path)
 
     # Normal-entry rule: the FBX intermediate is mirror-X of the local bake.
     return {
@@ -1522,7 +1600,7 @@ def export_meshes(assets, output_root, log=None):
                 export_options = options
             _export_fbx(baked, output_path, export_options)
         finally:
-            unreal.EditorAssetLibrary.delete_asset(temp_path)
+            _release_temp(temp_path)
 
         try:
             lod_count = int(source.get_num_lods())
@@ -1609,12 +1687,7 @@ def export_meshes(assets, output_root, log=None):
              % (asset["ue_path"], asset["o3de_relative_path"],
                 exported[-1]["bytes"], node_name))
 
-    if unreal.EditorAssetLibrary.does_directory_exist(TEMP_PACKAGE_DIR):
-        unreal.EditorAssetLibrary.delete_directory(TEMP_PACKAGE_DIR)
-    # The placeholders lived in the temp dir just deleted; a second export in
-    # the same editor session must recreate them, not reuse dead pointers.
-    _placeholder_cache.clear()
-
+    _flush_temps()
     return exported
 
 
