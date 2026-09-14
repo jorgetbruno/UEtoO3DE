@@ -131,6 +131,35 @@ def run():
     except es.SliceError:
         pass
 
+    # --- 2b. spline workers: the lead's long pole goes wide ----------------------
+    check(es.spline_worker_count({}) == 0, "spline workers must be off by default")
+    check(es.spline_worker_count({"UEO3DE_SPLINE_WORKERS": "2"}) == 2, "the count must parse")
+    for garbage in ("two", "-1", "99"):
+        try:
+            es.spline_worker_count({"UEO3DE_SPLINE_WORKERS": garbage})
+            check(False, "UEO3DE_SPLINE_WORKERS=%r must raise" % garbage)
+        except es.SliceError:
+            pass
+    for workers in (1, 3):
+        for spline_workers in (0, 1, 2, 3):
+            owned = [a["guid"] for a in es.lead_meshes(assets, workers, spline_workers)]
+            for index in range(workers if workers > 1 else 0):
+                owned += [a["guid"] for a in es.worker_meshes(assets, index, workers)]
+            for index in range(spline_workers):
+                owned += [a["guid"] for a in es.spline_worker_meshes(assets, index, spline_workers)]
+            check(sorted(owned) == sorted(a["guid"] for a in assets if a["kind"] == "static_mesh"),
+                  "%d mesh + %d spline workers: every mesh owned exactly once" % (workers, spline_workers))
+    lead_only_terrain = es.lead_meshes(assets, 3, 2)
+    check([a["ue_path"] for a in lead_only_terrain] == ["/Game/M/SM_200#terrain"],
+          "with spline and mesh workers the lead keeps ONLY terrain (its bake traces the "
+          "physics scene); got %r" % [a["ue_path"] for a in lead_only_terrain])
+    check(all(a["ue_path"].endswith("#spline")
+              for i in range(2) for a in es.spline_worker_meshes(assets, i, 2)),
+          "a spline worker is handed splines and nothing else")
+    serial_mesh = es.lead_meshes(assets, 1, 2)
+    check(len(serial_mesh) == 56 and not any(a["ue_path"].endswith("#spline") for a in serial_mesh),
+          "spline workers without mesh workers: the lead keeps the 55 standalone meshes + terrain")
+
     # --- 3. merging proves completeness ------------------------------------------
     def records(meshes):
         return [{"guid": a["guid"], "relative_path": a["o3de_relative_path"]} for a in meshes]

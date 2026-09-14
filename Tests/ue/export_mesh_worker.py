@@ -5,7 +5,10 @@ Launched by Tests/ue/export_level.py when UEO3DE_MESH_WORKERS > 1, on an EMPTY
 map, never on the level: it exports only meshes that load as standalone assets
 (see ueo3de/export_slices.py). Arguments, all forward-slashed:
 
-    <worker index> <worker count> <manifest.json> <assets root> <done file>
+    <worker index> <worker count> <manifest.json> <assets root> <done file> [<kind> <level map>]
+
+`kind` is "standalone" (default: an empty map, meshes that load as assets) or
+"spline" (opens <level map> first, then bakes its share of the spline meshes).
 
 Writes `<done file>` atomically when finished -- records on success, the error
 on failure -- and quits the editor. The lead treats a missing done file as a
@@ -39,17 +42,24 @@ def write_done(path, payload):
 def main():
     index, count = int(ARGS[0]), int(ARGS[1])
     manifest_path, assets_root, done_path = ARGS[2], ARGS[3], ARGS[4]
+    kind = ARGS[5] if len(ARGS) > 5 else "standalone"
     started = time.time()
-    payload = {"worker": index, "workers": count, "records": [], "error": None}
+    payload = {"worker": index, "workers": count, "kind": kind, "records": [], "error": None}
     try:
         # Each editor bakes into its own temp package directory: the export
         # deletes that directory when it finishes, which must never happen
         # under another editor's in-flight bake.
-        os.environ["UEO3DE_TEMP_SUFFIX"] = "_w%d" % index
+        os.environ["UEO3DE_TEMP_SUFFIX"] = "_%s%d" % (kind[0], index)
         from ueo3de import export_slices, mesh_export
         with open(manifest_path, "r") as handle:
             document = json.load(handle)
-        mine = export_slices.worker_meshes(document["assets"], index, count)
+        if kind == "spline":
+            loaded = time.time()
+            unreal.EditorLoadingAndSavingUtils.load_map(ARGS[6])
+            payload["level_load_seconds"] = round(time.time() - loaded, 1)
+            mine = export_slices.spline_worker_meshes(document["assets"], index, count)
+        else:
+            mine = export_slices.worker_meshes(document["assets"], index, count)
         payload["assigned"] = len(mine)
         payload["records"] = mesh_export.export_meshes(mine, assets_root)
     except Exception:

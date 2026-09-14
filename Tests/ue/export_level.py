@@ -15,6 +15,7 @@ gives a script no clean way to take arguments:
     UEO3DE_MAP           package path of the level, e.g. /Game/Maps/L_Overview
     UEO3DE_OUT           output directory (default: Exports/<level name>)
     UEO3DE_MESH_WORKERS  worker editors for standalone meshes (default 1)
+    UEO3DE_SPLINE_WORKERS worker editors that open the level and bake splines (default 0)
     UEO3DE_WORKER_GUI    1 = windowed workers (default: headless, -nullrhi)
     UEO3DE_REUSE_MESHES  1 = keep the previous export's static mesh FBX files
 
@@ -82,8 +83,11 @@ def log(message):
     unreal.log("[EXPORT_LEVEL] " + str(message))
 
 
-def launch_workers(count):
-    """Start `count` worker editors on an empty map; returns [(index, proc, done)]."""
+def launch_workers(count, kind="standalone"):
+    """Start `count` worker editors; returns [(label, proc, done)].
+
+    Standalone workers stay on an empty map. Spline workers open the level.
+    """
     engine = unreal.Paths.convert_relative_path_to_full(unreal.Paths.engine_dir())
     headless = os.environ.get("UEO3DE_WORKER_GUI", "").strip() != "1"
     editor = os.path.join(engine, "Binaries", "Win64",
@@ -93,53 +97,56 @@ def launch_workers(count):
     os.makedirs(WORKER_DIR, exist_ok=True)
     launched = []
     for index in range(count):
-        done = "%s/worker_%d_of_%d.json" % (WORKER_DIR, index, count)
+        done = "%s/%s_worker_%d_of_%d.json" % (WORKER_DIR, kind, index, count)
         if os.path.exists(done):
             os.remove(done)
         # Forward slashes throughout: a backslash path whose next character is
         # a digit (a session folder named `0fe0...`) was read by the editor's
         # command line as an escape, and the script it looked for did not exist.
-        script = ("%s %d %d %s %s %s" % (WORKER_SCRIPT, index, count, MANIFEST_PATH,
-                                         ASSETS_ROOT, done)).replace(BACKSLASH, "/")
+        script = ("%s %d %d %s %s %s %s %s" % (WORKER_SCRIPT, index, count, MANIFEST_PATH,
+                                               ASSETS_ROOT, done, kind, MAP_PATH)
+                  ).replace(BACKSLASH, "/")
         args = [editor, project, "/Engine/Maps/Entry",
                 "-ExecutePythonScript=" + script,
                 "-EnablePlugins=GeometryScripting,PythonScriptPlugin",
                 "-unattended", "-nop4", "-nosplash", "-nosound"]
         if headless:
             args.append("-nullrhi")
-        launched.append((index, subprocess.Popen(args), done))
-        log("  worker %d/%d started (%s)"
-            % (index + 1, count, "headless" if headless else "windowed"))
+        label = "%s worker %d/%d" % (kind, index + 1, count)
+        launched.append((label, subprocess.Popen(args), done))
+        log("  %s started (%s)" % (label, "headless" if headless else "windowed"))
     return launched
 
 
 def wait_for_workers(launched):
     """Block until every worker has written its done file; returns record sets."""
-    pending = {index: (proc, done) for index, proc, done in launched}
+    pending = {label: (proc, done) for label, proc, done in launched}
     exited_at = {}
     results = []
     while pending:
-        for index in sorted(pending):
-            proc, done = pending[index]
+        for label in sorted(pending):
+            proc, done = pending[label]
             if os.path.exists(done):
                 with open(done, "r") as handle:
                     payload = json.load(handle)
-                del pending[index]
+                del pending[label]
                 if payload.get("error"):
-                    raise RuntimeError("mesh worker %d failed:%s%s"
-                                       % (index + 1, NEWLINE, payload["error"]))
-                log("  worker %d: %d of %d meshes in %.0fs"
-                    % (index + 1, len(payload["records"]), payload.get("assigned", -1),
-                       payload.get("seconds", 0.0)))
-                results.append(("worker %d" % (index + 1), payload["records"]))
+                    raise RuntimeError("%s failed:%s%s" % (label, NEWLINE, payload["error"]))
+                loaded = payload.get("level_load_seconds")
+                log("  %s: %d of %d meshes in %.0fs%s (t+%.0fs)"
+                    % (label, len(payload["records"]), payload.get("assigned", -1),
+                       payload.get("seconds", 0.0),
+                       ", level loaded in %.0fs" % loaded if loaded is not None else "",
+                       time.time() - EXPORT_STARTED))
+                results.append((label, payload["records"]))
                 continue
             if proc.poll() is not None:
-                exited_at.setdefault(index, time.time())
-                if time.time() - exited_at[index] > WORKER_EXIT_GRACE_S:
+                exited_at.setdefault(label, time.time())
+                if time.time() - exited_at[label] > WORKER_EXIT_GRACE_S:
                     raise RuntimeError(
-                        "mesh worker %d exited (code %s) without its done file %s; "
+                        "%s exited (code %s) without its done file %s; "
                         "its Saved/Logs entry has the reason"
-                        % (index + 1, proc.returncode, done))
+                        % (label, proc.returncode, done))
         if pending:
             time.sleep(5)
     return results
@@ -178,8 +185,11 @@ try:
     # bake through this editor's texture export instead of after it.
     reuse = export_slices.reuse_requested()
     workers = export_slices.mesh_worker_count()
+    spline_workers = export_slices.spline_worker_count()
     if workers > 1 and not reuse:
         launched = launch_workers(workers)
+    if spline_workers > 0 and not reuse:
+        launched += launch_workers(spline_workers, kind="spline")
     log("  entities: %d  assets: %d  warnings: %d (%d warn, %d error)"
         % (len(document["entities"]), len(document["assets"]), len(warnings),
            warnings.count_by_severity(WARN), warnings.count_by_severity(ERROR)))
@@ -214,7 +224,7 @@ try:
     else:
         stage("static mesh FBX export")
         lead = mesh_export.export_meshes(
-            export_slices.lead_meshes(document["assets"], workers), ASSETS_ROOT)
+            export_slices.lead_meshes(document["assets"], workers, spline_workers), ASSETS_ROOT)
         if launched:
             log("  lead: %d level-bound meshes done (t+%.0fs); waiting for workers"
                 % (len(lead), time.time() - EXPORT_STARTED))

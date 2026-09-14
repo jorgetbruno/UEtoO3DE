@@ -43,6 +43,42 @@ def mesh_worker_count(environ=None):
     return value
 
 
+def spline_worker_count(environ=None):
+    """UEO3DE_SPLINE_WORKERS -> worker editors that open the LEVEL and take spline bakes.
+
+    Default 0: the lead bakes every spline itself, after its texture export --
+    measured on NYC1950 as the long pole of a wide export (7.7 min of
+    textures, then 9.5 min of 1,803 splines while three mesh workers finished
+    at minute 10 and sat idle). A spline worker opens the level headless
+    (~10 s, 6.1 GB measured) and bakes its share while the lead exports
+    textures. The lead keeps only terrain, whose bake traces the physics scene.
+    """
+    environ = os.environ if environ is None else environ
+    raw = str(environ.get("UEO3DE_SPLINE_WORKERS", "")).strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        raise SliceError("UEO3DE_SPLINE_WORKERS=%r is not a whole number" % raw)
+    if not 0 <= value <= MAX_WORKERS:
+        raise SliceError("UEO3DE_SPLINE_WORKERS=%r must be between 0 and %d"
+                         % (raw, MAX_WORKERS))
+    return value
+
+
+def _fragment(asset):
+    return asset.get("ue_path", "").partition("#")[2]
+
+
+def spline_worker_meshes(assets, index, spline_workers):
+    """The spline bakes spline worker `index` (0-based) of `spline_workers` takes."""
+    if not 0 <= index < spline_workers:
+        raise SliceError("spline worker %d of %d does not exist" % (index, spline_workers))
+    splines = [a for a in static_meshes(assets) if _fragment(a) == "spline"]
+    return splines[index::spline_workers]
+
+
 def is_level_bound(asset):
     """A bake that reads the open level (spline component, terrain actor)."""
     fragment = asset.get("ue_path", "").partition("#")[2]
@@ -53,12 +89,26 @@ def static_meshes(assets):
     return [a for a in assets if a.get("kind") == "static_mesh"]
 
 
-def lead_meshes(assets, workers):
-    """The static meshes the LEAD exports: all of them, or the level-bound ones."""
+def lead_meshes(assets, workers, spline_workers=0):
+    """The static meshes the LEAD exports.
+
+    All of them when nothing runs wide; only the level-bound ones when mesh
+    workers take the standalone meshes; and of those, only terrain when spline
+    workers take the splines.
+    """
     meshes = static_meshes(assets)
-    if workers <= 1:
+    if workers <= 1 and spline_workers <= 0:
         return meshes
-    return [a for a in meshes if is_level_bound(a)]
+    keep = []
+    for asset in meshes:
+        fragment = _fragment(asset)
+        if fragment == "terrain":
+            keep.append(asset)
+        elif fragment == "spline" and spline_workers <= 0:
+            keep.append(asset)
+        elif not is_level_bound(asset) and workers <= 1:
+            keep.append(asset)
+    return keep
 
 
 def worker_meshes(assets, index, workers):
