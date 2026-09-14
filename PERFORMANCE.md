@@ -47,6 +47,22 @@ suspect, was measured at 29 ms and left alone.
 | `UEO3DE_LOD_CHAIN=0` (LOD 0 only) | same 24 | 43.0 s | 25.1 s | LOD 0 only |
 | headless worker (`-nullrhi`) | same 24, deferred | 33.3 s | 33.2 s | 24/24 identical, 3.8 vs 4.3 GB |
 
+**The full NYC export after these changes** (`UEO3DE_LOD_CHAIN=0`, `UEO3DE_LOD_REDUCE=0.5`,
+`UEO3DE_MESH_WORKERS=3`): **18.3 minutes, RESULT: PASS**, 2,272 FBX files (367.6 MB), all
+2,272 bounds-checked.
+
+| stage | editor | wall |
+|---|---|---|
+| manifest | lead | 24 s |
+| textures (1,269 files) | lead | 7.7 min |
+| 1,803 spline bakes + terrain | lead | 9.5 min (0.32 s each) |
+| 468 standalone meshes, 156 each | 3 headless workers, started with the manifest | 8.6–10.0 min each |
+| bounds check | plain Python, all cores | 6.4 s |
+
+The lead is now the long pole: its texture export and spline bakes run serially while the
+workers finish around minute 10 and sit idle. The next step is to hand splines to
+level-loading workers, which peak at 6.1 GB each.
+
 Worker editors (`UEO3DE_MESH_WORKERS`) take the meshes that load as standalone assets
 on an empty map (~3–4 GB each). The lead keeps the level-bound bakes (splines, terrain)
 and starts the workers the moment the manifest is written. The intermediate bounds check
