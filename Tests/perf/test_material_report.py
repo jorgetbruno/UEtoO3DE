@@ -63,6 +63,41 @@ check(importer.unconverted_materials({"assets": [], "entities": []}) == [],
 check("MAT_DEFAULT_MATERIAL" in report.CODES,
       "MAT_DEFAULT_MATERIAL must be a registered report code")
 
+# --- UE sky-dome meshes are not authored ------------------------------------------
+# NYC1950's EditorSkySphere x100 is a 4.1 km inward-facing dome around the city in
+# an unconverted material: from inside, a flat shell where the sky should be.
+sky_doc = {
+    "assets": [
+        {"kind": "static_mesh", "guid": "sky", "ue_path": "/Engine/EditorMeshes/EditorSkySphere"},
+        {"kind": "static_mesh", "guid": "cyl", "ue_path": "/Engine/BasicShapes/Cylinder"},
+        {"kind": "material", "guid": "skymat", "name": "MI_Sky", "ue_path": "/Game/MI_Sky"},
+    ],
+    "entities": [
+        {"id": "s", "name": "EditorSkySphere8", "parent_id": None,
+         "mesh": {"asset_guid": "sky", "material_slots": [{"index": 0, "material_guid": "skymat"}]},
+         "physics": {"has_collision": True}},
+        {"id": "c", "name": "Cylinder2", "parent_id": None, "mesh": {"asset_guid": "cyl"}},
+    ],
+}
+stripped, names = importer.strip_sky_dome_meshes(sky_doc, {})
+check(names == ["EditorSkySphere8"], "the sky-dome entity must be named; got %r" % (names,))
+entities = {e["id"]: e for e in stripped["entities"]}
+check("mesh" not in entities["s"] and "physics" not in entities["s"],
+      "the sky dome loses its mesh and collision")
+check(len(stripped["entities"]) == 2, "the entity itself stays (it may parent other actors)")
+check(entities["c"].get("mesh") == {"asset_guid": "cyl"}, "an ordinary engine mesh is untouched")
+check(importer.unconverted_materials(stripped) == [],
+      "a stripped sky dome must not be reported as a default-material fallback")
+check("mesh" in sky_doc["entities"][0], "the caller's document must not be mutated")
+check(importer.strip_sky_dome_meshes(sky_doc, {"UEO3DE_KEEP_SKY_MESHES": "1"})[1] == [],
+      "UEO3DE_KEEP_SKY_MESHES=1 keeps them")
+mirrored = {"assets": [{"kind": "static_mesh", "guid": "mx",
+                        "ue_path": "/Engine/EditorMeshes/EditorSkySphere#mx"}],
+            "entities": [{"id": "m", "name": "SkyMx", "parent_id": None, "mesh": {"asset_guid": "mx"}}]}
+check(importer.strip_sky_dome_meshes(mirrored, {})[1] == ["SkyMx"],
+      "a mirrored variant of a sky dome is still a sky dome")
+check("ENV_SKY_MESH_SKIPPED" in report.CODES, "ENV_SKY_MESH_SKIPPED must be registered")
+
 print("")
 print("RESULT: " + ("PASS" if not failures else "FAIL (%d)" % len(failures)))
 sys.exit(1 if failures else 0)

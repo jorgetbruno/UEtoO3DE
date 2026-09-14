@@ -207,6 +207,50 @@ def _engine_template_level():
     return None
 
 
+# UE's own sky-dome meshes. Levels place them as a StaticMeshActor scaled to
+# kilometres around the map, with an unlit emissive material that does not
+# convert. Measured on NYC1950: EditorSkySphere x100 at the origin is a 4.1 km
+# dome over a 1.5 km city, its triangles face INWARD (signed volume -2.9e11
+# where an engine cylinder is +7.8e5), so from inside it is a flat
+# default-material shell that replaces the sky. O3DE's own sky (the imported
+# Physical Sky) already does that job.
+SKY_DOME_MESHES = frozenset((
+    "/Engine/EditorMeshes/EditorSkySphere",
+    "/Engine/EngineSky/SM_SkySphere",
+    "/Engine/EngineSky/SM_Sky_Sphere",
+))
+
+
+def strip_sky_dome_meshes(document, environ=None):
+    """(document, [entity names]) with UE sky-dome meshes removed from their entities.
+
+    The entity stays (it can parent other actors, and its transform is harmless);
+    its mesh, collision and material slots go, so nothing downstream authors or
+    reports them. UEO3DE_KEEP_SKY_MESHES=1 keeps them.
+    """
+    environ = os.environ if environ is None else environ
+    if str(environ.get("UEO3DE_KEEP_SKY_MESHES", "")).strip() == "1":
+        return document, []
+    sky_guids = {a["guid"] for a in document.get("assets", [])
+                 if a.get("kind") == "static_mesh"
+                 and a.get("ue_path", "").partition("#")[0] in SKY_DOME_MESHES}
+    if not sky_guids:
+        return document, []
+    stripped, names = [], []
+    for item in document["entities"]:
+        if (item.get("mesh") or {}).get("asset_guid") in sky_guids:
+            item = dict(item)
+            item.pop("mesh", None)
+            item.pop("physics", None)
+            names.append(item.get("name"))
+        stripped.append(item)
+    if not names:
+        return document, []
+    document = dict(document)
+    document["entities"] = stripped
+    return document, names
+
+
 def unconverted_materials(document):
     """[(material name, ue_path, entity count)] for materials that did not convert.
 
@@ -677,6 +721,13 @@ def import_level(manifest_path, source_assets_root, project_assets_root,
         document["entities"] = [e for e in document["entities"]
                                 if e["id"] in keep and
                                 (e["parent_id"] is None or e["parent_id"] in keep)]
+
+    document, sky_meshes = strip_sky_dome_meshes(document)
+    for name in sky_meshes:
+        report.warn("ENV_SKY_MESH_SKIPPED", name,
+                    "UE sky-dome mesh not authored: O3DE's sky already covers it, and "
+                    "the dome would enclose the level in an unconverted material "
+                    "(UEO3DE_KEEP_SKY_MESHES=1 keeps it)")
 
     # Refuse a manifest measured to be beyond what a single import survives,
     # rather than discovering it during `saving prefab` twenty minutes in,

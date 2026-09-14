@@ -233,6 +233,7 @@ separate because they are fixed in different places.
 | `MAT_SLOT_BY_ELIMINATION` | info | A material matched no slot label (the asset's slot carries no default material, so the FBX has no name for it) but exactly one model slot was unclaimed. |
 | `MAT_SLOT_DEDUP_SUFFIX` | info | A model slot label is an FBX name-dedup variant (`MI_X_1`: two UE slots filled with the same material); it received the base label's material. |
 | `DECAL_MATERIAL_UNCONVERTED` | warn | A decal's material did not convert; the decal imports with its volume and sort key but no material. |
+| `ENV_SKY_MESH_SKIPPED` | warn | An actor using a UE sky-dome mesh (EditorSkySphere, SM_SkySphere) imports without its mesh — O3DE's sky covers it and the dome would enclose the level in an unconverted material. `UEO3DE_KEEP_SKY_MESHES=1` keeps it. |
 | `ENV_SKYLIGHT_APPROX` | warn | UE's image-based skylight has no exportable irradiance images, so a Physical Sky stands in. Lighting is approximate. |
 | `ENV_SKY_ATMOSPHERE_APPROX` | warn | SkyAtmosphere scattering has no Atom equivalent; a default-turbidity Physical Sky stands in. |
 | `ENV_SKY_DUPLICATE` | info | More than one actor maps to the sky; only the first is authored, because two Physical Sky components fight. |

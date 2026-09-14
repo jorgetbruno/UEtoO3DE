@@ -103,6 +103,11 @@ CODES = {
               "entity is created with its transform but no light component."),
 
     # --- environment (M6) ---
+    "ENV_SKY_MESH_SKIPPED": (
+        WARN, "An actor using one of UE's sky-dome meshes (EditorSkySphere, "
+              "SM_SkySphere) imports without its mesh: O3DE's sky already covers "
+              "it, and the dome would enclose the level in an unconverted material. "
+              "UEO3DE_KEEP_SKY_MESHES=1 keeps it."),
     "ENV_SKYLIGHT_APPROX": (
         WARN, "UE's image-based skylight has no exportable irradiance images "
               "(Atom's Global Skylight needs diffuse+specular assets), so a "

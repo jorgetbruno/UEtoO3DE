@@ -253,6 +253,7 @@ set UEO3DE_CHUNK=3/12            rem import one slice of a level too big for a s
 set UEO3DE_CHUNK_CEILING=6000    rem raise the refuse-to-import threshold (default 4000, measured)
 set UEO3DE_CHUNK_ORDER=spatial   rem size (default) | spatial -- chunks as compact patches of the map
 set UEO3DE_SKIP_CAMERAS=1        rem import camera entities without authoring camera components
+set UEO3DE_KEEP_SKY_MESHES=1     rem keep UE sky-dome meshes (default: skipped; O3DE's sky covers them)
 ```
 
 **Re-exporting only materials.** `UEO3DE_REUSE_MESHES=1` re-scans the level and
