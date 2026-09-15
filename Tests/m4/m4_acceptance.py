@@ -7,8 +7,8 @@ that ships is the artifact, not the importing session's memory) and asserts:
   * every entity whose mapped slots share ONE material carries a Material
     component whose default slot resolves to the expected .azmaterial product;
   * every entity with DISTINCT materials per slot (SM_TwoTone) resolves each
-    slot label -- FindMaterialAssignmentId, o3dimport's technique, same as the
-    importer -- to its own expected .azmaterial on the Model Materials rows;
+    slot label -- matched exactly through GetDefaultMaterialMap/GetMaterialLabel,
+    same as the importer -- to its own expected .azmaterial on the Model Materials rows;
   * entities on unmapped materials (the deliberately unsupported one) have NO
     Material component -- the backend default, by design, visibly grey rather
     than silently wrong.
@@ -208,10 +208,18 @@ def main():
             if not found:
                 break
             row_stable_ids.append(value)
+        # Exact labels. FindMaterialAssignmentId matches by SUBSTRING ("MI_Roof"
+        # resolves to MI_Roof_Border), so a check built on it agrees with an
+        # importer built on it.
+        stable_by_label = {}
+        for key in (render.MaterialComponentRequestBus(
+                bus.Event, 'GetDefaultMaterialMap', entity_id) or {}):
+            stable = getattr(key, 'materialSlotStableId', None)
+            if stable is not None and stable != NO_LOD:
+                stable_by_label.setdefault(str(render.MaterialComponentRequestBus(
+                    bus.Event, 'GetMaterialLabel', entity_id, key)), stable)
         for label, product in detail:
-            assignment_id = render.MaterialComponentRequestBus(
-                bus.Event, 'FindMaterialAssignmentId', entity_id, NO_LOD, label)
-            stable_id = getattr(assignment_id, 'materialSlotStableId', None)
+            stable_id = stable_by_label.get(label)
             row = next((index for index, value in enumerate(row_stable_ids)
                         if value == stable_id), None)
             if not check(row is not None,

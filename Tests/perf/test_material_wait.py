@@ -126,11 +126,30 @@ def rows_get_property(_pair, prop):
     return (False, None)
 
 
-def find_assignment_id(_bus_kind, _name, _entity, _lod, label):
-    result = types.SimpleNamespace()
-    if label in SLOT_IDS:
-        result.materialSlotStableId = SLOT_IDS[label]
-    return result
+class AssignmentId(object):
+    def __init__(self, stable, label):
+        self.materialSlotStableId = stable
+        self.label = label
+
+
+def material_component(_bus_kind, name, _entity, *args):
+    """The engine's answers, including its SUBSTRING label lookup.
+
+    The default material map lists MI_B_1 before MI_B, so an importer that went
+    back to FindMaterialAssignmentId("MI_B") would get MI_B_1's slot.
+    """
+    ordered = sorted(SLOT_IDS.items(), key=lambda item: -len(item[0]))
+    if name == "GetDefaultMaterialMap":
+        keys = [AssignmentId(0xFFFFFFFF, "Default Material")] + [
+            AssignmentId(stable, label) for label, stable in ordered]
+        return {key: None for key in keys}
+    if name == "GetMaterialLabel":
+        return args[0].label
+    if name == "FindMaterialAssignmentId":
+        label = args[1]
+        hit = next((stable for slot, stable in ordered if label in slot), None)
+        return types.SimpleNamespace(materialSlotStableId=hit)
+    raise AssertionError("unexpected material bus call %r" % name)
 
 
 def component_api(_bus_kind, name, _pair, prop, asset):
@@ -144,7 +163,7 @@ class Report(object):
         warned.append(code)
 
 
-azlmbr_render.MaterialComponentRequestBus = find_assignment_id
+azlmbr_render.MaterialComponentRequestBus = material_component
 azlmbr_editor.EditorComponentAPIBus = component_api
 prefab_build._get_property = rows_get_property
 

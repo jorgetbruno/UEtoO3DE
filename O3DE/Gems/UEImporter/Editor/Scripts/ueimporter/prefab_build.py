@@ -36,13 +36,11 @@ MODEL_ASSET_PROPERTY = "Controller|Configuration|Model Asset"
 MATERIAL_COMPONENT_NAME = "Material"
 # Verified live: probe_m4_material — assigns and reads back an azmaterial.
 MATERIAL_ASSET_PROPERTY = "Default Material|Material Asset"
-# Per-slot rows of the Material component. The technique is o3dimport's
-# (lumbermixalot): FindMaterialAssignmentId maps a slot label to a stable id,
-# and the row whose "Material Slot Stable Id" matches is the one to set.
+# Per-slot rows of the Material component: a slot label maps to a stable id
+# (exactly -- see _stable_ids_by_label), and the row whose "Material Slot
+# Stable Id" matches is the one to set.
 MODEL_SLOT_STABLE_ID = "Model Materials|[%d]|Material Slot Stable Id"
 MODEL_SLOT_ASSET = "Model Materials|[%d]|Material Asset"
-# LOD wildcard for FindMaterialAssignmentId (u32 -1).
-NO_LOD = 0xFFFFFFFF
 # The Model Materials rows exist only once the entity's model asset has
 # streamed in; how long wait_for_model_rows tolerates NO entity becoming
 # ready before giving up on the stragglers. A STALL budget, not a total:
@@ -487,6 +485,48 @@ def wait_for_model_rows(pairs):
     return set(pending)
 
 
+NO_SLOT = 0xFFFFFFFF  # the stable id of the "Default Material" pseudo-slot
+
+
+def slot_row(label, stable_by_label, row_stable_ids, used_rows=()):
+    """The Model Materials row whose slot label is EXACTLY `label`, or None."""
+    stable_id = stable_by_label.get(label)
+    if stable_id is None:
+        return None
+    for index, row_stable in enumerate(row_stable_ids):
+        if row_stable == stable_id and index not in used_rows:
+            return index
+    return None
+
+
+def _stable_ids_by_label(entity_id):
+    """{slot label: stable id} for the entity's model, matched EXACTLY.
+
+    `FindMaterialAssignmentId` cannot be trusted with a label: it matches by
+    SUBSTRING and returns the first slot containing it (measured: on
+    SM_Temple_Roof_01, whose slots are MI_Roof, MI_Roof_Border, MI_WoodTrim,
+    "MI_Roof" resolved to MI_Roof_Border). The roof material then landed on the
+    border, the border's own material overwrote it, and the roof kept the model
+    default -- on every instance of that mesh, with no warning. Which slot comes
+    first depends on the model, so SM_Temple_Roof_02 happened to be right.
+    """
+    import azlmbr.bus as bus
+    import azlmbr.render as render
+
+    labels = {}
+    material_map = render.MaterialComponentRequestBus(
+        bus.Event, 'GetDefaultMaterialMap', entity_id) or {}
+    for assignment_id in material_map:
+        stable_id = getattr(assignment_id, "materialSlotStableId", None)
+        if stable_id is None or stable_id == NO_SLOT:
+            continue
+        label = render.MaterialComponentRequestBus(
+            bus.Event, 'GetMaterialLabel', entity_id, assignment_id)
+        if label:
+            labels.setdefault(str(label), stable_id)
+    return labels
+
+
 def finish_material_slots(pair, entity_id, assignments, entity_name, report,
                           ready=True):
     """Per-slot assignment by label, o3dimport's technique (M4 slot fidelity).
@@ -501,7 +541,6 @@ def finish_material_slots(pair, entity_id, assignments, entity_name, report,
     """
     import azlmbr.bus as bus
     import azlmbr.editor as editor
-    import azlmbr.render as render
 
     import time
 
@@ -524,19 +563,12 @@ def finish_material_slots(pair, entity_id, assignments, entity_name, report,
             break
         row_stable_ids.append(value)
 
+    stable_by_label = _stable_ids_by_label(entity_id)
     assigned = 0
     used_rows = set()
     unmatched = []
     for label, asset_id in assignments:
-        assignment_id = render.MaterialComponentRequestBus(
-            bus.Event, 'FindMaterialAssignmentId', entity_id, NO_LOD, label)
-        stable_id = getattr(assignment_id, "materialSlotStableId", None)
-        row = None
-        if stable_id is not None:
-            for index, row_stable in enumerate(row_stable_ids):
-                if row_stable == stable_id:
-                    row = index
-                    break
+        row = slot_row(label, stable_by_label, row_stable_ids)
         if row is None:
             unmatched.append((label, asset_id))
             continue
@@ -558,16 +590,7 @@ def finish_material_slots(pair, entity_id, assignments, entity_name, report,
     for label, asset_id in assignments:
         for suffix in range(1, 9):
             variant = "%s_%d" % (label, suffix)
-            assignment_id = render.MaterialComponentRequestBus(
-                bus.Event, 'FindMaterialAssignmentId', entity_id, NO_LOD,
-                variant)
-            stable_id = getattr(assignment_id, "materialSlotStableId", None)
-            row = None
-            if stable_id is not None:
-                for index, row_stable in enumerate(row_stable_ids):
-                    if row_stable == stable_id and index not in used_rows:
-                        row = index
-                        break
+            row = slot_row(variant, stable_by_label, row_stable_ids, used_rows)
             if row is None:
                 break
             set_outcome = editor.EditorComponentAPIBus(
