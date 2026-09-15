@@ -80,6 +80,25 @@ class MeshExportError(Exception):
     pass
 
 
+def load_source(path):
+    """Load a source asset by package path, through the registry or directly.
+
+    EditorAssetLibrary.load_asset looks the path up in the asset registry
+    first, and a package the registry does not list fails there even though it
+    loads: on The Lost Ruins, SM_column04 (resaved by the user that morning) was
+    missing from the registry after a completed scan, while unreal.load_asset
+    returned the StaticMesh. The lead never saw it, because opening the level
+    loads the level's meshes directly; the worker editors failed on it.
+    """
+    source = unreal.EditorAssetLibrary.load_asset(path)
+    if source is None:
+        try:
+            source = unreal.load_asset(path)
+        except Exception:
+            source = None
+    return source
+
+
 def _unwrap(result):
     """UE packs UFUNCTION out-params into a tuple; Geometry Script adds an
     outcome enum pin (ExpandEnumAsExecs) that is never the value we want."""
@@ -1578,7 +1597,7 @@ def export_meshes(assets, output_root, log=None):
                     record["bytes"], record["node_name"]))
             continue
 
-        source = unreal.EditorAssetLibrary.load_asset(base_path)
+        source = load_source(base_path)
         if source is None:
             raise MeshExportError("could not load source mesh " + base_path)
 
@@ -1762,7 +1781,7 @@ def export_skeletal(assets, output_root, log=None):
         kind = asset.get("kind")
         if kind not in ("skeletal_mesh", "animation"):
             continue
-        source = unreal.EditorAssetLibrary.load_asset(asset["ue_path"])
+        source = load_source(asset["ue_path"])
         if source is None:
             raise MeshExportError("could not load skeletal source " + asset["ue_path"])
         output_path = os.path.join(
