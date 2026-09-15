@@ -41,6 +41,10 @@ if %ERRORLEVEL% NEQ 0 goto :failed
 if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_chunk_guard.py"
 if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_import_chunks.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_collider_pairs.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_gltf.py"
 if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_glb_export.py"

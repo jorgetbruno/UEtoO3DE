@@ -200,6 +200,22 @@ from its parent (`Tests/perf/test_chunk.py`).
 That city converted in twelve chunks: 44,504 entities, 42,088 mesh colliders with
 every bake verified present, 715 MB of prefabs, ~24 minutes, no errors.
 
+**Chunks import side by side.** Each chunk writes only its own prefab and ledger,
+so `Tools/import_chunks.py` runs several headless editors at once:
+
+```
+python Tools/import_chunks.py --project D:/O3DE/Projects/Phoenix ^
+    --export Exports/NYC_Level_WC --chunks 15 --parallel 3 [--only 4,7-9]
+```
+
+Import knobs (`UEO3DE_CHUNK_ORDER`, `UEO3DE_SKIP_CAMERAS`, ...) pass through from
+the environment. Each slot imports in its own scratch level
+(`UEO3DE_Scratch_<slot>`, seeded on first use), and the driver starts ONE Asset
+Processor before any editor: editors launched together each start their own,
+and all but the first fail to bind port 45643 behind a modal dialog. After a
+failure no new chunk starts. NYC1950 in 15 chunks: ~32 min one at a time,
+**10.4 min** with three editors (~10 GB across the O3DE processes).
+
 **Mesh collision is cooked into assets on both backends.** A cooked physics
 mesh (`.pxmesh` on PhysX, `.joltmesh` on Jolt) is produced by the Asset
 Processor and referenced by the collider, instead of geometry being baked

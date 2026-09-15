@@ -37,7 +37,11 @@ LEVEL_NAME = os.path.basename(os.path.normpath(EXPORT_DIR))
 MANIFEST_PATH = os.path.join(EXPORT_DIR, "manifest.json")
 SOURCE_ASSETS = os.path.join(EXPORT_DIR, "Assets")
 PREFAB_REL_PATH = "Prefabs/%s.prefab" % LEVEL_NAME
-REPORT_PATH = os.path.join(SCRIPT_DIR, 'results', 'm2_import_report_%s.json' % LEVEL_NAME)
+# A chunked import gets one report per chunk: chunks run side by side
+# (Tools/import_chunks.py) and must not overwrite each other's report.
+_CHUNK = os.environ.get("UEO3DE_CHUNK", "").strip()
+_CHUNK_SUFFIX = "_chunk%s" % _CHUNK.replace("/", "_of_") if _CHUNK and _CHUNK != "1/1" else ""
+REPORT_PATH = os.path.join(SCRIPT_DIR, 'results', 'm2_import_report_%s%s.json' % (LEVEL_NAME, _CHUNK_SUFFIX))
 
 lines = []
 ok = True
