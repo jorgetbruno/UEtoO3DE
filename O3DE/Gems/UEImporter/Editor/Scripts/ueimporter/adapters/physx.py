@@ -179,8 +179,9 @@ class PhysXBackendAdapter(base.PhysicsBackendAdapter):
     def _add_component(self, entity_id, component_name):
         """Add one component and return THE PAIR THAT WAS JUST ADDED.
 
-        Jolt's adapter re-resolves the pair with `GetComponentOfType`, which
-        is safe there because every Jolt shape is a DISTINCT component type.
+        (jolt.py once re-resolved the pair with `GetComponentOfType` on the
+        belief that distinct Jolt shape types made it safe; two boxes on one
+        body share a type, and it broke the same way -- fixed there too.)
         PhysX puts all four primitives on one `PhysX Primitive Collider`
         type, and GetComponentOfType documents itself as returning only the
         FIRST component of a type -- so on a two-collider entity the second

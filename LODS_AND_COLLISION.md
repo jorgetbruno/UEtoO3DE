@@ -209,6 +209,15 @@ Counting cooked shapes offline: the per-shape
   default (sm_van_02e, 2,969 of 5,602 triangles). `finish_material_slots`
   probes numeric-suffix variants of every assigned label →
   `MAT_SLOT_DEDUP_SUFFIX`.
+* **Several primitives of one shape on one body (Jolt).** The adapter
+  re-fetched each new collider with `GetComponentOfType`, which returns any
+  component of that type, so a later box's dimensions and offset could land on
+  an earlier box. The unconfigured box stayed a 1 m cube at the entity origin.
+  That was 8,097 of 14,746 colliders on NYC1950's multi-shape bodies, different
+  ones on every import. The adapter now configures the pair `AddComponentsOfType`
+  returned, as PhysX already did. Check a level with: no primitive collider on a
+  multi-shape body may lack `ShapeConfiguration` (the 211 exact duplicates left
+  on NYC are UE's own repeated `KBoxElem`s).
 
 ## 6. Things that look like bugs and are not
 
@@ -233,6 +242,7 @@ rem stage (O3DE)          python Tests\m2\m2_stage.py --project <proj> --manifes
 rem sweep staging         delete staged files under <proj>\Assets\uetoo3de not in the manifest (+ their .assetinfo)
 rem process               AssetProcessorBatch --project-path=<proj> --platforms=pc   (TWICE: the first pass saves an incomplete catalog)
 rem import                set UEO3DE_EXPORT=<ExportDir> & set UEO3DE_SCRATCH_LEVEL=UEO3DE_Scratch & Tests\o3de\run_o3de_python.bat Tests\m2\m2_import.py <result> <proj>
+rem import, chunked       set UEO3DE_CHUNK_ORDER=spatial & python Tools\import_chunks.py --project <proj> --export <ExportDir> --chunks <n> --parallel 3
 rem verify                Tests\m6\m6_level_renders.py, Tests\m3b\m3b_level_collides.py (UEO3DE_PREFAB=<proj>/Prefabs/<Level>.prefab)
 ```
 
@@ -268,7 +278,7 @@ Import time (editor session):
 | knob | default | meaning |
 |---|---|---|
 | `UEO3DE_EXPORT` | `Exports/Fixture_01` | export folder to import |
-| `UEO3DE_SCRATCH_LEVEL` | `DefaultLevel` on test projects | level the editor checks open; user projects must pass `UEO3DE_Scratch` |
+| `UEO3DE_SCRATCH_LEVEL` | `DefaultLevel` on test projects | level the editor checks open; user projects must pass `UEO3DE_Scratch`. `Tools/import_chunks.py` sets `UEO3DE_Scratch_<slot>` per parallel editor (seeded on first use) |
 | `UEO3DE_SCRATCH_OK` | off | import into a populated level anyway |
 | `UEO3DE_CHUNK` / `UEO3DE_CHUNK_CEILING` | `1/1` / 4000 | slice a level too large for one prefab |
 | `UEO3DE_MODEL_POLL_FRAMES` | 2 | poll granularity of the shared model-rows wait |

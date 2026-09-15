@@ -404,7 +404,7 @@ authoring for the inactive backend yields a level with no physics).
 | Static mobility + collision | `add_static_body` | `Jolt Static Rigid Body` |
 | `simulates_physics` | `add_dynamic_body(mass?, damping, gravity, ccd)` | `Jolt Rigid Body` |
 | Movable + collision, no simulate | `add_dynamic_body(kinematic=True)` | `Jolt Rigid Body`, Kinematic |
-| Box element | `add_box_collider(half_extents, offset, rot)` | `Jolt Box Collider` (Dimensions = FULL extents) |
+| Box element | `add_box_collider(half_extents, offset, rot)` | `Jolt Box Collider` (Dimensions = FULL extents). One component per element, so a body with three `KBoxElem`s carries three components of one type; each is configured through the pair its own add returned (`Tests/perf/test_collider_pairs.py`) |
 | Sphere / sphyl element | `add_sphere_collider` / `add_capsule_collider(total_height)` | `Jolt Sphere/Capsule Collider` |
 | Convex element | `add_mesh_collider(convex=True)` | `Jolt Mesh Collider`, Convex Hull |
 | No simple collision (static) | `add_mesh_collider(convex=False)` + `PHYS_MESH_FROM_RENDER` | `Jolt Mesh Collider`, Triangle Mesh — bakes from the entity's render model automatically once it loads |

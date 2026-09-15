@@ -265,7 +265,7 @@ set UEO3DE_DECOMPOSE=1           rem or a hull cap, e.g. 64 -- V-HACD at cook ti
 set UEO3DE_PHYSX_COOK=1          rem force cooking on when PhysX is activated transitively
 rem -- import time --
 set UEO3DE_SCRATCH_LEVEL=UEO3DE_Scratch   rem the level editor checks open on a USER project
-set UEO3DE_CHUNK=3/12            rem import one slice of a level too big for a single prefab
+set UEO3DE_CHUNK=3/12            rem import one slice of a level too big for a single prefab (all of them: Tools\import_chunks.py)
 set UEO3DE_CHUNK_CEILING=6000    rem raise the refuse-to-import threshold (default 4000, measured)
 set UEO3DE_CHUNK_ORDER=spatial   rem size (default) | spatial -- chunks as compact patches of the map
 set UEO3DE_SKIP_CAMERAS=1        rem import camera entities without authoring camera components
