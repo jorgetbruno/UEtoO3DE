@@ -99,6 +99,24 @@ wider floor does not change. Scale² and scale were indistinguishable to every
 suite in the repo — not for want of scaled fixtures, for want of measuring the
 axis the error was on.
 
+### Several boxes on one body: Jolt configured the wrong one (FIXED)
+
+UE collision with several elements of one shape (a building's walls as
+`KBoxElem`s, a lamp's post and head) authors several components of one type.
+The Jolt adapter configured each new one through `GetComponentOfType`, which
+returns any component of that type, picked by random component id. Later
+boxes wrote their dimensions and offsets onto earlier ones. The unconfigured
+boxes stayed default 1 m cubes at the entity origin, which read as ordinary
+colliders in the Inspector. On NYC1950: **8,097 of 14,746** colliders on
+multi-shape bodies, and two imports of the same manifest broke different
+ones. PhysX had been fixed for this; Jolt was believed safe because each
+shape is its own type. Every suite missed it: the fixtures' multi-shape bodies
+are rare, and the prefab comparator checks mesh-collider bakes, not primitive
+shapes. It surfaced only when a parallel import was structurally diffed against
+a serial one. Now 0 default-shaped colliders, and repeated imports are
+structurally identical (`Tests/perf/test_collider_pairs.py`; details in
+`PERFORMANCE.md`). **Levels imported before `165978c` should be re-imported.**
+
 ## Transforms (M2, recorded here for completeness)
 
 | Behaviour | UE | → O3DE (both backends) |
