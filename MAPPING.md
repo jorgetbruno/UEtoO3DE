@@ -201,6 +201,9 @@ on codes, never on English strings.
 | `ANIM_ROOT_MOTION_DROPPED` | warn | AnimSequence has root motion; Simple Motion does not extract it to entity movement, so the character animates in place. |
 | `ANIM_BLUEPRINT_UNMAPPED` | warn | Skeletal component driven by an Animation Blueprint; graph logic has no mapping, so it imports in bind pose with no motion. |
 | `SKEL_PHYSICS_DROPPED` | info | Skeletal collision comes from UE's per-bone PhysicsAsset; per-bone bodies have no v1 mapping, so the entity imports without physics. |
+| `EXTRA_ASSETS_ADDED` | info | `UEO3DE_EXTRA_ASSETS` registered the skeletal meshes (with their materials) and AnimSequences under the named folders. A level carries only the animation each actor plays; a character pack's other sequences exist only as assets. |
+| `EXTRA_ASSETS_EMPTY` | warn | A `UEO3DE_EXTRA_ASSETS` path holds no assets. |
+| `EXTRA_ASSET_UNLOADABLE` | warn | An asset under a `UEO3DE_EXTRA_ASSETS` path did not load and was skipped. |
 | `ACTOR_INSTANCES_EXPANDED` | info | ISM/HISM instances expanded into individual child entities sharing one mesh asset; Atom re-instances identical models at render time. |
 | `INSTANCES_TRUNCATED` | warn | More instances than the export ceiling (`UEO3DE_MAX_INSTANCES`); the excess was dropped. 100k instances as entities will not open. |
 | `SPLINE_BAKED` | warn | A SplineMeshComponent's deformed geometry was baked to a static mesh; the live spline is lost. |

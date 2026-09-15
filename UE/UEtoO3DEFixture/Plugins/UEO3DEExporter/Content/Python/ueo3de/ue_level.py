@@ -1158,6 +1158,61 @@ def _camera_block(actor, subject, warnings):
     }
 
 
+def extra_asset_paths(environ=None):
+    """UEO3DE_EXTRA_ASSETS: content folders whose characters and animations are
+    exported even when no actor in the level uses them. Comma-separated package
+    paths, e.g. `/Game/UndeadPack`. Anything that is not a /-rooted path is refused.
+    """
+    raw = (os.environ if environ is None else environ).get("UEO3DE_EXTRA_ASSETS", "")
+    paths = [part.strip().rstrip("/") for part in raw.split(",") if part.strip()]
+    bad = [path for path in paths if not path.startswith("/")]
+    if bad:
+        raise ExportAborted("UEO3DE_EXTRA_ASSETS entries must be content paths "
+                            "like /Game/Pack, got %r" % bad)
+    return paths
+
+
+def _add_extra_assets(assets, paths, warnings):
+    """Register every SkeletalMesh (with its materials) and AnimSequence under
+    `paths`. Returns {"skeletal_mesh": n, "animation": n}.
+
+    A level only carries the one animation each actor plays: a marketplace
+    character pack's showcase map referenced 1 of a character's 14 sequences.
+    The rest exist only as assets, and the tool should bring them along.
+    """
+    registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    registry.wait_for_completion()
+    counts = {"skeletal_mesh": 0, "animation": 0}
+    for path in paths:
+        found = registry.get_assets_by_path(path, recursive=True)
+        if not found:
+            warnings.add("EXTRA_ASSETS_EMPTY", path, "no assets under this path")
+            continue
+        for data in sorted(found, key=lambda d: str(d.package_name)):
+            kind = str(data.asset_class_path.asset_name)
+            if kind not in ("SkeletalMesh", "AnimSequence"):
+                continue
+            asset = unreal.load_asset(str(data.package_name))
+            if asset is None:
+                warnings.add("EXTRA_ASSET_UNLOADABLE", str(data.package_name), kind)
+                continue
+            if kind == "AnimSequence":
+                assets.add_animation(asset)
+                counts["animation"] += 1
+                continue
+            # The bone table comes from a component (see add_skeletal_mesh); a
+            # transient one reads the mesh's reference skeleton.
+            component = unreal.SkeletalMeshComponent()
+            component.set_skeletal_mesh_asset(asset)
+            assets.add_skeletal_mesh(asset, component)
+            for slot in _field(asset, "materials", []) or []:
+                material = _field(slot, "material_interface")
+                if material is not None:
+                    assets.add_material(material)
+            counts["skeletal_mesh"] += 1
+    return counts
+
+
 def _skeletal_block(component, assets, subject, warnings):
     """The manifest `skeletal` block for one SkeletalMeshComponent (M8).
 
@@ -1763,6 +1818,13 @@ def export_level(map_path, output_path, load=True):
         _guard_world_partition(world, level, map_path, warnings)
         for actor in sorted(actors, key=lambda a: a.get_path_name()):
             entities.extend(_build_entity(actor, assets, warnings))
+        extra = extra_asset_paths()
+        if extra:
+            counts = _add_extra_assets(assets, extra, warnings)
+            warnings.add("EXTRA_ASSETS_ADDED", ",".join(extra),
+                         "%d skeletal meshes and %d animations registered from "
+                         "the folder(s), used by an actor or not"
+                         % (counts["skeletal_mesh"], counts["animation"]))
     except ExportAborted as exc:
         abort_reason = str(exc)
         entities = []

@@ -45,6 +45,15 @@ CODES = {
     "ACTOR_CLASS_UNMAPPED": (
         WARN, "Actor class has no mapping in v1; exported as a placeholder "
               "entity carrying name, class and transform only."),
+    "EXTRA_ASSETS_ADDED": (
+        INFO, "UEO3DE_EXTRA_ASSETS registered the skeletal meshes and animations "
+              "under the named folders, whether or not an actor uses them."),
+    "EXTRA_ASSETS_EMPTY": (
+        WARN, "A UEO3DE_EXTRA_ASSETS path holds no assets (a typo, or a folder "
+              "outside this project)."),
+    "EXTRA_ASSET_UNLOADABLE": (
+        WARN, "An asset listed under UEO3DE_EXTRA_ASSETS did not load and was "
+              "skipped."),
     "ACTOR_DEFERRED": (
         INFO, "Actor class is recognized but is owned by a later milestone; "
               "exported as a placeholder with its transform preserved."),

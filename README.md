@@ -257,6 +257,7 @@ set UEO3DE_WORKER_GUI=1          rem windowed workers instead of headless -nullr
 set UEO3DE_TEMP_FLUSH_EVERY=32   rem bakes per temp-asset cleanup (default 32; 1 = the old per-bake delete)
 set UEO3DE_DEFER_BUILD=0         rem one render rebuild per LOD write, as before (default: deferred)
 set UEO3DE_REUSE_MESHES=1        rem re-export manifest, materials and textures; keep the previous FBX files
+set UEO3DE_EXTRA_ASSETS=/Game/UndeadPack rem also export every skeletal mesh and animation in these folders (comma-separated), used by an actor or not
 set UEO3DE_LANDSCAPE_LAYER=Grass rem which painted layer stands in for a Landscape's ground (default: the blend's first textured layer)
 rem -- staging time --
 set UEO3DE_COLLISION=ue          rem single (default) | vhacd | ue -- how multi-hull collision is cooked
