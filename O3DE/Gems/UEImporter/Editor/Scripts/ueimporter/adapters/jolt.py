@@ -219,6 +219,18 @@ class JoltBackendAdapter(base.PhysicsBackendAdapter):
     # -- shared plumbing ---------------------------------------------------
 
     def _add_component(self, entity_id, component_name):
+        """Add one component and return THE PAIR THAT WAS JUST ADDED.
+
+        This used to re-resolve the pair with `GetComponentOfType`, on the
+        belief that every Jolt shape is a distinct component type. It is -- but
+        one entity can carry several colliders of ONE shape (a UE body with
+        three KBoxElems), and GetComponentOfType returns whichever component
+        of that type it finds, which depends on random component ids. Every
+        box after the first could overwrite an earlier box and stay a default
+        1 m cube at the origin. NYC1950 had ~120 such bodies per chunk, and two
+        imports of the same manifest broke different boxes. Same fix as
+        physx.py: use the ADD outcome.
+        """
         bus, editor = self._bus()
         type_id = self._type_ids.get(component_name)
         if type_id is None:
@@ -229,11 +241,14 @@ class JoltBackendAdapter(base.PhysicsBackendAdapter):
         if not outcome or not outcome.IsSuccess():
             raise AdapterError("AddComponentsOfType(%s) failed: %s"
                                % (component_name, self._outcome_error(outcome)))
-        pair_outcome = editor.EditorComponentAPIBus(
-            bus.Broadcast, 'GetComponentOfType', entity_id, type_id)
-        if not pair_outcome or not pair_outcome.IsSuccess():
-            raise AdapterError("component %r vanished after add" % component_name)
-        return pair_outcome.GetValue()
+        added = outcome.GetValue()
+        if isinstance(added, (list, tuple)):
+            if not added:
+                raise AdapterError(
+                    "AddComponentsOfType(%s) reported success but returned no "
+                    "component" % component_name)
+            return added[-1]
+        return added
 
     @staticmethod
     def _outcome_error(outcome):

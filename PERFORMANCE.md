@@ -277,6 +277,46 @@ them. Verdict after every one of the three changes: **EQUIVALENT**, 0 difference
 guid in a copy and it must report the difference, because a comparator that
 cannot fail proves nothing about the run where it passed.)
 
+### Chunks in parallel, and the defect the comparison found
+
+NYC1950 (51,773 entities) imports as 15 chunks. One at a time, a chunk took
+~130 s: ~95 s of recorded stages plus ~35 s of editor start-up and shutdown
+that no stage records. The chunks share nothing but the Asset Processor, so
+`Tools/import_chunks.py` runs them three at a time:
+
+| | wall clock | peak working set (O3DE processes) |
+|---|---:|---:|
+| serial, 15 editors in turn | ~32 min | one editor |
+| `--parallel 3` | **10.1–10.4 min** | ~9.9 GB (30.4 GB machine-wide, 64 GB box) |
+
+Individual chunks get slower side by side (the 3,748-entity chunks took 140–230 s
+instead of ~130 s). The run is still 3× faster, because the ~35 s of editor
+start-up and shutdown per chunk now happens three at a time as well.
+
+The first attempt put three "Cannot start Asset Processor server" dialogs on
+screen. A batch editor that finds no AP listening starts one, three editors
+started together all found none, and every AP after the first failed to bind
+port 45643. The driver now starts one AP and waits for its port first.
+
+**Checking that the parallel run was correct found a bug the serial import had
+always had.** Structurally diffed against the serial import, 11 of 15 prefabs
+differed in ~120 entities each: primitive colliders. The Jolt adapter added a
+collider and then re-fetched it with `GetComponentOfType`, which returns *some*
+component of that type. On a body with several boxes, later boxes overwrote
+earlier ones. Across the level, **8,097 of the 14,746 colliders on multi-shape
+bodies were default 1 m shapes at the origin**, and the serial and parallel runs
+broke different ones because the lookup follows random component ids. The PhysX
+adapter had been fixed for exactly this; Jolt was not, on the belief that each Jolt
+shape being its own type made it safe. `prefab_diff.py` compares mesh-collider
+bakes but not primitive shapes, so no suite could see it. After the fix, which
+uses the pair `AddComponentsOfType` returns (`Tests/perf/test_collider_pairs.py`):
+
+- default-shaped colliders on multi-shape bodies: **0**;
+- the 211 exact duplicates that remain all trace to the UE assets themselves: 39
+  duplicate `KBoxElem`s in `SM_NYCB_1/4/20` and two bridges, repeated per instance;
+- two parallel imports of the same manifest are **structurally identical in all
+  15 prefabs**, with only minted entity and component ids differing.
+
 ## Memory (editor process working set)
 
 | Point | Working set | Δ |
