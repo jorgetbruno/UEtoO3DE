@@ -432,6 +432,101 @@ def _as_vector(value):
     return list(value) if isinstance(value, list) else [value, value, value]
 
 
+# --- which channel a wire carries -------------------------------------------------
+# A VectorParameter can feed three pins from its R, G and B outputs. MEL hands
+# back the whole parameter for each, so folding saw (1, 1, 0) where the master
+# meant R, G and B separately. Measured on Eastern Province's MM_Master:
+# `Sat_Bright_Cont` drives Desaturation's Fraction (R), a brightness Multiply (G)
+# and CheapContrast's Contrast (B). Folded whole, the brightness Multiply would
+# zero the blue channel. The output a wire uses is not reflected to Python, but
+# the material's T3D text records it on every input: `OutputIndex=2,Mask=1,MaskG=1`.
+_WIRE_LINE = re.compile(r'^\s*([A-Za-z_]+)=\(Expression="[^"]*"(.*)\)\s*$')
+_FUNCTION_INPUT_LINE = re.compile(
+    r'^\s*FunctionInputs\(\d+\)=\(.*?Input=\(Expression="[^"]*"(.*)\)\)\s*$')
+_OBJECT_LINE = re.compile(r'^\s*Begin Object Name="([^"]+)"')
+_wire_channel_cache = {}
+
+
+def parse_wire_channels(t3d_text):
+    """{(expression name, pin name): channel index 0-3} for single-channel wires.
+
+    Pure. A function call's pins are keyed by their InputName; a node's unnamed
+    input (`Input=` in T3D) is keyed "Input".
+    """
+    channels = {}
+    current = None
+    for line in t3d_text.splitlines():
+        match = _OBJECT_LINE.match(line)
+        if match:
+            current = match.group(1)
+            continue
+        if line.strip() == "End Object":
+            current = None
+            continue
+        if current is None:
+            continue
+        match = _FUNCTION_INPUT_LINE.match(line)
+        if match:
+            rest = match.group(1)
+            name = re.search(r'InputName="([^"]*)"', rest)
+            pin = name.group(1) if name else None
+        else:
+            match = _WIRE_LINE.match(line)
+            if not match:
+                continue
+            pin, rest = match.group(1), match.group(2)
+        flags = re.findall(r"Mask([RGBA])=1", rest)
+        if pin and len(flags) == 1:
+            channels[(current, pin)] = "RGBA".index(flags[0])
+    return channels
+
+
+def _wire_channels(master):
+    """parse_wire_channels for a master, exported once per session; {} on failure."""
+    try:
+        key = unreal.SystemLibrary.get_path_name(master)
+    except Exception:
+        return {}
+    if key in _wire_channel_cache:
+        return _wire_channel_cache[key]
+    channels = {}
+    try:
+        import tempfile
+        handle, path = tempfile.mkstemp(suffix=".t3d")
+        os.close(handle)
+        task = unreal.AssetExportTask()
+        task.set_editor_property("object", master)
+        task.set_editor_property("filename", path)
+        task.set_editor_property("automated", True)
+        task.set_editor_property("prompt", False)
+        task.set_editor_property("replace_identical", True)
+        if unreal.Exporter.run_asset_export_task(task):
+            with open(path, "r", encoding="utf-8", errors="replace") as text:
+                channels = parse_wire_channels(text.read())
+        os.remove(path)
+    except Exception:
+        channels = {}
+    _wire_channel_cache[key] = channels
+    return channels
+
+
+def _wire_channel(master, node, pin):
+    """The single channel the wire into node.pin carries, or None (all of it)."""
+    if master is None or node is None:
+        return None
+    name = getattr(node, "get_name", None)
+    if name is None:
+        return None
+    return _wire_channels(master).get((name(), "Input" if pin in ("None", "") else pin))
+
+
+def _pick(value, channel):
+    """One channel of a folded value; a scalar is every channel of itself."""
+    if value is None or channel is None or not isinstance(value, list):
+        return value
+    return value[channel] if channel < len(value) else None
+
+
 def _combine(a, b, op):
     if isinstance(a, list) or isinstance(b, list):
         return [op(x, y) for x, y in zip(_as_vector(a), _as_vector(b))]
@@ -468,7 +563,8 @@ def _fold_constant(master, node, instance, depth=0):
 
     def operand(pin, const_prop, default=None):
         if pins.get(pin) is not None:
-            return _fold_constant(master, pins[pin], instance, depth + 1)
+            return _pick(_fold_constant(master, pins[pin], instance, depth + 1),
+                         _wire_channel(master, node, pin))
         if const_prop is None:
             return default
         try:
@@ -503,8 +599,8 @@ def _fold_constant(master, node, instance, depth=0):
                         lambda x, y: x + y)
 
     if kind == "MaterialExpressionDesaturation":
-        source = next((pins[name] for name in pins if name not in ("Fraction",)), None)
-        value = _fold_constant(master, source, instance, depth + 1)
+        source_pin = next((name for name in pins if name not in ("Fraction",)), None)
+        value = operand(source_pin, None) if source_pin is not None else None
         fraction = operand("Fraction", None, 1.0)
         if value is None or fraction is None:
             return None
@@ -524,7 +620,7 @@ def _fold_constant(master, node, instance, depth=0):
         return _combine(base, exponent, lambda x, e: max(x, 0.0) ** e)
 
     if kind in ("MaterialExpressionOneMinus", "MaterialExpressionSaturate"):
-        value = _fold_constant(master, next(iter(pins.values()), None), instance, depth + 1)
+        value = operand(next(iter(pins), None), None)
         if value is None:
             return None
         if kind == "MaterialExpressionOneMinus":
@@ -532,8 +628,8 @@ def _fold_constant(master, node, instance, depth=0):
         return _combine(value, 0.0, lambda x, _y: min(max(x, 0.0), 1.0))
 
     if kind == "MaterialExpressionClamp":
-        source = next((pins[name] for name in pins if name not in ("Min", "Max")), None)
-        value = _fold_constant(master, source, instance, depth + 1)
+        source_pin = next((name for name in pins if name not in ("Min", "Max")), None)
+        value = operand(source_pin, None) if source_pin is not None else None
         low = operand("Min", "min_default", 0.0)
         high = operand("Max", "max_default", 1.0)
         if value is None or low is None or high is None:
@@ -541,6 +637,94 @@ def _fold_constant(master, node, instance, depth=0):
         return _combine(value, 0.0, lambda x, _y: min(max(x, low), high))
 
     return None
+
+
+# Colour functions that leave their input unchanged when their amount folds to
+# zero: CheapContrast lerps (0 - c, 1 + c) by the input, which at c = 0 is the input.
+_CONTRAST_FUNCTIONS = ("CheapContrast", "CheapContrast_RGB")
+_IDENTITY_EPSILON = 1e-4
+
+
+def _tinted_texture(master, node, instance, depth=0):
+    """(texture node, factor) when a colour is one texture times constants, else None.
+
+    `factor` is None (the texture alone), a float or [r, g, b]. Followed exactly:
+    Multiply by anything that folds, Desaturation whose fraction folds to 0 and
+    CheapContrast whose contrast folds to 0. Measured on Eastern Province's
+    MM_Master, whose base colour is
+        CheapContrast_RGB(Desaturation(BaseColorTint * Intensity * Base, 1 - Sat) * Bright, Cont)
+    with Sat = Bright = 1 and Cont = 0 in every instance. The texture search took
+    `Base` alone, dropping the tint: T_Roof_C is blue, and the roofs are green
+    in UE only because MI_Roof tints them (0.013, 0.77, 0.039) x 2.
+    """
+    if node is None or depth > _FOLD_DEPTH_LIMIT:
+        return None
+    node, _hint = _follow(master, node, instance)
+    if node is None:
+        return None
+    kind = _expression_kind(node)
+    if kind in _TEXTURE_KINDS:
+        return node, None
+    pins = _pins(master, node)
+    if pins is None:
+        return None
+
+    def folded(pin, default=None):
+        if pins.get(pin) is None:
+            return default
+        return _pick(_fold_constant(master, pins[pin], instance, depth + 1),
+                     _wire_channel(master, node, pin))
+
+    def is_zero(value):
+        return value is not None and not isinstance(value, list) \
+            and abs(value) <= _IDENTITY_EPSILON
+
+    if kind == "MaterialExpressionMultiply":
+        for texture_pin, other_pin, other_const in (("A", "B", "const_b"), ("B", "A", "const_a")):
+            if pins.get(texture_pin) is None:
+                continue
+            inner = _tinted_texture(master, pins[texture_pin], instance, depth + 1)
+            if inner is None:
+                continue
+            if pins.get(other_pin) is not None:
+                value = folded(other_pin)
+            else:
+                try:
+                    value = float(node.get_editor_property(other_const))
+                except Exception:
+                    value = None
+            if value is None:
+                return None
+            texture_node, factor = inner
+            return texture_node, _combine(1.0 if factor is None else factor, value,
+                                          lambda x, y: x * y)
+        return None
+
+    if kind == "MaterialExpressionDesaturation":
+        source_pin = next((name for name in pins if name != "Fraction"), None)
+        if source_pin is None or not is_zero(folded("Fraction", 1.0)):
+            return None
+        return _tinted_texture(master, pins[source_pin], instance, depth + 1)
+
+    if kind == "MaterialExpressionMaterialFunctionCall":
+        function = node.get_editor_property("material_function")
+        if function is None or function.get_name() not in _CONTRAST_FUNCTIONS:
+            return None
+        if pins.get("In") is None or not is_zero(folded("Contrast")):
+            return None
+        return _tinted_texture(master, pins["In"], instance, depth + 1)
+
+    return None
+
+
+def tint_of(factor):
+    """A texture factor as [r, g, b], or None when it changes nothing."""
+    if factor is None:
+        return None
+    rgb = [float(c) for c in _as_vector(factor)]
+    if all(abs(c - 1.0) <= _IDENTITY_EPSILON for c in rgb):
+        return None
+    return rgb
 
 
 def _folded_spec(master, node, instance, role_suffix, warnings, subject, kind):
@@ -580,10 +764,17 @@ class TextureBank:
         self._registry = registry
         self._records = {}
 
-    def request(self, texture, role_suffix, channel=None):
-        """Plan an export; returns the manifest texture entry."""
+    def request(self, texture, role_suffix, channel=None, tint=None):
+        """Plan an export; returns the manifest texture entry.
+
+        `tint` ([r, g, b], linear) asks for a copy with the tint multiplied in.
+        """
         ue_path = naming.package_path(unreal.SystemLibrary.get_path_name(texture))
         role_key = role_suffix if channel is None else "%s@%s" % (role_suffix, channel)
+        tint_key = None
+        if tint is not None:
+            tint_key = ",".join("%.4f" % c for c in tint)
+            role_key = "%s*%s" % (role_key, tint_key)
         key = (ue_path, role_key)
         if key in self._records:
             return self._records[key]["entry"]
@@ -597,7 +788,9 @@ class TextureBank:
         # so one material silently got the wrong image data. The channel
         # goes BEFORE the role because the role must stay the filename
         # SUFFIX: that is what selects the Atom image preset.
-        if channel is None:
+        if tint_key is not None:
+            relative = "%s_tint%s_%s.tga" % (stem, naming.asset_guid(tint_key)[:6], role_suffix)
+        elif channel is None:
             relative = "%s_%s.tga" % (stem, role_suffix)
         else:
             # Channel splits are GRAYSCALE PNG (see tga.write_channel_png:
@@ -615,6 +808,8 @@ class TextureBank:
             "role": role_suffix,
             "channel": channel,
         }
+        if tint is not None:
+            entry["tint"] = [float(c) for c in tint]
         self._records[key] = {"entry": entry, "texture": texture}
         return entry
 
@@ -737,7 +932,9 @@ class TextureBank:
             raw = raw_by_path[entry["ue_path"]]
             out_path = os.path.join(output_root, entry["o3de_relative_path"]).replace("\\", "/")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            if entry["channel"] is None:
+            if entry.get("tint") is not None:
+                tga.write_tinted(raw, out_path, entry["tint"], entry["srgb"])
+            elif entry["channel"] is None:
                 tga.copy(raw, out_path)
             else:
                 tga.write_channel_png(raw, out_path, entry["channel"])
@@ -769,6 +966,28 @@ def classify_expression(master, instance, node, output_name, bank, role_suffix,
     if channel_hint and output_name not in ("R", "G", "B", "A"):
         output_name = channel_hint
     kind = _expression_kind(node)
+
+    if role_suffix == "basecolor" and kind not in _TEXTURE_KINDS:
+        tinted = _tinted_texture(master, node, instance, depth)
+        texture = _texture_of(tinted[0], instance) if tinted is not None else None
+        if texture is not None:
+            tint = tint_of(tinted[1])
+            if tint is None or max(tint) <= 1.0:
+                # StandardPBR's colour factor expresses this exactly.
+                if tint is not None and max(tint) - min(tint) <= _IDENTITY_EPSILON:
+                    tint = tint[0]           # grey: baseColor.factor, as before
+                entry = bank.request(texture, role_suffix, None)
+                return {"source": "texture", "texture_guid": entry["guid"],
+                        "channel": None, "factor": tint}
+            # A tint brighter than 1 has no StandardPBR equivalent (baseColor.color
+            # and .factor stop at 1), so it is baked into a copy of the texture.
+            entry = bank.request(texture, role_suffix, None, tint=tint)
+            warnings.add("MAT_TINT_BAKED", subject,
+                         "basecolor: %s x [%s] baked into %s"
+                         % (texture.get_name(), ", ".join("%.3f" % c for c in tint),
+                            entry["o3de_relative_path"]))
+            return {"source": "texture", "texture_guid": entry["guid"],
+                    "channel": None, "factor": None}
 
     if kind in _TEXTURE_KINDS:
         texture = _texture_of(node, instance)

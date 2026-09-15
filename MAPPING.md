@@ -189,6 +189,7 @@ on codes, never on English strings.
 | `MAT_PACKED_ORDER_ASSUMED` | warn | A packed AO/roughness/metallic texture parameter names no ORM/ARM/RMA/MRA convention, so ORM channel order was assumed. |
 | `MAT_BLEND_UNSUPPORTED` | warn | UE blend mode outside Opaque/Masked/Translucent; imported as translucent. |
 | `MAT_FUNCTION_PASSTHROUGH` | info | Channel driven by unsupported math (function call, contrast, blend chain); approximated by the nearest texture beneath it. |
+| `MAT_TINT_BAKED` | info | Base colour is a texture times a tint with a channel above 1, which StandardPBR's colour factor cannot hold; the tint is multiplied into a copy of the texture (linear space, clamped as UE clamps base colour). A tint within [0, 1] goes on `baseColor.color` instead, and needs no warning. |
 | `ENV_POSTPROCESS_UNMAPPED` | info | A post-process setting the artist overrode has no M6 mapping; carried in the manifest, not authored. |
 | `ENV_VOLUME_BOUNDS_UNKNOWN` | warn | A bounded post-process volume's extents could not be read, so the importer cannot size the equivalent volume. |
 | `ENV_VALUE_IMPLAUSIBLE` | warn | A UE post-process value is outside the plausible range of the Atom property it maps to (the engines do not share that unit's meaning); clamped, or dropped where clamping still clips the frame (exposure bias), and reported. |

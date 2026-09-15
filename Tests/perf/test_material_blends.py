@@ -45,6 +45,9 @@ class Node(object):
     def get_class(self):
         return FakeClass(self.kind)
 
+    def get_name(self):
+        return self.props.get("name", self.kind)
+
     def get_editor_property(self, name):
         if name not in self.props:
             raise Exception("no property %s on %s" % (name, self.kind))
@@ -284,6 +287,116 @@ check(me._fold_constant(None, Node("MaterialExpressionMultiply",
       "a graph with a texture is not constant math: folding must refuse it")
 check(me._fold_constant(None, fresnel, water) is None,
       "a view-dependent node on its own is not a constant")
+
+# --- 7. a tinted texture keeps its tint (Eastern Province MM_Master) ----------------
+# BaseColor = CheapContrast_RGB(Desaturation(Tint * Intensity * Base, 1 - Sat.R) * Sat.G,
+#                               Contrast = Sat.B)
+# One VectorParameter feeds three pins through its R, G and B outputs. MEL gives the
+# whole vector for each; the T3D text says which channel each wire carries.
+T3D = """Begin Object Class=/Script/Engine.Material Name="MM_Master"
+   Begin Object Name="MaterialExpressionMultiply_6" ExportPath="x"
+      A=(Expression="/Script/Engine.MaterialExpressionDesaturation'MM_Master:MaterialExpressionDesaturation_1'")
+      B=(Expression="/Script/Engine.MaterialExpressionVectorParameter'MM_Master:MaterialExpressionVectorParameter_2'",OutputIndex=2,Mask=1,MaskG=1)
+   End Object
+   Begin Object Name="MaterialExpressionOneMinus_1" ExportPath="x"
+      Input=(Expression="/Script/Engine.MaterialExpressionVectorParameter'MM_Master:MaterialExpressionVectorParameter_2'",OutputIndex=1,Mask=1,MaskR=1)
+   End Object
+   Begin Object Name="MaterialExpressionMaterialFunctionCall_5" ExportPath="x"
+      FunctionInputs(0)=(ExpressionInputId=95C9,Input=(Expression="/Script/Engine.MaterialExpressionMultiply'MM_Master:MaterialExpressionMultiply_6'",InputName="In"))
+      FunctionInputs(1)=(ExpressionInputId=3C3E,Input=(Expression="/Script/Engine.MaterialExpressionVectorParameter'MM_Master:MaterialExpressionVectorParameter_2'",OutputIndex=3,InputName="Contrast",Mask=1,MaskB=1))
+   End Object
+   Begin Object Name="MaterialExpressionMultiply_5" ExportPath="x"
+      B=(Expression="/Script/Engine.MaterialExpressionTextureSampleParameter2D'MM_Master:Tex'",Mask=1,MaskR=1,MaskG=1,MaskB=1)
+   End Object
+End Object"""
+wires = me.parse_wire_channels(T3D)
+check(wires.get(("MaterialExpressionMultiply_6", "B")) == 1, "a MaskG wire carries channel 1; got %r" % wires)
+check(wires.get(("MaterialExpressionOneMinus_1", "Input")) == 0, "an unnamed input is keyed 'Input'")
+check(wires.get(("MaterialExpressionMaterialFunctionCall_5", "Contrast")) == 2,
+      "a function input is keyed by its InputName")
+check(("MaterialExpressionMultiply_5", "B") not in wires and ("MaterialExpressionMultiply_6", "A") not in wires,
+      "a full-colour wire, or one with no mask, carries every channel")
+
+
+class FakeFunction(object):
+    def __init__(self, name):
+        self.name = name
+
+    def get_name(self):
+        return self.name
+
+
+def roof_graph():
+    sat = Node("MaterialExpressionVectorParameter", parameter_name="Sat_Bright_Cont",
+               default_value=LinearColor(1.0, 1.0, 0.0))
+    tinted = Node("MaterialExpressionMultiply",
+                  [("A", Node("MaterialExpressionMultiply", [("A", vector("BaseColorTint")),
+                                                             ("B", scalar("BaseColor Tint Intensity"))])),
+                   ("B", tex("Base", "T_Roof_C"))], name="MaterialExpressionMultiply_5")
+    desat = Node("MaterialExpressionDesaturation",
+                 [("None", tinted),
+                  ("Fraction", Node("MaterialExpressionOneMinus", [("None", sat)],
+                                    name="MaterialExpressionOneMinus_1"))],
+                 name="MaterialExpressionDesaturation_1")
+    bright = Node("MaterialExpressionMultiply", [("A", desat), ("B", sat)],
+                  name="MaterialExpressionMultiply_6")
+    return Node("MaterialExpressionMaterialFunctionCall", [("In", bright), ("Contrast", sat)],
+                material_function=FakeFunction("CheapContrast_RGB"),
+                name="MaterialExpressionMaterialFunctionCall_5")
+
+
+roof = MaterialInstanceConstant(vectors={"BaseColorTint": LinearColor(0.013331, 0.770833, 0.038649),
+                                         "Sat_Bright_Cont": LinearColor(1.0, 1.0, 0.0)},
+                                scalars={"BaseColor Tint Intensity": 2.0})
+MASTER = object()
+me._wire_channels = lambda master: wires if master is MASTER else {}
+found = me._tinted_texture(MASTER, roof_graph(), roof)
+check(found is not None and found[0].props["texture"] == "T_Roof_C",
+      "the roof's base colour is its texture under a tint; got %r" % (found,))
+check(found is not None and close(found[1], [0.026662, 1.541666, 0.077298], 1e-5),
+      "the tint is BaseColorTint x Intensity x brightness (G = 1), got %r" % (found and found[1],))
+check(me._tinted_texture(None, roof_graph(), roof) is None,
+      "without wire channels the packed vector cannot be read, so nothing is claimed")
+
+saturated = MaterialInstanceConstant(vectors={"BaseColorTint": LinearColor(1, 1, 1),
+                                              "Sat_Bright_Cont": LinearColor(0.5, 1.0, 0.0)},
+                                     scalars={"BaseColor Tint Intensity": 1.0})
+check(me._tinted_texture(MASTER, roof_graph(), saturated) is None,
+      "a desaturation that really desaturates is not a tint")
+contrast = MaterialInstanceConstant(vectors={"BaseColorTint": LinearColor(1, 1, 1),
+                                             "Sat_Bright_Cont": LinearColor(1.0, 1.0, 0.3)},
+                                    scalars={"BaseColor Tint Intensity": 1.0})
+check(me._tinted_texture(MASTER, roof_graph(), contrast) is None,
+      "a contrast that changes the image is not a tint")
+check(me.tint_of(1.0) is None and me.tint_of([1.0, 1.0, 1.0]) is None, "a factor of one is no tint")
+check(me.tint_of(0.5) == [0.5, 0.5, 0.5], "a scalar factor is a grey tint")
+
+# --- 8. baking a tint into pixels matches UE's linear-space multiply ---------------
+import tempfile  # noqa: E402
+from ueo3de import tga  # noqa: E402
+
+folder = tempfile.mkdtemp()
+source = os.path.join(folder, "blue.tga")
+with open(source, "wb") as handle:
+    handle.write(tga._header(2, 1, 24, 0x20))
+    handle.write(bytes([102, 54, 40, 255, 255, 255]))   # BGR: T_Roof_C's mean, then white
+out = tga.write_tinted(source, os.path.join(folder, "green.tga"), [0.026662, 1.541666, 0.077298], True)
+pixels = tga.read(out)["pixels"]
+
+
+def srgb_byte(value, factor):
+    s = value / 255.0
+    linear = s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4
+    linear = min(linear * factor, 1.0)
+    back = 12.92 * linear if linear <= 0.0031308 else 1.055 * linear ** (1 / 2.4) - 0.055
+    return int(round(back * 255))
+
+
+expected_first = [srgb_byte(102, 0.077298), srgb_byte(54, 1.541666), srgb_byte(40, 0.026662)]
+check(list(pixels[0:3]) == expected_first, "tinted blue pixel %r, expected %r" % (list(pixels[0:3]), expected_first))
+check(pixels[1] > pixels[0] and pixels[1] > pixels[2], "the blue roof texel comes out green-dominant")
+check(pixels[4] == 255, "a channel pushed past 1 clamps, as UE's base colour does")
+check(tga.read(out)["descriptor"] == 0x20, "row order is preserved")
 
 print("")
 print("RESULT: " + ("PASS" if not failures else "FAIL (%d)" % len(failures)))

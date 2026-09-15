@@ -325,6 +325,15 @@
             "opacity"
           ]
         },
+        "tint": {
+          "description": "Texture assets: linear [r, g, b] multiplied into the pixels at export, for a material tint brighter than StandardPBR's colour factor can express. Absent when the image is exported as authored.",
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
         "channel": {
           "description": "Texture assets: source channel extracted at export (ORM split); null when the full image is used.",
           "type": [

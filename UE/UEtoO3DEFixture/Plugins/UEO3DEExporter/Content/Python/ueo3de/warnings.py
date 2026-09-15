@@ -72,6 +72,10 @@ CODES = {
         INFO, "A channel driven by unsupported math (function call, contrast, "
               "desaturation, blend chain) was approximated by the nearest "
               "texture beneath it; the surrounding math is dropped."),
+    "MAT_TINT_BAKED": (
+        INFO, "Base colour is a texture times a tint brighter than StandardPBR's "
+              "colour factor can hold (a channel above 1); the tint was multiplied "
+              "into a copy of the texture, in linear space, as UE applies it."),
     "MAT_BLEND_UNSUPPORTED": (
         WARN, "UE blend mode outside Opaque/Masked/Translucent; imported as "
               "translucent."),

@@ -148,6 +148,51 @@ def write_grayscale(output_path, width, height, rows):
     return output_path
 
 
+def _to_linear(s):
+    return s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4
+
+
+def _to_srgb(v):
+    return 12.92 * v if v <= 0.0031308 else 1.055 * v ** (1.0 / 2.4) - 0.055
+
+
+def tint_table(factor, srgb):
+    """256-entry lookup: byte -> byte after multiplying by `factor` in LINEAR space.
+
+    UE samples an sRGB texture to linear, multiplies, and clamps base colour to
+    [0, 1]; the table does exactly that per channel, then re-encodes.
+    """
+    table = bytearray(256)
+    for value in range(256):
+        s = value / 255.0
+        linear = (_to_linear(s) if srgb else s) * factor
+        linear = min(max(linear, 0.0), 1.0)
+        out = _to_srgb(linear) if srgb else linear
+        table[value] = int(round(min(max(out, 0.0), 1.0) * 255.0))
+    return bytes(table)
+
+
+def write_tinted(source_path, output_path, tint, srgb):
+    """Copy a TGA with linear [r, g, b] multiplied into its colour channels.
+
+    Alpha, size, bit depth and row order are preserved.
+    """
+    image = read(source_path)
+    if image["bpp"] not in (24, 32):
+        raise TgaError("%s: tint needs a colour TGA, got %d bpp"
+                       % (source_path, image["bpp"]))
+    stride = image["bpp"] // 8
+    pixels = bytearray(image["pixels"])
+    for index, factor in ((2, tint[0]), (1, tint[1]), (0, tint[2])):   # BGR order
+        pixels[index::stride] = bytes(pixels[index::stride]).translate(
+            tint_table(float(factor), srgb))
+    with open(output_path, "wb") as handle:
+        handle.write(_header(image["width"], image["height"], image["bpp"],
+                             image["descriptor"]))
+        handle.write(bytes(pixels))
+    return output_path
+
+
 def copy(source_path, output_path):
     """Byte copy after validating the source parses as a supported TGA."""
     read(source_path)  # validation only

@@ -158,13 +158,18 @@ def validate_references(document):
             # builder picks its colour-space preset from the role suffix).
             role_key = asset["role"] if not asset.get("channel") \
                 else "%s@%s" % (asset["role"], asset["channel"])
+            if asset.get("tint") is not None:
+                # A tinted copy is its own file and identity (MAT_TINT_BAKED).
+                role_key += "*" + ",".join("%.4f" % c for c in asset["tint"])
             expected_guid = naming.asset_guid(ue_path + "#" + role_key)
             # The role stays the filename SUFFIX (it selects the Atom image
-            # preset); a channel split adds an infix between stem and role,
-            # so the stem is a prefix and the role is a suffix, not one
-            # contiguous string.
+            # preset); a channel split or a tint adds an infix between stem and
+            # role, so the stem is a prefix and the role is a suffix, not one
+            # contiguous string. Channel splits are grayscale PNG (the engine
+            # rejects grayscale TGA), whole images TGA.
             expected_prefix = naming.sanitize_path(ue_path) + "_"
-            if not asset["o3de_relative_path"].endswith("_%s.tga" % asset["role"]):
+            extension = "png" if asset.get("channel") else "tga"
+            if not asset["o3de_relative_path"].endswith("_%s.%s" % (asset["role"], extension)):
                 errors.append("texture %s: path %r does not end with its role "
                               "suffix %r, so the Atom image preset will not "
                               "match" % (ue_path, asset["o3de_relative_path"],
