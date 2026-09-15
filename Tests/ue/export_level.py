@@ -251,6 +251,25 @@ try:
     if len(skeletal_exported) != len(skeletal_assets):
         raise RuntimeError("exported %d skeletal FBX files for %d assets"
                            % (len(skeletal_exported), len(skeletal_assets)))
+    empty = []
+    for record in skeletal_exported:
+        if record["kind"] != "skeletal_mesh":
+            continue
+        path = os.path.join(ASSETS_ROOT, record["relative_path"])
+        with open(path, "rb") as handle:
+            if b"PolygonVertexIndex" not in handle.read():
+                empty.append(record)
+    if empty:
+        from ueo3de import manifest as manifest_module
+        dropped = manifest_module.drop_empty_skeletal_meshes(
+            document, [record["guid"] for record in empty])
+        for record in empty:
+            os.remove(os.path.join(ASSETS_ROOT, record["relative_path"]))
+        skeletal_exported = [r for r in skeletal_exported if r not in empty]
+        with open(MANIFEST_PATH, "w") as handle:
+            handle.write(manifest_module.dumps(document))
+        log("  SKEL_MESH_EMPTY_EXPORT: %d skeletal meshes wrote no geometry (all "
+            "cloth) and were dropped from the manifest: %s" % (len(dropped), ", ".join(dropped)))
 
     # Knobs that had nothing to act on say so: a ratio that parses and then
     # finds no Nanite mesh is indistinguishable from one that worked.

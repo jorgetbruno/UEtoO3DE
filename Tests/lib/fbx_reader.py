@@ -176,6 +176,27 @@ def vertex_stats(path):
     }
 
 
+def referenced_vertex_stats(path):
+    """AABB and count of the vertices some polygon actually uses.
+
+    A skeletal mesh split out of a merged import can keep vertices no triangle
+    references (measured on a character pack's SK_Eyes: 6 of 442, the leftovers
+    of the full body, placed metres away). They draw nothing, so they are not
+    the mesh's shape.
+    """
+    parsed = read(path)
+    values = parsed["vertices"]
+    indices = parsed["polygon_vertex_index"]
+    if not values or not indices:
+        raise FbxError("no polygon data in " + path)
+    used = sorted({(i if i >= 0 else -i - 1) for i in indices})
+    xs = [values[3 * i] for i in used]
+    ys = [values[3 * i + 1] for i in used]
+    zs = [values[3 * i + 2] for i in used]
+    return {"count": len(used), "min": [min(xs), min(ys), min(zs)],
+            "max": [max(xs), max(ys), max(zs)]}
+
+
 def signed_volume(path):
     """Signed volume of the mesh via the divergence theorem.
 

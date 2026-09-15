@@ -27,9 +27,10 @@ def check_record(record, assets_root, readers=None):
 
     `readers` is `(is_gltf, gltf_stats, fbx_stats)`, injectable for tests.
     """
+    within = record.get("fit") == "within"
     is_gltf, gltf_stats, fbx_stats = readers or (
         gltf_reader.gltf_source.is_gltf_source, gltf_reader.vertex_stats,
-        fbx_reader.vertex_stats)
+        fbx_reader.referenced_vertex_stats if within else fbx_reader.vertex_stats)
     expected_min = list(record["ue_bounds_min"])
     expected_max = list(record["ue_bounds_max"])
     path = os.path.join(assets_root, record["relative_path"]).replace("\\", "/")
@@ -52,6 +53,9 @@ def check_record(record, assets_root, readers=None):
     except Exception as error:                      # unreadable = failed, never skipped
         return "%s: %s could not be read (%s)" % (record["relative_path"], label, error)
 
+    if within:
+        return _check_within(record, label, stats, expected_min, expected_max, tolerance)
+
     deltas = [max(abs(stats["min"][i] - expected_min[i]),
                   abs(stats["max"][i] - expected_max[i])) for i in range(3)]
     # The bake goes through float32 geometry: at 392 m from the origin one ulp
@@ -69,6 +73,34 @@ def check_record(record, assets_root, readers=None):
             % (record["relative_path"], label,
                [round(v, 4) for v in stats["min"]], [round(v, 4) for v in stats["max"]],
                [round(v, 4) for v in expected_min], [round(v, 4) for v in expected_max]))
+
+
+def _check_within(record, label, stats, expected_min, expected_max, tolerance):
+    """The `fit: within` rule, for skeletal meshes.
+
+    UE's native skeletal exporter does not write every triangle the asset holds
+    (measured: SKM_DKM_Full, 34,519 in the source and 20,654 in the file, which
+    matches cloth sections being written once), so a skeletal file can be a
+    subset of its source. It must still lie INSIDE the expected box and cover
+    at least half of it on every axis. A missing or doubled Y negation moves an
+    asymmetric mesh out of the box; only a mesh symmetric in Y could pass
+    mirrored, and on that mesh a mirror is invisible.
+    """
+    problems = []
+    for axis, name in enumerate("XYZ"):
+        low, high = stats["min"][axis], stats["max"][axis]
+        want_low, want_high = expected_min[axis], expected_max[axis]
+        if low < want_low - tolerance or high > want_high + tolerance:
+            problems.append("%s [%.4f, %.4f] leaves [%.4f, %.4f]" % (name, low, high, want_low, want_high))
+        elif (high - low) < 0.5 * (want_high - want_low) - tolerance:
+            problems.append("%s [%.4f, %.4f] covers under half of [%.4f, %.4f]"
+                            % (name, low, high, want_low, want_high))
+    if not problems:
+        return None
+    return ("%s: %s does not lie within its expected intermediate bounds: %s.\n"
+            "A skeletal file may drop geometry, never move outside its source; "
+            "a negation is missing or doubled, and the product will be mirrored."
+            % (record["relative_path"], label, "; ".join(problems)))
 
 
 def _check_one(job):

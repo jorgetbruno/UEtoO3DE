@@ -114,6 +114,36 @@ def build(level, assets, entities, warning_records, engine_version):
     return round_floats(document)
 
 
+def drop_empty_skeletal_meshes(document, guids):
+    """Remove skeletal mesh assets whose exported FBX holds no geometry. Pure.
+
+    UE's native skeletal FBX exporter writes no section that is bound to cloth
+    simulation. A part that is ALL cloth (a character pack's cape-and-tabard
+    armor: 9,200 vertices in two cloth sections) exports as a skeleton with no
+    mesh, the Asset Processor makes no `.actor` from it, and the import then
+    waited 180 s for that product and failed the whole level. The asset goes;
+    each entity that used it keeps its transform, without the skeletal block,
+    and says why. Returns the names of the dropped assets.
+    """
+    guids = set(guids)
+    dropped = [a for a in document["assets"] if a["guid"] in guids]
+    if not dropped:
+        return []
+    names = {a["guid"]: a["ue_path"] for a in dropped}
+    document["assets"] = [a for a in document["assets"] if a["guid"] not in guids]
+    for entity in document["entities"]:
+        block = entity.get("skeletal")
+        if block and block.get("asset_guid") in guids:
+            del entity["skeletal"]
+            document["warnings"].append({
+                "code": "SKEL_MESH_EMPTY_EXPORT", "severity": "warn",
+                "subject": entity["name"],
+                "detail": "%s exported no geometry (every section is cloth-simulated, "
+                          "which UE's FBX exporter does not write); the entity keeps "
+                          "its transform only" % names[block["asset_guid"]]})
+    return sorted(names.values())
+
+
 def dumps(document):
     """Serialize with sorted keys and a trailing newline."""
     return json.dumps(document, indent=2, sort_keys=True) + "\n"

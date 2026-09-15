@@ -201,6 +201,7 @@ on codes, never on English strings.
 | `ANIM_ROOT_MOTION_DROPPED` | warn | AnimSequence has root motion; Simple Motion does not extract it to entity movement, so the character animates in place. |
 | `ANIM_BLUEPRINT_UNMAPPED` | warn | Skeletal component driven by an Animation Blueprint; graph logic has no mapping, so it imports in bind pose with no motion. |
 | `SKEL_PHYSICS_DROPPED` | info | Skeletal collision comes from UE's per-bone PhysicsAsset; per-bone bodies have no v1 mapping, so the entity imports without physics. |
+| `SKEL_MESH_EMPTY_EXPORT` | warn | A skeletal mesh whose every section is cloth-simulated exports with no geometry (UE's FBX exporter skips cloth sections; partly-cloth meshes lose those sections silently). The asset is dropped and its entities keep their transforms, so the import does not wait for an `.actor` that is never built. |
 | `EXTRA_ASSETS_ADDED` | info | `UEO3DE_EXTRA_ASSETS` registered the skeletal meshes (with their materials) and AnimSequences under the named folders. A level carries only the animation each actor plays; a character pack's other sequences exist only as assets. |
 | `EXTRA_ASSETS_EMPTY` | warn | A `UEO3DE_EXTRA_ASSETS` path holds no assets. |
 | `EXTRA_ASSET_UNLOADABLE` | warn | An asset under a `UEO3DE_EXTRA_ASSETS` path did not load and was skipped. |

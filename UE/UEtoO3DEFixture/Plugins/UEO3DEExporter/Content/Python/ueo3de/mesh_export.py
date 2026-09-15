@@ -1545,6 +1545,28 @@ def _export_spline(asset, base_path, output_root, options, emit):
     }
 
 
+def _skeletal_geometry_bounds(mesh):
+    """LOD0's triangle-referenced vertex AABB in UE space; asset bounds as fallback.
+
+    The asset's bounds count vertices no triangle uses. A character pack split
+    one merged import into parts that all kept the full body's stray vertices:
+    SK_Eyes reported bounds from the floor to 190 cm in front of the face.
+    """
+    try:
+        dyn = _unwrap(unreal.GeometryScript_AssetUtils.copy_mesh_from_skeletal_mesh(
+            mesh, unreal.DynamicMesh(), unreal.GeometryScriptCopyMeshFromAssetOptions(),
+            unreal.GeometryScriptMeshReadLOD()))
+        dyn = _unwrap(unreal.GeometryScript_MeshRepair.remove_unused_vertices(dyn)) or dyn
+        box = _unwrap(unreal.GeometryScript_MeshQueries.get_mesh_bounding_box(dyn))
+        return ([box.min.x, box.min.y, box.min.z], [box.max.x, box.max.y, box.max.z])
+    except Exception:
+        bounds = mesh.get_bounds()
+        origin = bounds.get_editor_property("origin")
+        extent = bounds.get_editor_property("box_extent")
+        return ([origin.x - extent.x, origin.y - extent.y, origin.z - extent.z],
+                [origin.x + extent.x, origin.y + extent.y, origin.z + extent.z])
+
+
 def source_bounds(mesh):
     """The asset's local AABB in UE space (centimetres)."""
     box = mesh.get_bounding_box()
@@ -1797,20 +1819,14 @@ def export_skeletal(assets, output_root, log=None):
             "bytes": os.path.getsize(output_path),
         }
         if kind == "skeletal_mesh":
-            bounds = source.get_bounds()
-            origin = bounds.get_editor_property("origin")
-            extent = bounds.get_editor_property("box_extent")
-            source_min = [origin.x - extent.x, origin.y - extent.y,
-                          origin.z - extent.z]
-            source_max = [origin.x + extent.x, origin.y + extent.y,
-                          origin.z + extent.z]
+            source_min, source_max = _skeletal_geometry_bounds(source)
             # Native export negates Y only (measured on SM_LetterF in S0.2);
             # min/max swap on the negated axis.
             record["ue_bounds_min"] = [source_min[0], -source_max[1], source_min[2]]
             record["ue_bounds_max"] = [source_max[0], -source_min[1], source_max[2]]
-            # The asset's BoxSphereBounds is not vertex-exact the way a baked
-            # static's bounding box is; a centimetre catches axis bugs (which
-            # show up as tens of cm) without tripping on bounds padding.
+            # The file may hold fewer triangles than the asset, so it must lie
+            # within these bounds rather than match them (export_verify).
+            record["fit"] = "within"
             record["tolerance_cm"] = 1.0
         else:
             with open(output_path, "rb") as handle:

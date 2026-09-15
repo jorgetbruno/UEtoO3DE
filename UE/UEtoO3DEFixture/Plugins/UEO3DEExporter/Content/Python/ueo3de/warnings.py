@@ -45,6 +45,10 @@ CODES = {
     "ACTOR_CLASS_UNMAPPED": (
         WARN, "Actor class has no mapping in v1; exported as a placeholder "
               "entity carrying name, class and transform only."),
+    "SKEL_MESH_EMPTY_EXPORT": (
+        WARN, "A skeletal mesh's FBX held no geometry because every section is "
+              "cloth-simulated, which UE's FBX exporter does not write; the mesh "
+              "is dropped and its entities keep their transforms only."),
     "EXTRA_ASSETS_ADDED": (
         INFO, "UEO3DE_EXTRA_ASSETS registered the skeletal meshes and animations "
               "under the named folders, whether or not an actor uses them."),

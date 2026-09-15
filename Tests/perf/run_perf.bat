@@ -47,6 +47,8 @@ if %ERRORLEVEL% NEQ 0 goto :failed
 if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_slot_labels.py"
 if %ERRORLEVEL% NEQ 0 goto :failed
+%PY% "%REPO%\Tests\perf\test_skel_empty_export.py"
+if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_gltf.py"
 if %ERRORLEVEL% NEQ 0 goto :failed
 %PY% "%REPO%\Tests\perf\test_glb_export.py"

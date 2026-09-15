@@ -228,6 +228,24 @@ def run():
           "a file mirrored in X must fail with the mirror explanation, got %r" % (message,))
 
 
+    # skeletal records: the file may drop geometry, never move outside its source
+    # (SKM_DKM_Full: Y [-28.219, 16.0] expected, the file held [-28.219, 10.939])
+    skel = {"ue_bounds_min": [-56.2, -28.2, -0.4], "ue_bounds_max": [56.2, 16.0, 181.4],
+            "relative_path": "k.fbx", "fit": "within", "tolerance_cm": 1.0}
+    subset = fake_readers({"k.fbx": {"min": [-56.2, -28.2, -0.4], "max": [56.2, 10.9, 181.4]}})
+    check(export_verify.check_record(skel, "root", readers=subset) is None,
+          "a skeletal file holding a subset of its source's geometry must pass")
+    flipped = fake_readers({"k.fbx": {"min": [-56.2, -16.0, -0.4], "max": [56.2, 28.2, 181.4]}})
+    message = export_verify.check_record(skel, "root", readers=flipped)
+    check(message is not None and "mirrored" in message,
+          "a skeletal file mirrored in Y must still fail, got %r" % (message,))
+    sliver = fake_readers({"k.fbx": {"min": [-5.0, -1.0, 170.0], "max": [5.0, 1.0, 181.0]}})
+    check(export_verify.check_record(skel, "root", readers=sliver) is not None,
+          "a skeletal file covering a sliver of its source is not that mesh")
+    check(export_verify.check_record(dict(skel, fit=None), "root", readers=subset) is not None,
+          "without fit=within, the exact rule applies")
+
+
     def broken_reader(path):
         raise IOError("truncated")
 
