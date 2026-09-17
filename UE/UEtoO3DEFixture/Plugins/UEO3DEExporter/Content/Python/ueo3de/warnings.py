@@ -45,6 +45,17 @@ CODES = {
     "ACTOR_CLASS_UNMAPPED": (
         WARN, "Actor class has no mapping in v1; exported as a placeholder "
               "entity carrying name, class and transform only."),
+    "DECAL_ALPHA_BAKED": (
+        INFO, "A decal's opacity mask was composited into its base colour's "
+              "alpha and the RGB dilated under it. O3DE's decal shader reads "
+              "opacity from the base colour alpha only, and the file is named "
+              "`_decal` so the Asset Processor keeps that alpha."),
+    "DECAL_CHANNELS_DROPPED": (
+        INFO, "Channels a decal material carried that the decal pass never "
+              "reads (roughness, metallic, AO, emissive) were not exported."),
+    "DECAL_MASK_UNMAPPED": (
+        WARN, "A decal's opacity could not be baked into its base colour alpha, "
+              "so the decal renders its whole projector box."),
     "SKEL_MESH_EMPTY_EXPORT": (
         WARN, "A skeletal mesh's FBX held no geometry because every section is "
               "cloth-simulated, which UE's FBX exporter does not write; the mesh "

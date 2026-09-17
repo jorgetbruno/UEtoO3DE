@@ -158,6 +158,10 @@ def validate_references(document):
             # builder picks its colour-space preset from the role suffix).
             role_key = asset["role"] if not asset.get("channel") \
                 else "%s@%s" % (asset["role"], asset["channel"])
+            if asset.get("alpha_source") is not None:
+                # A decal's base colour carries another texture's channel as
+                # its alpha, so that pairing is part of its identity.
+                role_key += "+%s@%s" % (asset["alpha_source"], asset["alpha_channel"])
             if asset.get("tint") is not None:
                 # A tinted copy is its own file and identity (MAT_TINT_BAKED).
                 role_key += "*" + ",".join("%.4f" % c for c in asset["tint"])

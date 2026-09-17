@@ -115,6 +115,12 @@ def build(asset_entry, assets_by_guid):
 
     blend = data.get("blend_mode", "opaque")
     opacity_spec = properties.get("opacity_mask") or properties.get("opacity")
+    # A DECAL's opacity is the base colour's alpha, baked at export: O3DE's
+    # decal shader reads no opacity map and no opacity factor, so every
+    # property below is dead weight on that path (and `Blended` on a decal
+    # material reads as if it did something).
+    if data.get("consumer") == "decal":
+        blend, opacity_spec = "opaque", None
     if blend == "masked":
         values["opacity.mode"] = "Cutout"
     elif blend == "translucent":

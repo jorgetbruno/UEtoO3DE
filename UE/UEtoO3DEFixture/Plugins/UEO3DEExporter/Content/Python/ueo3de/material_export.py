@@ -764,13 +764,22 @@ class TextureBank:
         self._registry = registry
         self._records = {}
 
-    def request(self, texture, role_suffix, channel=None, tint=None):
+    def request(self, texture, role_suffix, channel=None, tint=None, alpha_from=None):
         """Plan an export; returns the manifest texture entry.
 
         `tint` ([r, g, b], linear) asks for a copy with the tint multiplied in.
+        `alpha_from` ((texture, channel)) asks for a 32-bit copy carrying that
+        texture's channel as ALPHA -- how a decal's mask reaches O3DE, whose
+        decal shader reads opacity only from the base colour's alpha.
         """
         ue_path = naming.package_path(unreal.SystemLibrary.get_path_name(texture))
         role_key = role_suffix if channel is None else "%s@%s" % (role_suffix, channel)
+        alpha_path = None
+        if alpha_from is not None:
+            alpha_texture, alpha_channel = alpha_from
+            alpha_path = naming.package_path(
+                unreal.SystemLibrary.get_path_name(alpha_texture))
+            role_key = "%s+%s@%s" % (role_key, alpha_path, alpha_channel)
         tint_key = None
         if tint is not None:
             tint_key = ",".join("%.4f" % c for c in tint)
@@ -810,7 +819,11 @@ class TextureBank:
         }
         if tint is not None:
             entry["tint"] = [float(c) for c in tint]
-        self._records[key] = {"entry": entry, "texture": texture}
+        if alpha_from is not None:
+            entry["alpha_source"] = alpha_path
+            entry["alpha_channel"] = alpha_from[1]
+        self._records[key] = {"entry": entry, "texture": texture,
+                              "alpha_texture": None if alpha_from is None else alpha_from[0]}
         return entry
 
     def entries(self):
@@ -909,10 +922,15 @@ class TextureBank:
 
         os.makedirs(raw_root, exist_ok=True)
         raw_by_path = {}
+        wanted = []
         for record in self._records.values():
-            ue_path = record["entry"]["ue_path"]
+            wanted.append((record["entry"]["ue_path"], record["texture"]))
+            if record.get("alpha_texture") is not None:
+                wanted.append((record["entry"]["alpha_source"], record["alpha_texture"]))
+        for ue_path, texture in wanted:
             if ue_path in raw_by_path:
                 continue
+            record = {"texture": texture}
             # The filename must be injective per SOURCE ASSET. The old
             # flattened path ("/"->"_") mapped /Game/Foo/Bar/T and
             # /Game/Foo_Bar/T onto one file, so whichever exported second
@@ -932,7 +950,10 @@ class TextureBank:
             raw = raw_by_path[entry["ue_path"]]
             out_path = os.path.join(output_root, entry["o3de_relative_path"]).replace("\\", "/")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            if entry.get("tint") is not None:
+            if entry.get("alpha_source") is not None:
+                tga.write_with_alpha(raw, raw_by_path[entry["alpha_source"]], out_path,
+                                     entry["alpha_channel"])
+            elif entry.get("tint") is not None:
                 tga.write_tinted(raw, out_path, entry["tint"], entry["srgb"])
             elif entry["channel"] is None:
                 tga.copy(raw, out_path)
@@ -1545,12 +1566,77 @@ def _classify_landscape_layer(master, instance, bank, warnings, subject):
     return properties
 
 
-def build_material_data(material, bank, warnings):
+def _decal_properties(properties, bank, warnings, subject):
+    """The decal subset: base colour carrying the mask in its ALPHA, plus normal.
+
+    O3DE's decal pass is not StandardPBR. It writes only albedo and normal, and
+    it takes opacity from the base colour's alpha alone
+    (`Atom/Features/PBR/Decals.azsli`: `baseMap.a * m_opacity * attenuation`) --
+    there is no opacity map in the decal shader or in the feature processor's
+    texture arrays. A UE decal exported the StandardPBR way therefore drew its
+    whole projector box opaque, mask and all, over the street.
+
+    So the opacity map is composited into the base colour's alpha (dilated, and
+    named `_decal` so the Asset Processor picks Decal_AlbedoWithOpacity: BC7
+    with alpha, against Albedo's BC1 `DiscardAlpha` which threw the alpha away
+    even where the source had one). Roughness, metallic, AO and emissive are
+    dropped: the decal pass never reads them.
+    """
+    base = properties.get("base_color")
+    mask = properties.get("opacity") or properties.get("opacity_mask")
+    kept = {}
+    if base is not None:
+        kept["base_color"] = base
+    if properties.get("normal") is not None:
+        kept["normal"] = properties["normal"]
+    dropped = sorted(set(properties) - set(kept) - {"opacity", "opacity_mask"})
+    if dropped:
+        warnings.add("DECAL_CHANNELS_DROPPED", subject,
+                     "the decal pass writes only albedo and normal; %s not exported"
+                     % ", ".join(dropped))
+    if base is None or base.get("source") != "texture":
+        if mask is not None:
+            warnings.add("DECAL_MASK_UNMAPPED", subject,
+                         "opacity could not be baked into the base colour (base "
+                         "colour is %s); the decal draws its whole box"
+                         % (base or {}).get("source", "unmapped"))
+        return kept
+    if mask is None:
+        return kept                       # an opaque decal: nothing to bake
+    if mask.get("source") != "texture":
+        warnings.add("DECAL_MASK_UNMAPPED", subject,
+                     "opacity is %s, which the decal shader cannot take as a "
+                     "scalar; the decal draws its whole box" % mask.get("source"))
+        return kept
+
+    base_key, base_texture, _base_entry = bank.find_by_guid(base["texture_guid"])
+    mask_key, mask_texture, _mask_entry = bank.find_by_guid(mask["texture_guid"])
+    if base_texture is None or mask_texture is None:
+        return kept
+    entry = bank.request(base_texture, "decal", None,
+                         alpha_from=(mask_texture, mask.get("channel") or "R"))
+    # The plain basecolor and the standalone opacity file are this material's
+    # no longer; they survive only if another material still references them
+    # (prune_unreferenced runs at the end of the walk).
+    bank.discard(base_key)
+    bank.discard(mask_key)
+    kept["base_color"] = dict(base, texture_guid=entry["guid"], channel=None)
+    warnings.add("DECAL_ALPHA_BAKED", subject,
+                 "the opacity mask was composited into %s's alpha (RGB dilated "
+                 "under it); O3DE decals read opacity from base colour alpha only"
+                 % entry["o3de_relative_path"])
+    return kept
+
+
+def build_material_data(material, bank, warnings, decal=False):
     """Classify one material (or instance). Returns a manifest dict or None.
 
     None means "leave the entities on the default material": emitted when the
     base colour channel cannot be mapped -- a material that renders with the
     wrong albedo is worse than a visibly grey one.
+
+    `decal=True` classifies the material for an Atom DECAL, which is a
+    different shader with a much smaller surface: see `_decal_properties`.
     """
     master, instance = _base_material_and_instance(material)
     if master is None:
@@ -1613,8 +1699,18 @@ def build_material_data(material, bank, warnings):
                          "base colour unmappable; entities keep the default material")
             return None
 
-    return {
+    if decal:
+        properties = _decal_properties(properties, bank, warnings, subject)
+
+    document = {
         "blend_mode": blend,
         "two_sided": bool(master.get_editor_property("two_sided")),
         "properties": properties,
     }
+    if decal:
+        # Which SHADER consumes this material. The decal pass ignores the
+        # StandardPBR opacity block entirely (its opacity is the albedo's
+        # alpha), so writing those properties would only mislead the next
+        # person debugging the asset.
+        document["consumer"] = "decal"
+    return document

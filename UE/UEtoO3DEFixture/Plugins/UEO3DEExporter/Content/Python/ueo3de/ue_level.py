@@ -392,6 +392,8 @@ _EXTENSIONS = {"static_mesh": "fbx", "material": "material",
 # maps '#' to '_' for the O3DE path, and mesh_export strips it to load the
 # real asset and to choose the variant bake.
 MIRROR_SUFFIX = "#mx"
+# A material classified for Atom's decal pass rather than StandardPBR.
+DECAL_SUFFIX = "#decal"
 # The terrain fragment works the same way, except the part before '#' is the
 # Landscape ACTOR's path (a landscape has no asset), which mesh_export
 # resolves to the live actor in the open level.
@@ -433,22 +435,35 @@ class AssetTable:
             extension = static_mesh_format()
         return naming.with_extension(stem, extension)
 
-    def add_material(self, material):
+    def add_material(self, material, decal=False):
+        """Register `material`; with `decal=True`, register its DECAL variant.
+
+        Atom's decal pass reads a different, much smaller surface than
+        StandardPBR (albedo + normal, opacity from the albedo's alpha), so a
+        decal needs its own material and its own base colour texture. The
+        variant is a separate entry whose `ue_path` carries a literal `#decal`
+        fragment -- the same trick mirrored meshes use (`#mx`): the guid
+        derives from the stored path, sanitization gives it a distinct
+        `..._decal.material`, and nothing downstream needs a special case.
+        A material used by both a mesh and a decal therefore exports twice,
+        each correct for its own consumer.
+        """
         from . import material_export
 
         ue_path = unreal.SystemLibrary.get_path_name(material)
-        guid = naming.asset_guid(ue_path)
+        key_path = naming.package_path(ue_path) + DECAL_SUFFIX if decal else ue_path
+        guid = naming.asset_guid(key_path)
         if guid not in self._entries:
             # Classification runs once per unique material; texture entries are
             # planned into the shared bank as a side effect (M4).
             material_data = material_export.build_material_data(
-                material, self.texture_bank, self._warnings)
+                material, self.texture_bank, self._warnings, decal=decal)
             self._entries[guid] = {
                 "guid": guid,
                 "kind": "material",
-                "ue_path": naming.package_path(ue_path),
+                "ue_path": naming.package_path(key_path),
                 "name": material.get_name(),
-                "o3de_relative_path": self._claim(ue_path, "material"),
+                "o3de_relative_path": self._claim(key_path, "material"),
                 "material_data": material_data,
             }
         return guid
@@ -1121,7 +1136,8 @@ def _decal_block(actor, assets, subject, warnings):
         material = component.get_decal_material()
     except Exception:
         material = _field(component, "decal_material")
-    material_guid = assets.add_material(material) if material is not None else None
+    material_guid = (assets.add_material(material, decal=True)
+                     if material is not None else None)
     warnings.add("DECAL_MATERIAL_APPROX", subject,
                  "decal material %r converts through the StandardPBR subset"
                  % (material.get_name() if material else None))

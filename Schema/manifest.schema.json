@@ -322,8 +322,18 @@
             "roughness",
             "metallic",
             "ao",
-            "opacity"
+            "opacity",
+            "decal"
           ]
+        },
+        "alpha_source": {
+          "description": "Texture assets, `decal` role: the UE path of the texture whose channel was composited into this file's ALPHA. O3DE decals take opacity from the base colour's alpha and read no opacity map.",
+          "type": "string"
+        },
+        "alpha_channel": {
+          "description": "Texture assets, `decal` role: which channel of `alpha_source` became the alpha.",
+          "type": "string",
+          "enum": ["R", "G", "B", "A"]
         },
         "tint": {
           "description": "Texture assets: linear [r, g, b] multiplied into the pixels at export, for a material tint brighter than StandardPBR's colour factor can express. Absent when the image is exported as authored.",
@@ -841,6 +851,11 @@
         "properties"
       ],
       "properties": {
+        "consumer": {
+          "description": "Which shader consumes this material: `mesh` (StandardPBR; the default when absent) or `decal` (Atom's decal pass, which writes albedo and normal only and takes opacity from the albedo's alpha, so the opacity block is not written).",
+          "type": "string",
+          "enum": ["mesh", "decal"]
+        },
         "blend_mode": {
           "type": "string",
           "enum": [

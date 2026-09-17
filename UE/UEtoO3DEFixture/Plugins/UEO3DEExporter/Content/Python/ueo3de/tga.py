@@ -193,6 +193,101 @@ def write_tinted(source_path, output_path, tint, srgb):
     return output_path
 
 
+# Alpha at or below this is "not visible" for dilation: such texels are FILLED
+# from their neighbours and never used as a colour source. NOT zero, and not a
+# hair above it. Measured on a marketplace decal pack (T_Paper04): its mask
+# averages 3.7 with 97.9% of texels under 10, and the artwork's RGB is black
+# wherever alpha is under ~32 (mean max-channel 0.0 below alpha 8, 1.9 at 8-31,
+# 37.2 at 32-127, 128.5 above). Seeding from anything below 32 therefore floods
+# the transparent region with the black that is the problem.
+DILATE_ALPHA_FLOOR = 32
+
+
+def dilate_rgb(width, height, pixels, stride, floor=DILATE_ALPHA_FLOOR):
+    """Flood each transparent texel with its nearest visible colour, in place.
+
+    RGB under alpha 0 is never seen directly, but BC7 blocks and every mip
+    level average it with visible neighbours, so black there rings each decal
+    with a dark halo as it shrinks on screen. A breadth-first spread from the
+    visible texels costs one pass over the image and nothing at runtime.
+    `pixels` is BGRA, `stride` 4.
+    """
+    from collections import deque
+
+    alpha = stride - 1
+    visited = bytearray(width * height)
+    frontier = deque()
+    for index in range(width * height):
+        if pixels[index * stride + alpha] > floor:
+            visited[index] = 1
+            frontier.append(index)
+    if not frontier or len(frontier) == width * height:
+        return pixels
+    while frontier:
+        index = frontier.popleft()
+        x, y = index % width, index // width
+        source = index * stride
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if not (0 <= nx < width and 0 <= ny < height):
+                continue
+            neighbour = ny * width + nx
+            if visited[neighbour]:
+                continue
+            visited[neighbour] = 1
+            target = neighbour * stride
+            pixels[target:target + 3] = pixels[source:source + 3]
+            frontier.append(neighbour)
+    return pixels
+
+
+def write_with_alpha(color_path, alpha_path, output_path, channel="R", dilate=True):
+    """Write a 32-bit TGA: RGB from `color_path`, alpha from `alpha_path`'s channel.
+
+    O3DE's decal shader takes a decal's opacity from the BASE COLOUR's alpha
+    (`Atom/Features/PBR/Decals.azsli`: `baseMap.a * m_opacity * attenuation`)
+    and reads no opacity map at all, so a UE decal's mask has to arrive inside
+    the base colour or the whole projector box draws opaque.
+    """
+    color = read(color_path)
+    mask = read(alpha_path)
+    if (color["width"], color["height"]) != (mask["width"], mask["height"]):
+        raise TgaError("%s is %dx%d but its mask %s is %dx%d"
+                       % (color_path, color["width"], color["height"],
+                          alpha_path, mask["width"], mask["height"]))
+    index_by_channel = {"B": 0, "G": 1, "R": 2, "A": 3}
+    if channel not in index_by_channel:
+        raise TgaError("bad channel %r" % channel)
+
+    width, height = color["width"], color["height"]
+    color_stride = color["bpp"] // 8
+    mask_stride = mask["bpp"] // 8
+    mask_index = index_by_channel[channel]
+    if mask["bpp"] == 8:                      # grayscale mask: one byte per texel
+        mask_index = 0
+    elif mask_index >= mask_stride:
+        raise TgaError("%s has no %s channel (%d bpp)" % (alpha_path, channel, mask["bpp"]))
+    # Row order is per file; the mask is flipped to match the colour's.
+    flip = bool(color["descriptor"] & 0x20) != bool(mask["descriptor"] & 0x20)
+
+    out = bytearray(width * height * 4)
+    source = color["pixels"]
+    mask_pixels = mask["pixels"]
+    for y in range(height):
+        mask_y = (height - 1 - y) if flip else y
+        for x in range(width):
+            index = y * width + x
+            src = index * color_stride
+            out[index * 4:index * 4 + 3] = source[src:src + 3]
+            out[index * 4 + 3] = mask_pixels[(mask_y * width + x) * mask_stride + mask_index]
+    if dilate:
+        dilate_rgb(width, height, out, 4)
+    descriptor = (color["descriptor"] & 0x20) | 0x08    # 8 attribute (alpha) bits
+    with open(output_path, "wb") as handle:
+        handle.write(_header(width, height, 32, descriptor))
+        handle.write(bytes(out))
+    return output_path
+
+
 def copy(source_path, output_path):
     """Byte copy after validating the source parses as a supported TGA."""
     read(source_path)  # validation only
